@@ -33,6 +33,7 @@ func New(mgr *branch.Manager, domain, proxyUser, token string) *Server {
 	s.mux.HandleFunc("POST /v1/branches", s.handleCreate)
 	s.mux.HandleFunc("GET /v1/branches/{name}", s.handleGet)
 	s.mux.HandleFunc("POST /v1/branches/{name}/reset", s.handleReset)
+	s.mux.HandleFunc("POST /v1/branches/{name}/wake", s.handleWake)
 	s.mux.HandleFunc("DELETE /v1/branches/{name}", s.handleDelete)
 	s.mux.HandleFunc("GET /v1/baseline", s.handleBaseline)
 	s.mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
@@ -136,6 +137,15 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleReset(w http.ResponseWriter, r *http.Request) {
 	info, err := s.mgr.Reset(r.Context(), r.PathValue("name"))
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.toJSON(info))
+}
+
+func (s *Server) handleWake(w http.ResponseWriter, r *http.Request) {
+	info, err := s.mgr.Wake(r.Context(), r.PathValue("name"))
 	if err != nil {
 		s.writeError(w, err)
 		return

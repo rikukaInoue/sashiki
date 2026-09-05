@@ -38,6 +38,11 @@ type Config struct {
 	PortHigh    int
 	EngineType  string
 	StateDir    string // hook 用の作業ディレクトリの親(/var/lib/twig/branches)
+
+	// LazyCreate: プロキシに未知のブランチ名で接続が来たとき自動作成する。
+	// バックエンドの TypicalCreate が LazyMaxWait を超える場合は無効(仕様 15-3)。
+	LazyCreate  bool
+	LazyMaxWait time.Duration
 }
 
 // Manager はブランチライフサイクルの実装。
@@ -287,16 +292,121 @@ func (m *Manager) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
-// RouteBranch はプロキシ用: running なブランチのポートを返す。
+// RouteBranch はプロキシ用: ブランチのポートを返す。
+// 未知の名前は lazy create(有効時)、sleeping は wake する。
+// 接続を保持したまま待たせる前提なので、作成完了までブロックする。
 func (m *Manager) RouteBranch(ctx context.Context, name string) (int, error) {
 	b, err := m.db.GetBranch(name)
+	if errors.Is(err, ErrNotFound) {
+		if !m.lazyEnabled() {
+			return 0, err
+		}
+		info, cerr := m.Create(ctx, name, 0)
+		if errors.Is(cerr, ErrExists) {
+			// 同時接続が先に作成した場合: 出来上がりを引く
+			b, err = m.db.GetBranch(name)
+			if err != nil {
+				return 0, err
+			}
+			return m.routeExisting(ctx, b)
+		}
+		if cerr != nil {
+			return 0, cerr
+		}
+		return info.Port, nil
+	}
 	if err != nil {
 		return 0, err
 	}
-	if b.State != state.StateRunning {
-		return 0, fmt.Errorf("branch %s is %s", name, b.State)
+	return m.routeExisting(ctx, b)
+}
+
+func (m *Manager) routeExisting(ctx context.Context, b state.Branch) (int, error) {
+	switch b.State {
+	case state.StateRunning:
+		return b.Port, nil
+	case state.StateSleeping:
+		if _, err := m.Wake(ctx, b.Name); err != nil {
+			return 0, err
+		}
+		return b.Port, nil
+	case state.StateCreating, state.StateResetting:
+		// 別の接続が作成/リセット中: 完了を待って通す(CI の接続プールが
+		// 同時に張ってくるケース)。TCP は保持されたままなので待てる。
+		return m.waitRunning(ctx, b.Name)
+	default:
+		return 0, fmt.Errorf("branch %s is %s", b.Name, b.State)
 	}
-	return b.Port, nil
+}
+
+// waitRunning はブランチが running になるまで待ってポートを返す。
+func (m *Manager) waitRunning(ctx context.Context, name string) (int, error) {
+	maxWait := m.cfg.LazyMaxWait
+	if maxWait == 0 {
+		maxWait = 20 * time.Second
+	}
+	deadline := time.Now().Add(maxWait)
+	for time.Now().Before(deadline) {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		b, err := m.db.GetBranch(name)
+		if err != nil {
+			return 0, err
+		}
+		switch b.State {
+		case state.StateRunning:
+			return b.Port, nil
+		case state.StateCreating, state.StateResetting:
+			time.Sleep(200 * time.Millisecond)
+		default:
+			return 0, fmt.Errorf("branch %s is %s", name, b.State)
+		}
+	}
+	return 0, fmt.Errorf("timeout waiting for branch %s to become running", name)
+}
+
+func (m *Manager) lazyEnabled() bool {
+	if !m.cfg.LazyCreate {
+		return false
+	}
+	maxWait := m.cfg.LazyMaxWait
+	if maxWait == 0 {
+		maxWait = 20 * time.Second
+	}
+	return m.st.Capabilities().TypicalCreate <= maxWait
+}
+
+// Wake は sleeping(または停止している)ブランチの mysqld を起動する。
+// error / deleting / creating のブランチは対象外(状態を上書きしない)。
+func (m *Manager) Wake(ctx context.Context, name string) (Info, error) {
+	unlock := m.lock(name)
+	defer unlock()
+
+	b, err := m.db.GetBranch(name)
+	if err != nil {
+		return Info{}, err
+	}
+	if b.State != state.StateSleeping && b.State != state.StateRunning {
+		return Info{}, fmt.Errorf("branch %s is %s (cannot wake)", name, b.State)
+	}
+	vol, err := m.resolveVolume(ctx, b)
+	if err != nil {
+		return Info{}, err
+	}
+	ins := m.instance(b, vol)
+	if running, _ := m.eng.IsRunning(ctx, ins); !running {
+		if err := m.eng.Start(ctx, ins); err != nil {
+			return Info{}, err
+		}
+		if err := m.eng.WaitReady(ctx, ins); err != nil {
+			return Info{}, err
+		}
+	}
+	if err := m.db.SetState(name, state.StateRunning, ""); err != nil {
+		return Info{}, err
+	}
+	return m.info(ctx, name)
 }
 
 // TouchConn は最終接続時刻を記録する。SQLite への書き込みを抑えるため

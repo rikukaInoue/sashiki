@@ -117,9 +117,9 @@ log "proxy: dev@<branch> ルーティング"
 val=$(mysql -udev@pr-1 -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.items" 2>/dev/null) \
   || fail "proxy: connect via dev@pr-1 should work"
 [ "$val" = "3" ] || fail "proxy: query result = $val, want 3"
-# 存在しないブランチは Unknown branch
-if mysql -udev@no-such -pdev -h127.0.0.1 -P3306 -e "SELECT 1" 2>/dev/null; then
-  fail "proxy: unknown branch should be rejected"
+# name_pattern 違反のブランチ名は拒否(lazy create の対象にもならない)
+if mysql -udev@Bad_Name -pdev -h127.0.0.1 -P3306 -e "SELECT 1" 2>/dev/null; then
+  fail "proxy: invalid branch name should be rejected"
 fi
 # パスワード誤りはバックエンドが拒否
 if mysql -udev@pr-1 -pWRONG -h127.0.0.1 -P3306 -e "SELECT 1" 2>/dev/null; then
@@ -129,6 +129,21 @@ fi
 if mysql -udev -pdev -h127.0.0.1 -P3306 -e "SELECT 1" 2>/dev/null; then
   fail "proxy: user without @branch should be rejected"
 fi
+
+log "proxy: lazy create (未知ブランチ名で接続すると生える)"
+val=$(mysql -udev@pr-lazy -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.items" 2>/dev/null) \
+  || fail "lazy create: connect should auto-create branch"
+[ "$val" = "3" ] || fail "lazy create: query result = $val"
+twig list | grep -q "pr-lazy" || fail "lazy create: branch should appear in list"
+twig delete pr-lazy
+
+log "wake API"
+twig create pr-wake > /dev/null
+systemctl stop mysqld@pr-wake
+curl -sf -X POST http://127.0.0.1:8080/v1/branches/pr-wake/wake > /dev/null || fail "wake should succeed"
+val=$(mysql -udev@pr-wake -pdev -h127.0.0.1 -P3306 -N -e "SELECT 1" 2>/dev/null) || fail "wake: connect after wake"
+[ "$val" = "1" ] || fail "wake: query"
+twig delete pr-wake
 
 log "github action entrypoint (create/idempotent/delete)"
 AE="$SCRIPT_DIR/../action/entrypoint.sh"

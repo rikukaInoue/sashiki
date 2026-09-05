@@ -36,6 +36,10 @@ type Config struct {
 	NamePattern      string
 	BackendHost      string // 既定 127.0.0.1
 	MaxConnPerBranch int    // 既定 50
+	// AllowedUser が非空なら、<user>@<branch> の user 部がこれと一致する
+	// 接続だけを受け付ける。認証前の lazy create の乱発を抑える
+	// (name_pattern・max_branches・メモリガードに加えた第一関門)。
+	AllowedUser string
 }
 
 // Server は MySQL プロトコルプロキシ。
@@ -144,6 +148,10 @@ func (s *Server) authRelay(ctx context.Context, client net.Conn) error {
 	if !ok || !s.nameRe.MatchString(branch) {
 		return authErr(client, resp.seq+1, 1045, "28000",
 			fmt.Sprintf("Access denied: user must be <user>@<branch> (got %q)", hr.username))
+	}
+	if s.cfg.AllowedUser != "" && user != s.cfg.AllowedUser {
+		return authErr(client, resp.seq+1, 1045, "28000",
+			fmt.Sprintf("Access denied for user %q", user))
 	}
 
 	// 3. ブランチ解決

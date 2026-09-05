@@ -127,6 +127,35 @@ func newTestManager(t *testing.T, st *mockStorage, eng *mockEngine, hooksDir str
 	return m
 }
 
+func newTestManagerCfg(t *testing.T, st *mockStorage, eng *mockEngine, hooksDir string, mod func(*Config)) *Manager {
+	t.Helper()
+	db, err := state.Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var hr *hooks.Runner
+	if hooksDir != "" {
+		hr = hooks.NewRunner(hooksDir, t.TempDir(), time.Minute)
+	}
+	cfg := Config{
+		NamePattern: `^[a-z0-9-]{1,32}$`,
+		MaxBranches: 3,
+		PortLow:     3401,
+		PortHigh:    3403,
+		EngineType:  "mysql",
+		StateDir:    t.TempDir(),
+	}
+	if mod != nil {
+		mod(&cfg)
+	}
+	m, err := New(cfg, st, st, eng, hr, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
 // --- tests ---
 
 func TestCreateHappyPath(t *testing.T) {
@@ -327,5 +356,106 @@ func TestDeleteNotFound(t *testing.T) {
 	m := newTestManager(t, &mockStorage{}, &mockEngine{}, "")
 	if err := m.Delete(context.Background(), "nope"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestRouteBranchLazyCreate(t *testing.T) {
+	st := &mockStorage{caps: storage.Capabilities{FastRollback: true, TypicalCreate: 2 * time.Second}}
+	eng := &mockEngine{}
+	m := newTestManagerCfg(t, st, eng, "", func(c *Config) { c.LazyCreate = true })
+
+	port, err := m.RouteBranch(context.Background(), "pr-9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if port != 3401 {
+		t.Errorf("port = %d", port)
+	}
+	info, _ := m.Get(context.Background(), "pr-9")
+	if info.State != state.StateRunning {
+		t.Errorf("state = %s", info.State)
+	}
+	// 2 回目は既存を返す(再作成しない)
+	if _, err := m.RouteBranch(context.Background(), "pr-9"); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.cloned) != 1 {
+		t.Errorf("cloned %d times, want 1", len(st.cloned))
+	}
+}
+
+func TestRouteBranchLazyDisabled(t *testing.T) {
+	m := newTestManagerCfg(t, &mockStorage{}, &mockEngine{}, "", func(c *Config) { c.LazyCreate = false })
+	if _, err := m.RouteBranch(context.Background(), "pr-9"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestRouteBranchLazyGatedBySlowBackend(t *testing.T) {
+	st := &mockStorage{caps: storage.Capabilities{TypicalCreate: 70 * time.Second}}
+	m := newTestManagerCfg(t, st, &mockEngine{}, "", func(c *Config) {
+		c.LazyCreate = true
+		c.LazyMaxWait = 20 * time.Second
+	})
+	// fsx 級の遅いバックエンドでは lazy create は無効(仕様 15-3)
+	if _, err := m.RouteBranch(context.Background(), "pr-9"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestWakeStartsStoppedBranch(t *testing.T) {
+	st := &mockStorage{}
+	eng := &mockEngine{}
+	m := newTestManager(t, st, eng, "")
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	_ = m.db.SetState("pr-1", state.StateSleeping, "")
+	started := len(eng.started)
+	info, err := m.Wake(context.Background(), "pr-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.State != state.StateRunning {
+		t.Errorf("state = %s", info.State)
+	}
+	if len(eng.started) != started+1 {
+		t.Errorf("engine should be started once more")
+	}
+}
+
+func TestRouteBranchWaitsForCreating(t *testing.T) {
+	m := newTestManagerCfg(t, &mockStorage{}, &mockEngine{}, "", func(c *Config) {
+		c.LazyCreate = true
+		c.LazyMaxWait = 2 * time.Second
+	})
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	// creating 状態に巻き戻して、別 goroutine が完了させるのを待つ挙動を再現
+	_ = m.db.SetState("pr-1", state.StateCreating, "")
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		_ = m.db.SetState("pr-1", state.StateRunning, "")
+	}()
+	port, err := m.RouteBranch(context.Background(), "pr-1")
+	if err != nil {
+		t.Fatalf("should wait for creating branch: %v", err)
+	}
+	if port != 3401 {
+		t.Errorf("port = %d", port)
+	}
+}
+
+func TestWakeRejectsErrorAndDeleting(t *testing.T) {
+	m := newTestManager(t, &mockStorage{}, &mockEngine{}, "")
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range []string{state.StateError, state.StateDeleting, state.StateCreating} {
+		_ = m.db.SetState("pr-1", st, "")
+		if _, err := m.Wake(context.Background(), "pr-1"); err == nil {
+			t.Errorf("Wake should reject state %s", st)
+		}
 	}
 }
