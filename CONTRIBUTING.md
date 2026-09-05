@@ -18,3 +18,9 @@
 - **@init / @baseline スナップショットは必ず mysqld の正常終了状態で撮る**
 - storage / engine の実装依存をコア(internal/branch)に持ち込まない
 - 自社固有処理はコアに入れず hooks に置く
+
+## ブランチ運用
+
+- **main への直 push 禁止**(セルフ開発でも)。`work/<topic>` ブランチ → PR → CI green → マージ
+- ローカルでは `git config core.hooksPath .githooks` で pre-push フックが直 push をブロックする(クローン後に 1 回実行)
+- リポジトリを public 化したら GitHub のルールセットでも main を保護する(PR 必須 + test/lint/e2e 必須)

@@ -105,7 +105,7 @@ func (r *Runner) Run(ctx context.Context, event Event, env Env) (Result, error) 
 	if err != nil {
 		return Result{}, err
 	}
-	defer logFile.Close()
+	defer func() { _ = logFile.Close() }()
 
 	cctx, cancel := context.WithTimeout(ctx, r.Timeout)
 	defer cancel()

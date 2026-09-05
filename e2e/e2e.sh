@@ -19,7 +19,15 @@ apt-get update -q > /dev/null
 apt-get install -y -q zfsutils-linux mysql-server-8.0 mysql-client-8.0 apparmor-utils > /dev/null
 systemctl stop mysql 2>/dev/null || true
 systemctl disable mysql 2>/dev/null || true
-aa-complain /usr/sbin/mysqld > /dev/null 2>&1 || true
+# AppArmor: aa-complain が環境によって効かないことがあるため、
+# mysqld プロファイルを disable 登録 + カーネルからアンロードする(両方やる)。
+if [ -f /etc/apparmor.d/usr.sbin.mysqld ]; then
+  mkdir -p /etc/apparmor.d/disable
+  ln -sf /etc/apparmor.d/usr.sbin.mysqld /etc/apparmor.d/disable/ || true
+  apparmor_parser -R /etc/apparmor.d/usr.sbin.mysqld 2>&1 || true
+fi
+aa-complain /usr/sbin/mysqld 2>&1 || true
+aa-status 2>/dev/null | grep -i mysqld || echo "apparmor: mysqld profile not loaded (OK)"
 
 # --- 1. クリーンアップ(再実行安全) ---
 log "cleanup previous run"
@@ -42,14 +50,23 @@ zfs create $POOL/branches
 log "base mysql"
 mkdir -p /$POOL/base/data
 chown -R mysql:mysql /$POOL/base /var/log/twig
-sudo -u mysql mysqld --initialize-insecure --datadir=/$POOL/base/data > /dev/null 2>&1
-sudo -u mysql mysqld --datadir=/$POOL/base/data --port=3306 \
+if ! sudo -u mysql mysqld --initialize-insecure --datadir=/$POOL/base/data > /var/log/twig/init.log 2>&1; then
+  tail -30 /var/log/twig/init.log
+  dmesg 2>/dev/null | grep -i apparmor | tail -5
+  fail "mysqld --initialize failed"
+fi
+if ! sudo -u mysql mysqld --datadir=/$POOL/base/data --port=3306 \
   --socket=/tmp/mysql-e2e-base.sock --pid-file=/tmp/mysql-e2e-base.pid \
-  --log-error=/var/log/twig/base.err --innodb-buffer-pool-size=128M --daemonize
+  --log-error=/var/log/twig/base.err --innodb-buffer-pool-size=128M --daemonize; then
+  tail -30 /var/log/twig/base.err
+  fail "base mysqld failed to start"
+fi
 for _ in $(seq 1 60); do
   mysqladmin -uroot -S /tmp/mysql-e2e-base.sock ping > /dev/null 2>&1 && break
   sleep 1
 done
+mysqladmin -uroot -S /tmp/mysql-e2e-base.sock ping > /dev/null 2>&1 \
+  || { tail -30 /var/log/twig/base.err; fail "base mysqld not ready"; }
 mysql -uroot -S /tmp/mysql-e2e-base.sock <<'SQL'
 CREATE DATABASE app;
 CREATE TABLE app.items (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(64));

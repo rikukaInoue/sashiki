@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# main への直 push を禁止する。PR 経由でマージすること。
+# 有効化: git config core.hooksPath .githooks
+# (ブランチ保護は repo が public になったら GitHub 側でも有効化する)
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  if [ "$remote_ref" = "refs/heads/main" ]; then
+    echo "✗ direct push to main is blocked. Create a PR instead:" >&2
+    echo "    git checkout -b work/<topic> && git push -u origin HEAD && gh pr create" >&2
+    exit 1
+  fi
+done
+exit 0

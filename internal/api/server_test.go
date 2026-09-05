@@ -59,7 +59,7 @@ func newTestServer(t *testing.T, token string) *httptest.Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 	fs := fakeStorage{}
 	mgr, err := branch.New(branch.Config{
 		NamePattern: `^[a-z0-9-]{1,32}$`, MaxBranches: 10,
@@ -92,7 +92,7 @@ func TestAPILifecycle(t *testing.T) {
 		Host  string `json:"host"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&b)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if b.State != "running" || b.User != "dev@pr-1" || b.Host != "twig.internal" {
 		t.Errorf("branch = %+v", b)
 	}
@@ -102,28 +102,28 @@ func TestAPILifecycle(t *testing.T) {
 	if resp.StatusCode != http.StatusConflict {
 		t.Errorf("dup status = %d, want 409", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// exist_ok=true → 200
 	resp, _ = http.Post(srv.URL+"/v1/branches?exist_ok=true", "application/json", strings.NewReader(`{"name":"pr-1"}`))
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("exist_ok status = %d, want 200", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// invalid name → 400
 	resp, _ = http.Post(srv.URL+"/v1/branches", "application/json", strings.NewReader(`{"name":"BAD NAME"}`))
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("invalid status = %d, want 400", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// reset
 	resp, _ = http.Post(srv.URL+"/v1/branches/pr-1/reset", "application/json", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("reset status = %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// delete
 	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/v1/branches/pr-1", nil)
@@ -131,20 +131,20 @@ func TestAPILifecycle(t *testing.T) {
 	if resp.StatusCode != http.StatusNoContent {
 		t.Errorf("delete status = %d", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// not found → 404
 	resp, _ = http.Get(srv.URL + "/v1/branches/pr-1")
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("get status = %d, want 404", resp.StatusCode)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }
 
 func TestAPIAuthFromNonLoopback(t *testing.T) {
 	// httptest は loopback なので、authorized() を直接検証する。
 	db, _ := state.Open(filepath.Join(t.TempDir(), "s.db"))
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	fs := fakeStorage{}
 	mgr, _ := branch.New(branch.Config{NamePattern: `^.+$`, PortLow: 1, PortHigh: 2, EngineType: "mysql"}, fs, fs, fakeEngine{}, nil, db)
 	s := New(mgr, "d", "dev", "secret")

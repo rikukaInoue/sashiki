@@ -85,12 +85,6 @@ type Info struct {
 	HookStatus map[string]string
 }
 
-func (m *Manager) volume(b state.Branch) storage.Volume {
-	// Dataset/Path は storage 側の規約から再構成できるが、v0.1 では
-	// zfs バックエンドの規約(branch_parent/<name>)に合わせて名前だけ渡す。
-	return storage.Volume{Name: b.Name}
-}
-
 func (m *Manager) instance(b state.Branch, vol storage.Volume) engine.Instance {
 	return engine.Instance{Branch: b.Name, DataDir: vol.Path + "/data", Port: b.Port}
 }
@@ -222,9 +216,7 @@ func (m *Manager) Reset(ctx context.Context, name string) (Info, error) {
 	if err := m.db.SetState(name, state.StateResetting, ""); err != nil {
 		return Info{}, err
 	}
-	vol := m.volume(b)
-	// Path を storage から補完するため Clone 済みボリュームの情報を引き直す。
-	vol, err = m.resolveVolume(ctx, b)
+	vol, err := m.resolveVolume(ctx, b)
 	if err != nil {
 		return Info{}, err
 	}

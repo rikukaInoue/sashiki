@@ -152,7 +152,7 @@ func (d *DB) ListBranches() ([]Branch, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []Branch
 	for rows.Next() {
 		b, err := scanBranch(rows)
@@ -170,7 +170,7 @@ func (d *DB) UsedPorts() (map[int]bool, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	used := map[int]bool{}
 	for rows.Next() {
 		var p int
@@ -234,7 +234,7 @@ func (d *DB) LastHookStatus(branch string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := map[string]string{}
 	for rows.Next() {
 		var event string
