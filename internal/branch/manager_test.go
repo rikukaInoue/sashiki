@@ -316,14 +316,34 @@ func TestResetRollsBackToInit(t *testing.T) {
 	}
 }
 
-func TestResetUnsupportedOnSlowBackend(t *testing.T) {
-	st := &mockStorage{caps: storage.Capabilities{FastRollback: false}}
-	m := newTestManager(t, st, &mockEngine{}, "")
+func TestResetRecreateOnSlowBackend(t *testing.T) {
+	st := &mockStorage{caps: storage.Capabilities{FastRollback: false, AsyncDelete: true}}
+	eng := &mockEngine{}
+	m := newTestManager(t, st, eng, "")
 	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Reset(context.Background(), "pr-1"); err == nil {
-		t.Fatal("want error for non-FastRollback backend")
+	info, err := m.Reset(context.Background(), "pr-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.State != state.StateRunning {
+		t.Errorf("state = %s", info.State)
+	}
+	// 作り直し: clone が 2 回(create + reset)、rollback は呼ばれない
+	if len(st.cloned) != 2 {
+		t.Errorf("cloned %d times, want 2 (recreate)", len(st.cloned))
+	}
+	if len(st.rollbacks) != 0 {
+		t.Errorf("rollback should not be used on slow backend")
+	}
+	// 旧ボリュームは非同期削除に投入される
+	if len(st.destroyed) != 1 {
+		t.Errorf("old volume should be destroyed: %v", st.destroyed)
+	}
+	// エンジンは旧 stop → 新 start
+	if len(eng.stopped) < 1 || len(eng.started) < 2 {
+		t.Errorf("engine stop/start: stopped=%d started=%d", len(eng.stopped), len(eng.started))
 	}
 }
 

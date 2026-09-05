@@ -35,6 +35,18 @@ type Listen struct {
 type Storage struct {
 	Backend string     `yaml:"backend"` // zfs | fsx
 	Zfs     ZfsStorage `yaml:"zfs"`
+	Fsx     FsxStorage `yaml:"fsx"`
+}
+
+// FsxStorage は fsx バックエンドの設定。
+type FsxStorage struct {
+	Region           string `yaml:"region"`
+	FilesystemID     string `yaml:"filesystem_id"`
+	BaseVolumeID     string `yaml:"base_volume_id"`
+	ParentVolumeID   string `yaml:"parent_volume_id"`
+	BaselineSnapshot string `yaml:"baseline_snapshot"`
+	DNSName          string `yaml:"dns_name"`
+	MountRoot        string `yaml:"mount_root"`
 }
 
 // ZfsStorage は zfs バックエンドの設定。
@@ -153,8 +165,14 @@ func Load(path string) (Config, error) {
 
 // Validate は設定の整合性チェック。
 func (c Config) Validate() error {
-	if c.Storage.Backend != "zfs" {
-		return fmt.Errorf("storage.backend %q is not supported in v0.1 (zfs only)", c.Storage.Backend)
+	if c.Storage.Backend != "zfs" && c.Storage.Backend != "fsx" {
+		return fmt.Errorf("storage.backend %q is not supported (zfs | fsx)", c.Storage.Backend)
+	}
+	if c.Storage.Backend == "fsx" {
+		f := c.Storage.Fsx
+		if f.Region == "" || f.FilesystemID == "" || f.BaseVolumeID == "" || f.ParentVolumeID == "" || f.DNSName == "" {
+			return fmt.Errorf("storage.fsx requires region, filesystem_id, base_volume_id, parent_volume_id, dns_name")
+		}
 	}
 	if c.Engine.Type != "mysql" {
 		return fmt.Errorf("engine.type %q is not supported in v0.1 (mysql only)", c.Engine.Type)
