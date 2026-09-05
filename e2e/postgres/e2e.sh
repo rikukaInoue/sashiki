@@ -110,17 +110,17 @@ time twig-pg reset pg-1
 [ "$(q $PORT 'SELECT COUNT(*) FROM items')" = "3" ] || fail "reset should restore"
 # initdb 既定では logging_collector が無効でサーバーログは journald に行く。
 # data/log を grep しても常にパスしてしまうので journal 側を確認する。
-journalctl -u 'postgres-twig@pg-1' --no-pager 2>/dev/null \
-  | grep -qi "database system was not properly shut down" \
+# パイプで grep -q に流すと pipefail × SIGPIPE で判定が化けるため変数に受ける(#49)。
+pg_journal=$(journalctl -u 'postgres-twig@pg-1' --no-pager 2>/dev/null || true)
+grep -qi "database system was not properly shut down" <<<"$pg_journal" \
   && fail "crash recovery ran (dirty @init)"
 # チェック自体が生きていることの確認: 正常起動ログは journal に必ず出る
-journalctl -u 'postgres-twig@pg-1' --no-pager 2>/dev/null \
-  | grep -qi "database system is ready to accept connections" \
+grep -qi "database system is ready to accept connections" <<<"$pg_journal" \
   || fail "journal に postgres のログが見つからない(crash recovery チェックが機能していない)"
 
 log "delete"
 time twig-pg delete pg-1
-zfs list -r $POOL/branches | grep -q pg- && fail "dataset should be destroyed"
+grep -q pg- <<<"$(zfs list -r $POOL/branches)" && fail "dataset should be destroyed"
 
 log "cleanup"
 kill $TWIGD_PID 2>/dev/null || true

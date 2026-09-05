@@ -13,16 +13,22 @@ POOL_IMG=/var/tmp/twig-e2e-zpool.img
 log() { echo -e "\n=== $* ==="; }
 fail() { echo "E2E FAILED: $*" >&2; exit 1; }
 
-# HTTP アサーション用。単発 curl は稀に接続レベルで落ちる(#49)ため
-# 3 回まで再試行し、失敗時は HTTP ステータスを stderr に残す。
-probe() { # probe <url> [curl-args...] : 本文を stdout へ
-  local url=$1; shift
-  local i
+# HTTP アサーション用(#49)。`curl | grep -q` は pipefail 下で壊れる:
+# grep -q がマッチ即終了でパイプを閉じると、書き手が EPIPE / SIGPIPE で
+# 失敗し、中身が正しくてもパイプライン全体が失敗する(発生はレース次第
+# なので flake に見える)。パイプを使わず本文を変数に受けて判定する。
+# 接続エラーとパターン不一致は 3 回まで再試行。
+probe() { # probe <url> <grep-pattern> [curl-args...] : pattern 空なら 200 のみ確認
+  local url=$1 pat=$2; shift 2
+  local i body=""
   for i in 1 2 3; do
-    curl -sf "$@" "$url" && return 0
+    if body=$(curl -sf "$@" "$url") && { [ -z "$pat" ] || grep -q -- "$pat" <<<"$body"; }; then
+      return 0
+    fi
     [ "$i" -lt 3 ] && sleep 1
   done
-  echo "probe failed: $url (HTTP $(curl -s -o /dev/null -w '%{http_code}' "$@" "$url" 2>/dev/null))" >&2
+  echo "probe failed: $url pattern='${pat}' (HTTP $(curl -s -o /dev/null -w '%{http_code}' "$@" "$url" 2>/dev/null))" >&2
+  echo "probe last body: $(head -c 200 <<<"$body")" >&2
   return 1
 }
 
@@ -61,7 +67,7 @@ twig init --pool $POOL --device "$POOL_IMG" --skip-packages --yes
 zfs list $POOL/base $POOL/branches > /dev/null || fail "init should create datasets"
 # 再実行安全であること(主要ステップがスキップされ成功する)
 init2=$(twig init --pool $POOL --skip-packages --yes) || fail "init re-run should succeed"
-echo "$init2" | grep -q "スキップ" || fail "init should be idempotent"
+grep -q "スキップ" <<<"$init2" || fail "init should be idempotent"
 # E2E 用にポートレンジと上限を絞る
 sed -i 's/port_range: \[3401, 3600\]/port_range: [3401, 3410]/' /etc/twig/config.yaml
 sed -i 's/max_branches: 50/max_branches: 5/' /etc/twig/config.yaml
@@ -144,22 +150,22 @@ if mysql -udev -pdev -h127.0.0.1 -P3306 -e "SELECT 1" 2>/dev/null; then
 fi
 
 log "metrics & Web UI"
-probe http://127.0.0.1:9100/metrics | grep -q 'twig_branches{state="running"} 2' \
-  || { curl -s http://127.0.0.1:9100/metrics | head -5; fail "metrics should report 2 running"; }
-probe http://127.0.0.1:8080/ | grep -q "twig" || fail "web ui should serve"
+probe http://127.0.0.1:9100/metrics 'twig_branches{state="running"} 2' \
+  || fail "metrics should report 2 running"
+probe http://127.0.0.1:8080/ "twig" || fail "web ui should serve"
 
 log "proxy: lazy create (未知ブランチ名で接続すると生える)"
 val=$(mysql -udev@pr-lazy -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.items" 2>/dev/null) \
   || fail "lazy create: connect should auto-create branch"
 [ "$val" = "3" ] || fail "lazy create: query result = $val"
-twig list | grep -q "pr-lazy" || fail "lazy create: branch should appear in list"
+grep -q "pr-lazy" <<<"$(twig list)" || fail "lazy create: branch should appear in list"
 twig delete pr-lazy
 
 log "wake API"
 twig create pr-wake > /dev/null
 systemctl stop mysqld@pr-wake
 # wake は冪等(running でも 200)なので再試行してよい
-probe http://127.0.0.1:8080/v1/branches/pr-wake/wake -X POST > /dev/null || fail "wake should succeed"
+probe http://127.0.0.1:8080/v1/branches/pr-wake/wake "" -X POST || fail "wake should succeed"
 val=$(mysql -udev@pr-wake -pdev -h127.0.0.1 -P3306 -N -e "SELECT 1" 2>/dev/null) || fail "wake: connect after wake"
 [ "$val" = "1" ] || fail "wake: query"
 twig delete pr-wake
@@ -184,7 +190,7 @@ for _ in $(seq 1 60); do
   curl -s http://127.0.0.1:8080/v1/baseline | grep -q '"refreshing":false' && break
   sleep 1
 done
-probe http://127.0.0.1:8080/v1/baseline | grep -q "baseline-" || fail "current should be rotated baseline"
+probe http://127.0.0.1:8080/v1/baseline "baseline-" || fail "current should be rotated baseline"
 # 新ブランチは新 baseline(4行)、既存 pr-1 は旧 baseline(3行)のまま
 twig create pr-new > /dev/null
 val=$(mysql -udev@pr-new -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.items" 2>/dev/null)
@@ -211,16 +217,16 @@ unset TWIG_API_URL TWIG_BRANCH
 log "delete"
 twig delete pr-1
 twig delete pr-2
-zfs list -r $POOL/branches | grep -q pr- && fail "datasets should be destroyed"
+grep -q pr- <<<"$(zfs list -r $POOL/branches)" && fail "datasets should be destroyed"
 
 log "token 管理"
 out=$(twig token create --name e2e-test) || fail "token create"
 tok=$(echo "$out" | grep -o "twig_[0-9a-f]*")
 [ -n "$tok" ] || fail "token: 平文が表示されるべき"
-twig token list | grep -q e2e-test || fail "token list"
+grep -q e2e-test <<<"$(twig token list)" || fail "token list"
 # 非 loopback からの検証は環境上できないため、DB トークンの受理はユニットテストで担保
 twig token revoke e2e-test || fail "token revoke"
-twig token list | grep -q e2e-test && fail "token should be revoked"
+grep -q e2e-test <<<"$(twig token list)" && fail "token should be revoked"
 
 log "idle stop & TTL (リーパー)"
 # 短い閾値で twigd を再起動
@@ -235,7 +241,7 @@ TWIGD_PID=$!
 sleep 1
 twig create pr-idle > /dev/null
 sleep 6   # idle_stop_after(3s) + リーパー数周期
-twig list | grep pr-idle | grep -q sleeping || { twig list; fail "reaper: pr-idle should be sleeping" ; }
+grep -q "pr-idle.*sleeping" <<<"$(twig list)" || { twig list; fail "reaper: pr-idle should be sleeping" ; }
 systemctl is-active --quiet mysqld@pr-idle && fail "reaper: mysqld should be stopped"
 # 再接続で起床(sleeping → running)
 val=$(mysql -udev@pr-idle -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.items" 2>/dev/null) \
@@ -243,7 +249,7 @@ val=$(mysql -udev@pr-idle -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM a
 [ "$val" = "4" ] || fail "reaper: wake query = $val (refresh後のbaselineは4行)"
 # TTL: 15 秒放置で自動削除
 sleep 18
-twig list | grep -q pr-idle && fail "reaper: pr-idle should be TTL-deleted"
+grep -q pr-idle <<<"$(twig list)" && fail "reaper: pr-idle should be TTL-deleted"
 # 設定を戻して再起動
 kill $TWIGD_PID 2>/dev/null || true
 sleep 1
