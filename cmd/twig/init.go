@@ -1,6 +1,6 @@
 // twig init: ホストのセットアップを自動化する(仕様 12-5)。
 // apt・AppArmor・zpool・データセット・systemd ユニット・config 生成を行う。
-// 各ステップは冪等(構成済みならスキップ)で、再実行安全。
+// 各ステップは冪等。
 package main
 
 import (
@@ -86,7 +86,7 @@ func cmdInit(args []string) int {
 	}
 	fmt.Println(`
 init 完了。次のステップ:
-  1. ベースデータを投入して baseline を撮る:
+  1. ベースデータを投入して baseline の snapshot を取得する:
        mysqld を ` + "`/" + opts.pool + "/base/data`" + ` で初期化・起動 → データ投入 → 正常終了 →
        zfs snapshot ` + opts.pool + `/base@baseline
      (examples/ の baseline スクリプト参照)

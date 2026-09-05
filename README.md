@@ -25,7 +25,7 @@ $ twig delete pr-123    # PR を閉じたら消す
 
 ```bash
 sudo twig init --pool dbpool --device /dev/nvme1n1   # デバイス名は lsblk で確認
-# ベースデータを投入して baseline を撮る(init 完了時のガイダンス参照)
+# ベースデータを投入して baseline の snapshot を取得する(init 完了時のガイダンス参照)
 sudo systemctl enable --now twigd
 twig create pr-1
 ```
