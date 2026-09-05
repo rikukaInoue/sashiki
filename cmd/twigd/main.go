@@ -79,6 +79,7 @@ func main() {
 			Listen:           cfg.Listen.Proxy,
 			NamePattern:      cfg.Branches.NamePattern,
 			MaxConnPerBranch: cfg.Proxy.MaxConnPerBranch,
+			AllowedUser:      cfg.Engine.Mysql.ProxyUser,
 		}, mgr)
 		if err != nil {
 			log.Fatalf("proxy: %v", err)

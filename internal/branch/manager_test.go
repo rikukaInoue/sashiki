@@ -423,3 +423,39 @@ func TestWakeStartsStoppedBranch(t *testing.T) {
 		t.Errorf("engine should be started once more")
 	}
 }
+
+func TestRouteBranchWaitsForCreating(t *testing.T) {
+	m := newTestManagerCfg(t, &mockStorage{}, &mockEngine{}, "", func(c *Config) {
+		c.LazyCreate = true
+		c.LazyMaxWait = 2 * time.Second
+	})
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	// creating 状態に巻き戻して、別 goroutine が完了させるのを待つ挙動を再現
+	_ = m.db.SetState("pr-1", state.StateCreating, "")
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		_ = m.db.SetState("pr-1", state.StateRunning, "")
+	}()
+	port, err := m.RouteBranch(context.Background(), "pr-1")
+	if err != nil {
+		t.Fatalf("should wait for creating branch: %v", err)
+	}
+	if port != 3401 {
+		t.Errorf("port = %d", port)
+	}
+}
+
+func TestWakeRejectsErrorAndDeleting(t *testing.T) {
+	m := newTestManager(t, &mockStorage{}, &mockEngine{}, "")
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range []string{state.StateError, state.StateDeleting, state.StateCreating} {
+		_ = m.db.SetState("pr-1", st, "")
+		if _, err := m.Wake(context.Background(), "pr-1"); err == nil {
+			t.Errorf("Wake should reject state %s", st)
+		}
+	}
+}

@@ -330,9 +330,40 @@ func (m *Manager) routeExisting(ctx context.Context, b state.Branch) (int, error
 			return 0, err
 		}
 		return b.Port, nil
+	case state.StateCreating, state.StateResetting:
+		// 別の接続が作成/リセット中: 完了を待って通す(CI の接続プールが
+		// 同時に張ってくるケース)。TCP は保持されたままなので待てる。
+		return m.waitRunning(ctx, b.Name)
 	default:
 		return 0, fmt.Errorf("branch %s is %s", b.Name, b.State)
 	}
+}
+
+// waitRunning はブランチが running になるまで待ってポートを返す。
+func (m *Manager) waitRunning(ctx context.Context, name string) (int, error) {
+	maxWait := m.cfg.LazyMaxWait
+	if maxWait == 0 {
+		maxWait = 20 * time.Second
+	}
+	deadline := time.Now().Add(maxWait)
+	for time.Now().Before(deadline) {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		b, err := m.db.GetBranch(name)
+		if err != nil {
+			return 0, err
+		}
+		switch b.State {
+		case state.StateRunning:
+			return b.Port, nil
+		case state.StateCreating, state.StateResetting:
+			time.Sleep(200 * time.Millisecond)
+		default:
+			return 0, fmt.Errorf("branch %s is %s", name, b.State)
+		}
+	}
+	return 0, fmt.Errorf("timeout waiting for branch %s to become running", name)
 }
 
 func (m *Manager) lazyEnabled() bool {
@@ -347,6 +378,7 @@ func (m *Manager) lazyEnabled() bool {
 }
 
 // Wake は sleeping(または停止している)ブランチの mysqld を起動する。
+// error / deleting / creating のブランチは対象外(状態を上書きしない)。
 func (m *Manager) Wake(ctx context.Context, name string) (Info, error) {
 	unlock := m.lock(name)
 	defer unlock()
@@ -354,6 +386,9 @@ func (m *Manager) Wake(ctx context.Context, name string) (Info, error) {
 	b, err := m.db.GetBranch(name)
 	if err != nil {
 		return Info{}, err
+	}
+	if b.State != state.StateSleeping && b.State != state.StateRunning {
+		return Info{}, fmt.Errorf("branch %s is %s (cannot wake)", name, b.State)
 	}
 	vol, err := m.resolveVolume(ctx, b)
 	if err != nil {
