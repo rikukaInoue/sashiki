@@ -165,6 +165,37 @@ twig delete pr-1
 twig delete pr-2
 zfs list -r $POOL/branches | grep -q pr- && fail "datasets should be destroyed"
 
+log "idle stop & TTL (リーパー)"
+# 短い閾値で twigd を再起動
+kill $TWIGD_PID 2>/dev/null || true
+sleep 1
+cp /etc/twig/config.yaml /tmp/twig-config.bak
+sed -i "s/idle_stop_after: 30m.*/idle_stop_after: 3s/; s/delete_after_idle: 168h.*/delete_after_idle: 15s/" /etc/twig/config.yaml
+sed -i "/delete_after_idle: 15s/a\\  reaper_interval: 1s" /etc/twig/config.yaml
+grep -A1 "delete_after_idle" /etc/twig/config.yaml
+/usr/local/bin/twigd --config /etc/twig/config.yaml > /var/log/twig/twigd2.log 2>&1 &
+TWIGD_PID=$!
+sleep 1
+twig create pr-idle > /dev/null
+sleep 6   # idle_stop_after(3s) + リーパー数周期
+twig list | grep pr-idle | grep -q sleeping || { twig list; fail "reaper: pr-idle should be sleeping" ; }
+systemctl is-active --quiet mysqld@pr-idle && fail "reaper: mysqld should be stopped"
+# 再接続で起床(sleeping → running)
+val=$(mysql -udev@pr-idle -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.items" 2>/dev/null) \
+  || fail "reaper: reconnect should wake sleeping branch"
+[ "$val" = "3" ] || fail "reaper: wake query = $val"
+# TTL: 15 秒放置で自動削除
+sleep 18
+twig list | grep -q pr-idle && fail "reaper: pr-idle should be TTL-deleted"
+# 設定を戻して再起動
+kill $TWIGD_PID 2>/dev/null || true
+sleep 1
+cp /tmp/twig-config.bak /etc/twig/config.yaml
+/usr/local/bin/twigd --config /etc/twig/config.yaml >> /var/log/twig/twigd.log 2>&1 &
+TWIGD_PID=$!
+sleep 1
+
+
 # --- 6. 後片付け ---
 log "cleanup"
 kill $TWIGD_PID 2>/dev/null || true

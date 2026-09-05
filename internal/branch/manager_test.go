@@ -423,3 +423,67 @@ func TestWakeStartsStoppedBranch(t *testing.T) {
 		t.Errorf("engine should be started once more")
 	}
 }
+
+func TestReapIdleStopAndTTLDelete(t *testing.T) {
+	st := &mockStorage{}
+	eng := &mockEngine{}
+	m := newTestManagerCfg(t, st, eng, "", func(c *Config) {
+		c.IdleStopAfter = 10 * time.Millisecond
+		c.DeleteAfterIdle = time.Hour
+	})
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if err := m.Reap(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	info, _ := m.Get(context.Background(), "pr-1")
+	if info.State != state.StateSleeping {
+		t.Errorf("state = %s, want sleeping", info.State)
+	}
+	if len(eng.stopped) != 1 {
+		t.Errorf("engine stopped %d times", len(eng.stopped))
+	}
+
+	// TTL: delete_after_idle を縮めて再パス → 削除される
+	m.cfg.DeleteAfterIdle = 10 * time.Millisecond
+	if err := m.Reap(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Get(context.Background(), "pr-1"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound after TTL delete", err)
+	}
+}
+
+func TestReapKeepsErrorBranches(t *testing.T) {
+	m := newTestManagerCfg(t, &mockStorage{}, &mockEngine{}, "", func(c *Config) {
+		c.DeleteAfterIdle = time.Nanosecond
+	})
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	_ = m.db.SetState("pr-1", state.StateError, "boom")
+	time.Sleep(5 * time.Millisecond)
+	if err := m.Reap(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Get(context.Background(), "pr-1"); err != nil {
+		t.Errorf("error branch should be kept: %v", err)
+	}
+}
+
+func TestMemoryGuardRejectsCreate(t *testing.T) {
+	m := newTestManagerCfg(t, &mockStorage{}, &mockEngine{}, "", func(c *Config) {
+		c.BufferPoolBytes = 256 * 1024 * 1024
+		c.AvailableMem = func() (int64, error) { return 100 * 1024 * 1024, nil } // 100MB
+	})
+	if _, err := m.Create(context.Background(), "pr-1", 0); !errors.Is(err, ErrLimitReached) {
+		t.Errorf("err = %v, want ErrLimitReached", err)
+	}
+	// 十分な空きなら通る
+	m.cfg.AvailableMem = func() (int64, error) { return 2 << 30, nil }
+	if _, err := m.Create(context.Background(), "pr-2", 0); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -73,6 +73,9 @@ type Branches struct {
 	MaxBranches       int           `yaml:"max_branches"`
 	LazyCreate        bool          `yaml:"lazy_create"`
 	LazyCreateMaxWait time.Duration `yaml:"lazy_create_max_wait"`
+	IdleStopAfter     time.Duration `yaml:"idle_stop_after"`
+	DeleteAfterIdle   time.Duration `yaml:"delete_after_idle"`
+	ReaperInterval    time.Duration `yaml:"reaper_interval"`
 }
 
 // Hooks はフック設定。
@@ -120,6 +123,9 @@ func Default() Config {
 			MaxBranches:       50,
 			LazyCreate:        true,
 			LazyCreateMaxWait: 20 * time.Second,
+			IdleStopAfter:     30 * time.Minute,
+			DeleteAfterIdle:   168 * time.Hour,
+			ReaperInterval:    time.Minute,
 		},
 		Hooks: Hooks{
 			Dir:    "/etc/twig/hooks",
