@@ -4,21 +4,59 @@
 <title>twig</title>
 <style>
   :root { color-scheme: light dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-  body { margin: 2rem auto; max-width: 720px; padding: 0 1rem; }
+  body { margin: 2rem auto; max-width: 960px; padding: 0 1rem; }
   h1 { font-size: 1.2rem; } h1 span { opacity: .5; font-weight: normal; }
   table { border-collapse: collapse; width: 100%; }
   th, td { text-align: left; padding: .4rem .8rem; border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent); }
   th { opacity: .6; font-weight: normal; }
   .running { color: #2da44e; } .sleeping { color: #bf8700; } .error { color: #cf222e; }
   .meta { opacity: .6; margin-top: 1rem; font-size: .85rem; }
+  #branches tbody tr { cursor: pointer; }
+  #branches tbody tr:hover { background: color-mix(in srgb, currentColor 6%, transparent); }
+  #branches tr.selected { background: color-mix(in srgb, currentColor 10%, transparent); }
+  #detail { margin-top: 1.5rem; display: none; }
+  #detail h2 { font-size: 1rem; }
+  .browser { display: grid; grid-template-columns: 260px 1fr; gap: 1rem; align-items: start; }
+  @media (max-width: 700px) { .browser { grid-template-columns: 1fr; } }
+  #schema { font-size: .85rem; line-height: 1.5; overflow-x: auto; }
+  #schema .db { font-weight: bold; margin-top: .5rem; }
+  #schema .tbl { cursor: pointer; padding-left: 1rem; }
+  #schema .tbl:hover { text-decoration: underline; }
+  #schema .col { padding-left: 2rem; opacity: .65; display: none; }
+  #schema .open .col { display: block; }
+  #schema .key { color: #bf8700; }
+  #sql { width: 100%; box-sizing: border-box; font: inherit; padding: .5rem;
+         background: transparent; color: inherit; min-height: 3.2rem;
+         border: 1px solid color-mix(in srgb, currentColor 25%, transparent); border-radius: 6px; }
+  #run { font: inherit; padding: .3rem 1rem; margin-top: .4rem; cursor: pointer; }
+  #result-wrap { overflow-x: auto; margin-top: .8rem; }
+  #result td, #result th { white-space: nowrap; max-width: 24rem; overflow: hidden; text-overflow: ellipsis; }
+  #qerr { color: #cf222e; white-space: pre-wrap; }
+  .null { opacity: .4; font-style: italic; }
 </style>
 <h1>🌿 twig <span id="baseline"></span></h1>
-<table>
+<table id="branches">
   <thead><tr><th>NAME</th><th>STATE</th><th>PORT</th><th>LAST_CONN</th><th>USED</th></tr></thead>
   <tbody id="rows"><tr><td colspan="5">loading…</td></tr></tbody>
 </table>
-<p class="meta">auto-refresh 5s · <a href="/v1/branches">API</a></p>
+<p class="meta">auto-refresh 5s · 行をクリックで中身を見る · <a href="/v1/branches">API</a></p>
+
+<section id="detail">
+  <h2>🔍 <span id="dname"></span></h2>
+  <div class="browser">
+    <div id="schema">loading schema…</div>
+    <div>
+      <textarea id="sql" spellcheck="false" placeholder="SELECT ..."></textarea><br>
+      <button id="run">Run (⌘⏎)</button>
+      <div id="qerr"></div>
+      <div id="result-wrap"><table id="result"></table></div>
+    </div>
+  </div>
+</section>
+
 <script>
+let selected = null;
+
 function human(n) {
   if (n < 1024) return n + "B";
   const u = ["K","M","G","T"]; let i = -1;
@@ -33,6 +71,10 @@ function ago(iso) {
   if (s < 86400) return Math.floor(s / 3600) + "h ago";
   return Math.floor(s / 86400) + "d ago";
 }
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+}
+
 async function refresh() {
   try {
     const [br, bl] = await Promise.all([
@@ -42,13 +84,81 @@ async function refresh() {
     document.getElementById("baseline").textContent =
       bl.current.split("@")[1] + (bl.refreshing ? " (refreshing…)" : "");
     const rows = br.branches.map(b =>
-      `<tr><td>${b.name}</td><td class="${b.state}">${b.state}</td>` +
+      `<tr data-name="${esc(b.name)}" class="${b.name === selected ? "selected" : ""}">` +
+      `<td>${esc(b.name)}</td><td class="${b.state}">${b.state}</td>` +
       `<td>${b.port}</td><td>${ago(b.last_conn_at)}</td><td>${human(b.used_bytes)}</td></tr>`
     ).join("");
     document.getElementById("rows").innerHTML =
       rows || '<tr><td colspan="5">no branches — mysql -udev@&lt;name&gt; で生やせます</td></tr>';
-  } catch (e) { /* twigd 再起動中など。次のタイマーで再試行 */ }
+  } catch (e) { /* twigd 再起動中など */ }
 }
+
+async function openBranch(name) {
+  selected = name;
+  document.getElementById("detail").style.display = "block";
+  document.getElementById("dname").textContent = name;
+  document.getElementById("result").innerHTML = "";
+  document.getElementById("qerr").textContent = "";
+  const el = document.getElementById("schema");
+  el.textContent = "loading schema…";
+  refresh();
+  try {
+    const res = await fetch(`/v1/branches/${name}/schema`);
+    if (!res.ok) throw new Error((await res.json()).error?.message || res.status);
+    const { databases } = await res.json();
+    if (!databases.length) { el.textContent = "(ユーザーDBなし)"; return; }
+    el.innerHTML = databases.map(d =>
+      `<div class="db">${esc(d.name)}</div>` +
+      d.tables.map(t =>
+        `<div class="tblwrap"><div class="tbl" data-db="${esc(d.name)}" data-tbl="${esc(t.name)}">` +
+        `▸ ${esc(t.name)} <span style="opacity:.5">~${t.approx_rows}行</span></div>` +
+        t.columns.map(c =>
+          `<div class="col">${c.key === "PRI" ? '<span class="key">🔑</span>' : ""}` +
+          `${esc(c.name)} <span>${esc(c.type)}${c.nullable ? "?" : ""}</span></div>`
+        ).join("") + `</div>`
+      ).join("")
+    ).join("");
+    el.querySelectorAll(".tbl").forEach(t => t.addEventListener("click", () => {
+      t.parentElement.classList.toggle("open");
+      const q = `SELECT * FROM ${t.dataset.db}.${t.dataset.tbl} LIMIT 50`;
+      document.getElementById("sql").value = q;
+      runQuery();
+    }));
+  } catch (e) { el.textContent = "schema error: " + e.message; }
+}
+
+async function runQuery() {
+  const sql = document.getElementById("sql").value.trim();
+  if (!sql || !selected) return;
+  const err = document.getElementById("qerr");
+  const table = document.getElementById("result");
+  err.textContent = ""; table.innerHTML = "<tr><td>running…</td></tr>";
+  try {
+    const res = await fetch(`/v1/branches/${selected}/query`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sql }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || res.status);
+    table.innerHTML =
+      "<tr>" + data.columns.map(c => `<th>${esc(c)}</th>`).join("") + "</tr>" +
+      data.rows.map(r => "<tr>" + r.map(v =>
+        v === null ? '<td class="null">NULL</td>' : `<td>${esc(v)}</td>`
+      ).join("") + "</tr>").join("");
+    if (!data.rows.length) table.innerHTML += `<tr><td colspan="${data.columns.length || 1}" class="null">0 rows</td></tr>`;
+    if (data.truncated) table.innerHTML += `<tr><td colspan="${data.columns.length}" class="null">…truncated at 200 rows</td></tr>`;
+  } catch (e) { err.textContent = e.message; table.innerHTML = ""; }
+}
+
+document.getElementById("rows").addEventListener("click", e => {
+  const tr = e.target.closest("tr[data-name]");
+  if (tr) openBranch(tr.dataset.name);
+});
+document.getElementById("run").addEventListener("click", runQuery);
+document.getElementById("sql").addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") runQuery();
+});
+
 refresh();
 setInterval(refresh, 5000);
 </script>

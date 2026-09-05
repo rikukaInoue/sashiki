@@ -28,19 +28,22 @@ type Server struct {
 	mgr    *branch.Manager
 	domain string
 	user   string
+	pass   string
 	token  string // 環境変数トークン(後方互換)。空なら無効
 	tokens TokenChecker
 	mux    *http.ServeMux
 }
 
 // New は Server を作る。tokens は nil 可(env トークンのみ)。
-func New(mgr *branch.Manager, domain, proxyUser, token string, tokens TokenChecker) *Server {
-	s := &Server{mgr: mgr, domain: domain, user: proxyUser, token: token, tokens: tokens, mux: http.NewServeMux()}
+func New(mgr *branch.Manager, domain, proxyUser, proxyPass, token string, tokens TokenChecker) *Server {
+	s := &Server{mgr: mgr, domain: domain, user: proxyUser, pass: proxyPass, token: token, tokens: tokens, mux: http.NewServeMux()}
 	s.mux.HandleFunc("GET /v1/branches", s.handleList)
 	s.mux.HandleFunc("POST /v1/branches", s.handleCreate)
 	s.mux.HandleFunc("GET /v1/branches/{name}", s.handleGet)
 	s.mux.HandleFunc("POST /v1/branches/{name}/reset", s.handleReset)
 	s.mux.HandleFunc("POST /v1/branches/{name}/wake", s.handleWake)
+	s.mux.HandleFunc("GET /v1/branches/{name}/schema", s.handleSchema)
+	s.mux.HandleFunc("POST /v1/branches/{name}/query", s.handleQuery)
 	s.mux.HandleFunc("DELETE /v1/branches/{name}", s.handleDelete)
 	s.mux.HandleFunc("GET /v1/baseline", s.handleBaseline)
 	s.mux.HandleFunc("POST /v1/baseline/refresh", s.handleBaselineRefresh)
