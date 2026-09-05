@@ -1,6 +1,7 @@
 // ブランチ DB への問い合わせ API(Web UI のデータブラウザ用)。
-//   GET  /v1/branches/{name}/schema  スキーマ(DB → テーブル → カラム)
-//   POST /v1/branches/{name}/query   任意 SQL の実行(行数・時間に上限)
+//
+//	GET  /v1/branches/{name}/schema  スキーマ(DB → テーブル → カラム)
+//	POST /v1/branches/{name}/query   任意 SQL の実行(行数・時間に上限)
 //
 // ブランチは使い捨ての開発 DB であり、接続ユーザーも開発用(proxy_user)なので
 // 書き込みも許可する(壊したら reset すればよい)。MySQL エンジンのみ対応。
