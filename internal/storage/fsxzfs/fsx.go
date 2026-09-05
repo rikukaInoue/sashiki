@@ -75,9 +75,10 @@ func New(cfg Config, api API) *Backend {
 // 「新クローン + 付け替え」の共通経路になる(仕様 15-3)。
 func (b *Backend) Capabilities() storage.Capabilities {
 	return storage.Capabilities{
-		FastRollback:  false,
-		TypicalCreate: 70 * time.Second,
-		AsyncDelete:   true,
+		FastRollback:      false,
+		TypicalCreate:     70 * time.Second,
+		AsyncDelete:       true,
+		ClonesAreDistinct: true, // 世代サフィックス name-g<hex>
 	}
 }
 

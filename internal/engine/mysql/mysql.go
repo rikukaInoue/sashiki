@@ -89,6 +89,17 @@ func (e *Engine) Stop(ctx context.Context, ins engine.Instance) error {
 	return nil
 }
 
+// Kill は systemd 経由で SIGKILL する(env は消す)。rollback で捨てる
+// dirty state 用。snapshot 前には使わない。
+func (e *Engine) Kill(ctx context.Context, ins engine.Instance) error {
+	_, _ = e.run(ctx, "systemctl", "kill", "-s", "SIGKILL", e.unit(ins.Branch))
+	// プロセス消滅を待たずとも rollback は volume を置き換えるが、
+	// datadir を掴んだままの rollback を避けるため軽く待つ。
+	_, _ = e.run(ctx, "systemctl", "stop", e.unit(ins.Branch))
+	_ = os.Remove(e.envPath(ins.Branch))
+	return nil
+}
+
 // WaitReady は mysqladmin ping が通るまで 100ms 間隔で待つ。
 func (e *Engine) WaitReady(ctx context.Context, ins engine.Instance) error {
 	deadline := time.Now().Add(e.cfg.ReadyTimeout)

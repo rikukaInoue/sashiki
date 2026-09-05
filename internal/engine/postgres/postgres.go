@@ -97,6 +97,14 @@ func (e *Engine) Stop(ctx context.Context, ins engine.Instance) error {
 	return nil
 }
 
+// Kill は即時停止(immediate)。dirty state を捨てる rollback 用。
+func (e *Engine) Kill(ctx context.Context, ins engine.Instance) error {
+	_, _ = e.run(ctx, "systemctl", "kill", "-s", "SIGKILL", e.unit(ins.Branch))
+	_, _ = e.run(ctx, "systemctl", "stop", e.unit(ins.Branch))
+	_ = os.Remove(filepath.Join(e.cfg.EnvDir, ins.Branch+".env"))
+	return nil
+}
+
 // WaitReady は pg_isready が通るまで待つ。
 func (e *Engine) WaitReady(ctx context.Context, ins engine.Instance) error {
 	deadline := time.Now().Add(e.cfg.ReadyTimeout)

@@ -199,6 +199,14 @@ val=$(mysql -udev@pr-1 -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.
 [ "$val" = "3" ] || fail "existing branch should keep old baseline (got $val)"
 sashiki delete pr-new
 
+log "recreate (最新baselineから作り直し)"
+# refresh 済みなので current は新baseline(4行)。既存 pr-1 は旧(3行)
+val=$(mysql -udev@pr-1 -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.items" 2>/dev/null)
+[ "$val" = "3" ] || fail "pr-1 should still be on old baseline (got $val)"
+sashiki recreate pr-1 > /dev/null || fail "recreate should succeed"
+val=$(mysql -udev@pr-1 -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.items" 2>/dev/null)
+[ "$val" = "4" ] || fail "recreate should move pr-1 to current baseline (got $val)"
+
 log "github action entrypoint (create/idempotent/delete)"
 AE="$SCRIPT_DIR/../action/entrypoint.sh"
 [ -f "$AE" ] || AE="$SCRIPT_DIR/action-entrypoint.sh"   # Lima はフラットコピー

@@ -15,8 +15,12 @@ type Instance struct {
 type Engine interface {
 	// Start はインスタンスを起動する(非同期でよい)。
 	Start(ctx context.Context, ins Instance) error
-	// Stop は正常終了させる。@init/@baseline の一貫性はこれに依存する。
+	// Stop は正常終了(graceful)させる。@init/@baseline の一貫性はこれに依存する。
+	// snapshot を取得する前は必ずこちらを使う。
 	Stop(ctx context.Context, ins Instance) error
+	// Kill は即時停止(dirty state を捨てる場合。例: rollback 直前)。
+	// snapshot 前には使わない。PoC では reset 時間の大半が graceful shutdown だった。
+	Kill(ctx context.Context, ins Instance) error
 	// WaitReady は接続可能になるまで待つ。
 	WaitReady(ctx context.Context, ins Instance) error
 	// IsRunning は起動中かどうか。

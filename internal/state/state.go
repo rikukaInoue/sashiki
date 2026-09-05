@@ -140,6 +140,12 @@ func (d *DB) TouchLastConn(name string) error {
 	return err
 }
 
+// UpdateOrigin は branch の origin_snapshot を更新する(recreate 時)。
+func (d *DB) UpdateOrigin(name, origin string) error {
+	_, err := d.sql.Exec(`UPDATE branches SET origin_snapshot = ? WHERE name = ?`, origin, name)
+	return err
+}
+
 // DeleteBranch は行を削除する。
 func (d *DB) DeleteBranch(name string) error {
 	_, err := d.sql.Exec(`DELETE FROM branches WHERE name = ?`, name)
