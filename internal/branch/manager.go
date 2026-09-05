@@ -43,6 +43,16 @@ type Config struct {
 	// バックエンドの TypicalCreate が LazyMaxWait を超える場合は無効(仕様 15-3)。
 	LazyCreate  bool
 	LazyMaxWait time.Duration
+
+	// リーパー(reaper.go)
+	IdleStopAfter   time.Duration // 0 = アイドル停止しない
+	DeleteAfterIdle time.Duration // 0 = 自動削除しない
+
+	// メモリガード: create 時に空きメモリを確認する。AvailableMem が nil なら無効。
+	// OOM killer は新しいブランチではなく既存の無関係な mysqld を殺す(PoC 実測)ため、
+	// 事後の監視ではなく事前の拒否で守る。
+	AvailableMem    func() (int64, error)
+	BufferPoolBytes int64
 }
 
 // Manager はブランチライフサイクルの実装。
@@ -160,6 +170,9 @@ func (m *Manager) Create(ctx context.Context, name string, port int) (Info, erro
 	}
 	p, err := m.allocPort(port)
 	if err != nil {
+		return Info{}, err
+	}
+	if err := m.checkMemory(); err != nil {
 		return Info{}, err
 	}
 
@@ -364,6 +377,23 @@ func (m *Manager) waitRunning(ctx context.Context, name string) (int, error) {
 		}
 	}
 	return 0, fmt.Errorf("timeout waiting for branch %s to become running", name)
+}
+
+// checkMemory は空きメモリ < buffer pool + 300MB なら作成を拒否する。
+func (m *Manager) checkMemory() error {
+	if m.cfg.AvailableMem == nil || m.cfg.BufferPoolBytes <= 0 {
+		return nil
+	}
+	avail, err := m.cfg.AvailableMem()
+	if err != nil {
+		return nil // 判定不能なら通す(ガードは best-effort)
+	}
+	need := m.cfg.BufferPoolBytes + 300*1024*1024
+	if avail < need {
+		return fmt.Errorf("%w: available memory %dMB < required %dMB",
+			ErrLimitReached, avail/1024/1024, need/1024/1024)
+	}
+	return nil
 }
 
 func (m *Manager) lazyEnabled() bool {
