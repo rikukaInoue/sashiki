@@ -42,14 +42,23 @@ zfs create $POOL/branches
 log "base mysql"
 mkdir -p /$POOL/base/data
 chown -R mysql:mysql /$POOL/base /var/log/twig
-sudo -u mysql mysqld --initialize-insecure --datadir=/$POOL/base/data > /dev/null 2>&1
-sudo -u mysql mysqld --datadir=/$POOL/base/data --port=3306 \
+if ! sudo -u mysql mysqld --initialize-insecure --datadir=/$POOL/base/data > /var/log/twig/init.log 2>&1; then
+  tail -30 /var/log/twig/init.log
+  dmesg 2>/dev/null | grep -i apparmor | tail -5
+  fail "mysqld --initialize failed"
+fi
+if ! sudo -u mysql mysqld --datadir=/$POOL/base/data --port=3306 \
   --socket=/tmp/mysql-e2e-base.sock --pid-file=/tmp/mysql-e2e-base.pid \
-  --log-error=/var/log/twig/base.err --innodb-buffer-pool-size=128M --daemonize
+  --log-error=/var/log/twig/base.err --innodb-buffer-pool-size=128M --daemonize; then
+  tail -30 /var/log/twig/base.err
+  fail "base mysqld failed to start"
+fi
 for _ in $(seq 1 60); do
   mysqladmin -uroot -S /tmp/mysql-e2e-base.sock ping > /dev/null 2>&1 && break
   sleep 1
 done
+mysqladmin -uroot -S /tmp/mysql-e2e-base.sock ping > /dev/null 2>&1 \
+  || { tail -30 /var/log/twig/base.err; fail "base mysqld not ready"; }
 mysql -uroot -S /tmp/mysql-e2e-base.sock <<'SQL'
 CREATE DATABASE app;
 CREATE TABLE app.items (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(64));
