@@ -10,6 +10,9 @@ import (
 )
 
 // MetricsHandler は GET /metrics を返すハンドラ。
+// per-branch ラベル(twig_branch_used_bytes)のカーディナリティは
+// branches.max_branches(既定50)で有界。上限を大きく上げる運用では
+// Prometheus 側の series 数に注意。
 func MetricsHandler(mgr *branch.Manager) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		infos, err := mgr.List(r.Context())
