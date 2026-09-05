@@ -19,7 +19,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rikukaInoue/sashiki/internal/hooks"
 	"github.com/rikukaInoue/sashiki/internal/state"
+	"github.com/rikukaInoue/sashiki/internal/storage"
 )
 
 // ErrRefreshRunning は refresh の多重実行。
@@ -32,6 +34,14 @@ type RefreshConfig struct {
 	// CheckQuiesced は snapshot 取得前の検証(テストで注入)。nil なら
 	// storage の BasePath から既定実装を組み立てる。
 	CheckQuiesced func(ctx context.Context) error
+
+	// publish ポリシー(仕様 12-4)。
+	RequireMasked    bool
+	RequireValidated bool
+	ValidatePort     int
+	MaskedSentinel   string
+	// SkipValidate はテストで validate(clone+engine)を飛ばす。
+	SkipValidate bool
 }
 
 // basePathProvider は base の実パスを返せるバックエンド(ebszfs)。
@@ -60,6 +70,19 @@ func (m *Manager) RefreshBaseline(ctx context.Context, rc RefreshConfig) (tag st
 	}
 	if rc.Timeout == 0 {
 		rc.Timeout = time.Hour
+	}
+	// ポリシー未指定なら Manager 既定を使う。
+	if !rc.RequireMasked && m.baselinePolicy.RequireMasked {
+		rc.RequireMasked = true
+	}
+	if !rc.RequireValidated && m.baselinePolicy.RequireValidated {
+		rc.RequireValidated = true
+	}
+	if rc.ValidatePort == 0 {
+		rc.ValidatePort = m.baselinePolicy.ValidatePort
+	}
+	if rc.MaskedSentinel == "" {
+		rc.MaskedSentinel = m.baselinePolicy.MaskedSentinel
 	}
 	if _, err := os.Stat(rc.Script); err != nil {
 		return "", fmt.Errorf("refresh script %s: %w", rc.Script, err)
@@ -108,18 +131,93 @@ func (m *Manager) runRefresh(ctx context.Context, rc RefreshConfig, tag string) 
 		}
 		log.Printf("baseline refresh: leftover mysqld was terminated before snapshot")
 	}
+	// --- build: script が投入/マスク/migration/正常終了を済ませた candidate を snapshot ---
 	snap, err := m.st.SnapshotBase(ctx, tag)
 	if err != nil {
 		return fmt.Errorf("snapshot: %w", err)
 	}
-	// baseline を provenance 付きで登録してから current pointer を切り替える
-	// (仕様 12-1。build/validate/publish の詳細は #38)。
-	_ = m.db.RegisterBaseline(string(snap), state.BaselineProvenance{DataAsOf: tag})
-	if err := m.db.SetCurrentBaseline(string(snap)); err != nil {
-		return fmt.Errorf("set current: %w", err)
+	masked := rc.MaskedSentinel != "" && fileExists(rc.MaskedSentinel)
+	prov := state.BaselineProvenance{DataAsOf: tag, Masked: masked}
+	if err := m.db.RegisterBaseline(string(snap), prov); err != nil {
+		return fmt.Errorf("register candidate: %w", err)
 	}
-	log.Printf("baseline refresh: current is now %s", snap)
+
+	// --- validate: candidate を一時 branch で起動して検証 → 破棄 ---
+	validated := false
+	if !rc.SkipValidate {
+		if err := m.validateCandidate(ctx, snap, rc); err != nil {
+			return fmt.Errorf("validate: %w (candidate %s は publish しない)", err, snap)
+		}
+		validated = true
+		prov.Validated = true
+		_ = m.db.RegisterBaseline(string(snap), prov)
+	}
+
+	// --- publish: ポリシーを満たせば current pointer を candidate へ ---
+	if rc.RequireMasked && !masked {
+		return fmt.Errorf("publish rejected: baseline is not masked (require_masked)")
+	}
+	if rc.RequireValidated && !validated {
+		return fmt.Errorf("publish rejected: baseline is not validated (require_validated)")
+	}
+	if err := m.db.SetCurrentBaseline(string(snap)); err != nil {
+		return fmt.Errorf("publish (set current): %w", err)
+	}
+	log.Printf("baseline refresh: published %s (masked=%v validated=%v)", snap, masked, validated)
 	return nil
+}
+
+// validateCandidate は candidate snapshot を一時 branch で起動し、
+// on-baseline-validate hook で検証してから破棄する(仕様 12-4)。
+// crash recovery が走らずに起動できること自体が「正常終了状態で撮られた」検証を兼ねる。
+func (m *Manager) validateCandidate(ctx context.Context, snap storage.SnapshotRef, rc RefreshConfig) error {
+	name := "_validate"
+	// 既存の検証 volume が残っていれば掃除
+	if vol, err := m.resolveVolume(ctx, state.Branch{Name: name}); err == nil {
+		_ = m.eng.Kill(ctx, m.instance(state.Branch{Name: name, Port: rc.ValidatePort}, vol))
+		if job, derr := m.st.DeleteAsync(ctx, vol); derr == nil {
+			_, _ = m.st.Poll(ctx, job)
+		}
+	}
+	vol, err := m.st.Clone(ctx, snap, name)
+	if err != nil {
+		return fmt.Errorf("clone candidate: %w", err)
+	}
+	port := rc.ValidatePort
+	if port == 0 {
+		port = 3999
+	}
+	b := state.Branch{Name: name, Port: port}
+	ins := m.instance(b, vol)
+	cleanup := func() {
+		_ = m.eng.Kill(ctx, ins)
+		if job, derr := m.st.DeleteAsync(ctx, vol); derr == nil {
+			_, _ = m.st.Poll(ctx, job)
+		}
+	}
+	defer cleanup()
+
+	// crash recovery なしで ready になること = 正常終了状態で撮られた証拠。
+	if err := m.eng.Start(ctx, ins); err != nil {
+		return fmt.Errorf("candidate engine start: %w", err)
+	}
+	if err := m.eng.WaitReady(ctx, ins); err != nil {
+		return fmt.Errorf("candidate not ready (crash recovery?): %w", err)
+	}
+	// operator の検証(mask validation / migration version / sanity)。無ければスキップ。
+	if m.hooks != nil {
+		if _, ok := m.hooks.Find(hooks.OnBaselineValidate); ok {
+			if err := m.runHook(ctx, hooks.OnBaselineValidate, b, vol); err != nil {
+				return fmt.Errorf("validation hook failed: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 // defaultQuiesceCheck は base の datadir を引数に持つプロセスが残っていないか

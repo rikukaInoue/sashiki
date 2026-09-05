@@ -16,10 +16,11 @@ type Event string
 
 // フックイベント。
 const (
-	OnCreate   Event = "on-create"
-	OnRecreate Event = "on-recreate"
-	OnReset    Event = "on-reset"
-	OnDelete   Event = "on-delete"
+	OnCreate           Event = "on-create"
+	OnRecreate         Event = "on-recreate"
+	OnReset            Event = "on-reset"
+	OnDelete           Event = "on-delete"
+	OnBaselineValidate Event = "on-baseline-validate"
 )
 
 // Env はフックに環境変数で渡す情報。

@@ -43,6 +43,12 @@ branches:
   idle_stop_after: 30m      # 接続なしで mysqld を停止(データは残る、再接続で起床)
   delete_after_idle: 168h   # 7日間接続なしで削除。PR close 取りこぼしの保険
 
+baseline:
+  require_masked: false      # true にすると masked でない baseline の publish を拒否
+  require_validated: false   # true にすると validate 未通過の publish を拒否
+  validate_port: 3999
+  masked_sentinel: /run/sashiki/baseline-masked
+
 hooks:
   dir: /etc/sashiki/hooks
   log_dir: /var/log/sashiki/hooks

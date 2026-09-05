@@ -77,6 +77,14 @@ type Manager struct {
 	// TouchConn のスロットリング
 	touchMu   sync.Mutex
 	lastTouch map[string]time.Time
+
+	// baseline publish ポリシー(#38)
+	baselinePolicy RefreshConfig
+}
+
+// SetBaselinePolicy は refresh の publish ポリシーを設定する(sashikid 起動時)。
+func (m *Manager) SetBaselinePolicy(rc RefreshConfig) {
+	m.baselinePolicy = rc
 }
 
 // New は Manager を作る。
