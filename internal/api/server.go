@@ -44,6 +44,7 @@ func New(mgr *branch.Manager, domain, proxyUser, token string, tokens TokenCheck
 	s.mux.HandleFunc("POST /v1/branches/{name}/wake", s.handleWake)
 	s.mux.HandleFunc("DELETE /v1/branches/{name}", s.handleDelete)
 	s.mux.HandleFunc("GET /v1/baseline", s.handleBaseline)
+	s.mux.HandleFunc("POST /v1/baseline/refresh", s.handleBaselineRefresh)
 	s.mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
 	return s
 }
@@ -102,9 +103,23 @@ func (s *Server) handleBaseline(w http.ResponseWriter, r *http.Request) {
 		info.Snapshots = []string{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"current":   info.Current,
-		"snapshots": info.Snapshots,
+		"current":    info.Current,
+		"snapshots":  info.Snapshots,
+		"refreshing": branch.RefreshInProgress(),
 	})
+}
+
+func (s *Server) handleBaselineRefresh(w http.ResponseWriter, r *http.Request) {
+	tag, err := s.mgr.RefreshBaseline(r.Context(), branch.RefreshConfig{})
+	if errors.Is(err, branch.ErrRefreshRunning) {
+		writeErr(w, http.StatusConflict, "refresh_running", err.Error())
+		return
+	}
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "started", "tag": tag})
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {

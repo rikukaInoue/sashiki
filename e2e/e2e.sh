@@ -145,6 +145,35 @@ val=$(mysql -udev@pr-wake -pdev -h127.0.0.1 -P3306 -N -e "SELECT 1" 2>/dev/null)
 [ "$val" = "1" ] || fail "wake: query"
 twig delete pr-wake
 
+log "baseline refresh (current 切り替え)"
+cat > /etc/twig/refresh.sh <<REFRESH
+#!/usr/bin/env bash
+set -euo pipefail
+DATADIR=/$POOL/base/data
+SOCK=/tmp/twig-refresh.sock
+mysqld --user=mysql --datadir="\$DATADIR" --skip-networking --socket="\$SOCK" \
+  --pid-file=/tmp/twig-refresh.pid --log-error=/var/log/twig/refresh.err --daemonize
+for _ in \$(seq 1 60); do mysqladmin -uroot -S "\$SOCK" ping >/dev/null 2>&1 && break; sleep 1; done
+mysql -uroot -S "\$SOCK" -e "INSERT INTO app.items (name) VALUES ('from-refresh')"
+mysqladmin -uroot -S "\$SOCK" shutdown
+sleep 2
+REFRESH
+chmod +x /etc/twig/refresh.sh
+code=$(curl -s -o /tmp/refresh-resp -w '%{http_code}' -X POST http://127.0.0.1:8080/v1/baseline/refresh)
+[ "$code" = "202" ] || { cat /tmp/refresh-resp; fail "refresh should return 202 (got $code)"; }
+for _ in $(seq 1 60); do
+  curl -s http://127.0.0.1:8080/v1/baseline | grep -q '"refreshing":false' && break
+  sleep 1
+done
+curl -s http://127.0.0.1:8080/v1/baseline | grep -q "baseline-" || fail "current should be rotated baseline"
+# 新ブランチは新 baseline(4行)、既存 pr-1 は旧 baseline(3行)のまま
+twig create pr-new > /dev/null
+val=$(mysql -udev@pr-new -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.items" 2>/dev/null)
+[ "$val" = "4" ] || fail "new branch should see refreshed baseline (got $val)"
+val=$(mysql -udev@pr-1 -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.items" 2>/dev/null)
+[ "$val" = "3" ] || fail "existing branch should keep old baseline (got $val)"
+twig delete pr-new
+
 log "github action entrypoint (create/idempotent/delete)"
 AE="$SCRIPT_DIR/../action/entrypoint.sh"
 [ -f "$AE" ] || AE="$SCRIPT_DIR/action-entrypoint.sh"   # Lima はフラットコピー
@@ -192,7 +221,7 @@ systemctl is-active --quiet mysqld@pr-idle && fail "reaper: mysqld should be sto
 # 再接続で起床(sleeping → running)
 val=$(mysql -udev@pr-idle -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.items" 2>/dev/null) \
   || fail "reaper: reconnect should wake sleeping branch"
-[ "$val" = "3" ] || fail "reaper: wake query = $val"
+[ "$val" = "4" ] || fail "reaper: wake query = $val (refresh後のbaselineは4行)"
 # TTL: 15 秒放置で自動削除
 sleep 18
 twig list | grep -q pr-idle && fail "reaper: pr-idle should be TTL-deleted"
