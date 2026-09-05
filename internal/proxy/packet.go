@@ -65,7 +65,7 @@ func writePacket(w io.Writer, p packet) error {
 	return err
 }
 
-// synthCaps は twig が合成ハンドシェイクで広告する capability。
+// synthCaps は sashiki が合成ハンドシェイクで広告する capability。
 // クライアントはこの範囲でしか機能を使わないため、バックエンドへの申告も
 // 必ずこの範囲に絞る(広告していない機能を申告すると、クライアントが送る
 // パケットとバックエンドの期待がずれて Malformed packet になる)。
@@ -73,7 +73,7 @@ const synthCaps = uint32(capLongPassword | capProtocol41 | capSecureConn | capPl
 	capPluginAuthLenC | capTransactions | capConnectWithDB | capDeprecateEOF |
 	capMultiStatements | capMultiResults)
 
-// buildInitialHandshake は twig が名乗る合成ハンドシェイク(protocol 10)。
+// buildInitialHandshake は sashiki が名乗る合成ハンドシェイク(protocol 10)。
 // salt は使い捨て(クライアントの応答は捨てて AuthSwitch でやり直させる)。
 func buildInitialHandshake(connID uint32) ([]byte, error) {
 	salt := make([]byte, 20)
@@ -87,7 +87,7 @@ func buildInitialHandshake(connID uint32) ([]byte, error) {
 	caps := synthCaps
 
 	b := []byte{10}                                 // protocol version
-	b = append(b, []byte("8.0.0-twig-proxy")...)    // server version
+	b = append(b, []byte("8.0.0-sashiki-proxy")...) // server version
 	b = append(b, 0)                                // null terminator
 	b = binary.LittleEndian.AppendUint32(b, connID) // thread id
 	b = append(b, salt[:8]...)                      // auth-plugin-data part1
@@ -124,7 +124,7 @@ func parseHandshakeResponse(body []byte) (handshakeResponse, error) {
 		return r, fmt.Errorf("client does not speak protocol 4.1")
 	}
 	if r.caps&capSSL != 0 {
-		return r, fmt.Errorf("TLS is not supported by twig proxy yet")
+		return r, fmt.Errorf("TLS is not supported by sashiki proxy yet")
 	}
 	r.maxLen = binary.LittleEndian.Uint32(body[4:8])
 	r.charset = body[8]
@@ -139,7 +139,7 @@ func parseHandshakeResponse(body []byte) (handshakeResponse, error) {
 	}
 	r.username = string(body[pos:end])
 	pos = end + 1
-	// auth response (読み飛ばす — twig の salt に対する応答なので使わない)
+	// auth response (読み飛ばす — sashiki の salt に対する応答なので使わない)
 	if r.caps&capPluginAuthLenC != 0 {
 		if pos >= len(body) {
 			return r, fmt.Errorf("truncated auth data")

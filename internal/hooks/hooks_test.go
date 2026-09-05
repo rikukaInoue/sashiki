@@ -29,7 +29,7 @@ func TestRunNoHookIsNoop(t *testing.T) {
 
 func TestRunPassesEnvAndLogs(t *testing.T) {
 	dir, logDir := t.TempDir(), t.TempDir()
-	writeScript(t, dir, "on-create.sh", "#!/bin/sh\necho \"branch=$TWIG_BRANCH port=$TWIG_PORT event=$TWIG_EVENT\"\n")
+	writeScript(t, dir, "on-create.sh", "#!/bin/sh\necho \"branch=$SASHIKI_BRANCH port=$SASHIKI_PORT event=$SASHIKI_EVENT\"\n")
 	r := NewRunner(dir, logDir, time.Minute)
 
 	res, err := r.Run(context.Background(), OnCreate, Env{Branch: "pr-1", Port: 3401})

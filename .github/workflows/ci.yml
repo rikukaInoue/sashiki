@@ -37,8 +37,8 @@ jobs:
           go-version-file: go.mod
       - name: Build binaries
         run: |
-          go build -o bin/twigd ./cmd/twigd
-          go build -o bin/twig ./cmd/twig
+          go build -o bin/sashikid ./cmd/sashikid
+          go build -o bin/sashiki ./cmd/sashiki
       - name: Load ZFS kernel module
         run: |
           sudo apt-get update -q
@@ -46,4 +46,4 @@ jobs:
           sudo modprobe zfs
           zfs version
       - name: Run E2E
-        run: sudo ./e2e/e2e.sh bin/twigd bin/twig
+        run: sudo ./e2e/e2e.sh bin/sashikid bin/sashiki

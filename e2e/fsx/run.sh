@@ -27,8 +27,8 @@ trap cleanup EXIT
 
 # --- 1. FSx SG + filesystem(作成に 5〜8 分かかるので最初に投げる) ---
 log "create fsx filesystem"
-FSXSG=$(aws ec2 create-security-group --region $REGION --group-name twig-fsx-e2e \
-  --description "twig fsx e2e" --vpc-id $VPC --query 'GroupId' --output text)
+FSXSG=$(aws ec2 create-security-group --region $REGION --group-name sashiki-fsx-e2e \
+  --description "sashiki fsx e2e" --vpc-id $VPC --query 'GroupId' --output text)
 CLEANUP+=("aws ec2 delete-security-group --region $REGION --group-id $FSXSG")
 aws ec2 authorize-security-group-ingress --region $REGION --group-id $FSXSG --ip-permissions "[
   {\"IpProtocol\":\"tcp\",\"FromPort\":111,\"ToPort\":111,\"UserIdGroupPairs\":[{\"GroupId\":\"$SSH_SG\"}]},
@@ -43,7 +43,7 @@ FSID=$(aws fsx create-file-system --region $REGION \
   --file-system-type OPENZFS --storage-capacity 64 --storage-type SSD \
   --subnet-ids $SUBNET --security-group-ids $FSXSG \
   --open-zfs-configuration 'DeploymentType=SINGLE_AZ_1,ThroughputCapacity=64,AutomaticBackupRetentionDays=0,RootVolumeConfiguration={RecordSizeKiB=16,DataCompressionType=LZ4}' \
-  --tags Key=Name,Value=twig-fsx-e2e --query 'FileSystem.FileSystemId' --output text)
+  --tags Key=Name,Value=sashiki-fsx-e2e --query 'FileSystem.FileSystemId' --output text)
 CLEANUP+=("aws fsx delete-file-system --region $REGION --file-system-id $FSID --open-zfs-configuration 'SkipFinalBackup=true,Options=[DELETE_CHILD_VOLUMES_AND_SNAPSHOTS]'; while aws fsx describe-file-systems --region $REGION --file-system-ids $FSID > /dev/null 2>&1; do sleep 15; done")
 echo "filesystem: $FSID"
 
@@ -54,7 +54,7 @@ AMI=$(aws ssm get-parameter --region $REGION \
   --query 'Parameter.Value' --output text)
 IID=$(aws ec2 run-instances --region $REGION --image-id $AMI --instance-type t3.small \
   --key-name db-branch-poc --security-group-ids $SSH_SG \
-  --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=twig-fsx-e2e}]' \
+  --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=sashiki-fsx-e2e}]' \
   --query 'Instances[0].InstanceId' --output text)
 CLEANUP+=("aws ec2 terminate-instances --region $REGION --instance-ids $IID > /dev/null; aws ec2 wait instance-terminated --region $REGION --instance-ids $IID")
 aws ec2 wait instance-running --region $REGION --instance-ids $IID
@@ -76,16 +76,16 @@ if [ -f /etc/apparmor.d/usr.sbin.mysqld ]; then
   ln -sf /etc/apparmor.d/usr.sbin.mysqld /etc/apparmor.d/disable/ || true
   apparmor_parser -R /etc/apparmor.d/usr.sbin.mysqld 2>/dev/null || true
 fi
-mkdir -p /etc/twig/hooks /var/lib/twig/branches /var/log/twig/hooks /mnt/twig
+mkdir -p /etc/sashiki/hooks /var/lib/sashiki/branches /var/log/sashiki/hooks /mnt/sashiki
 EOS
 
-log "install twig binaries + systemd unit"
-GOOS=linux GOARCH=amd64 go build -o /tmp/twigd-fsx "$ROOT/cmd/twigd"
-GOOS=linux GOARCH=amd64 go build -o /tmp/twig-fsx "$ROOT/cmd/twig"
-scp -q -i $KEY /tmp/twigd-fsx ubuntu@$IP:/tmp/twigd
-scp -q -i $KEY /tmp/twig-fsx ubuntu@$IP:/tmp/twig
+log "install sashiki binaries + systemd unit"
+GOOS=linux GOARCH=amd64 go build -o /tmp/sashikid-fsx "$ROOT/cmd/sashikid"
+GOOS=linux GOARCH=amd64 go build -o /tmp/sashiki-fsx "$ROOT/cmd/sashiki"
+scp -q -i $KEY /tmp/sashikid-fsx ubuntu@$IP:/tmp/sashikid
+scp -q -i $KEY /tmp/sashiki-fsx ubuntu@$IP:/tmp/sashiki
 scp -q -i $KEY "$ROOT/deploy/systemd/mysqld@.service" ubuntu@$IP:/tmp/
-$SSH 'sudo install -m755 /tmp/twigd /usr/local/bin/twigd && sudo install -m755 /tmp/twig /usr/local/bin/twig && sudo cp /tmp/mysqld@.service /etc/systemd/system/ && sudo sed -i "s|/var/log/twig/%i.err|/var/log/twig/%i.err --innodb-buffer-pool-size=128M|; s|--innodb-buffer-pool-size=256M||" /etc/systemd/system/mysqld@.service && sudo systemctl daemon-reload'
+$SSH 'sudo install -m755 /tmp/sashikid /usr/local/bin/sashikid && sudo install -m755 /tmp/sashiki /usr/local/bin/sashiki && sudo cp /tmp/mysqld@.service /etc/systemd/system/ && sudo sed -i "s|/var/log/sashiki/%i.err|/var/log/sashiki/%i.err --innodb-buffer-pool-size=128M|; s|--innodb-buffer-pool-size=256M||" /etc/systemd/system/mysqld@.service && sudo systemctl daemon-reload'
 
 # --- 3. FSx AVAILABLE 待ち → base ボリューム作成 ---
 log "wait fsx available"
@@ -101,13 +101,13 @@ while [ "$(aws fsx describe-volumes --region $REGION --volume-ids $BASEVOL --que
 
 $SSH "sudo bash -s" <<EOS
 set -euo pipefail
-mkdir -p /mnt/twig-base
-mount -t nfs -o nfsvers=4.1 ${DNS}:/fsx/base /mnt/twig-base
-mkdir -p /mnt/twig-base/data /var/log/twig
-chown -R mysql:mysql /mnt/twig-base /var/log/twig
-sudo -u mysql mysqld --initialize-insecure --datadir=/mnt/twig-base/data > /dev/null 2>&1
-sudo -u mysql mysqld --datadir=/mnt/twig-base/data --skip-networking \
-  --socket=/tmp/base.sock --pid-file=/tmp/base.pid --log-error=/var/log/twig/base.err --daemonize
+mkdir -p /mnt/sashiki-base
+mount -t nfs -o nfsvers=4.1 ${DNS}:/fsx/base /mnt/sashiki-base
+mkdir -p /mnt/sashiki-base/data /var/log/sashiki
+chown -R mysql:mysql /mnt/sashiki-base /var/log/sashiki
+sudo -u mysql mysqld --initialize-insecure --datadir=/mnt/sashiki-base/data > /dev/null 2>&1
+sudo -u mysql mysqld --datadir=/mnt/sashiki-base/data --skip-networking \
+  --socket=/tmp/base.sock --pid-file=/tmp/base.pid --log-error=/var/log/sashiki/base.err --daemonize
 for _ in \$(seq 1 60); do mysqladmin -uroot -S /tmp/base.sock ping > /dev/null 2>&1 && break; sleep 1; done
 mysql -uroot -S /tmp/base.sock <<'SQL'
 CREATE DATABASE app;
@@ -119,39 +119,38 @@ FLUSH PRIVILEGES;
 SQL
 mysqladmin -uroot -S /tmp/base.sock shutdown
 sleep 2
-umount /mnt/twig-base
+umount /mnt/sashiki-base
 EOS
 SNAPID=$(aws fsx create-snapshot --region $REGION --name baseline --volume-id $BASEVOL --query 'Snapshot.SnapshotId' --output text)
 while [ "$(aws fsx describe-snapshots --region $REGION --snapshot-ids $SNAPID --query 'Snapshots[0].Lifecycle' --output text)" != "AVAILABLE" ]; do sleep 3; done
 
-# --- 4. twig 設定 + 起動(AWS 認証はローカルの一時クレデンシャルを渡す) ---
-log "configure + start twigd"
-aws configure export-credentials --format env > /tmp/twig-aws-env
-scp -q -i $KEY /tmp/twig-aws-env ubuntu@$IP:/tmp/aws-env
-rm -f /tmp/twig-aws-env
+# --- 4. sashiki 設定 + 起動(AWS 認証はローカルの一時クレデンシャルを渡す) ---
+log "configure + start sashikid"
+aws configure export-credentials --format env > /tmp/sashiki-aws-env
+scp -q -i $KEY /tmp/sashiki-aws-env ubuntu@$IP:/tmp/aws-env
+rm -f /tmp/sashiki-aws-env
 $SSH "sudo bash -s" <<EOS
 set -euo pipefail
-cat > /etc/twig/config.yaml <<YAML
+cat > /etc/sashiki/config.yaml <<YAML
 listen:
   api: "127.0.0.1:8080"
   proxy: "0.0.0.0:3306"
-state_db: /var/lib/twig/state.db
-domain: twig.internal
+state_db: /var/lib/sashiki/state.db
+domain: sashiki.internal
 storage:
-  backend: fsx
-  fsx:
+  backend: fsx-zfs
+  fsx-zfs:
     region: $REGION
     filesystem_id: $FSID
     base_volume_id: $BASEVOL
-    parent_volume_id: $ROOTVOL
     baseline_snapshot: baseline
     dns_name: $DNS
-    mount_root: /mnt/twig
+    mount_root: /mnt/sashiki
 engine:
   type: mysql
   mysql:
     port_range: [3401, 3410]
-    env_dir: /etc/twig
+    env_dir: /etc/sashiki
     sudo: false
 branches:
   name_pattern: "^[a-z0-9-]{1,32}\$"
@@ -159,11 +158,11 @@ branches:
   lazy_create: true
   lazy_create_max_wait: 20s
 hooks:
-  dir: /etc/twig/hooks
-  log_dir: /var/log/twig/hooks
+  dir: /etc/sashiki/hooks
+  log_dir: /var/log/sashiki/hooks
 YAML
 set -a; . /tmp/aws-env; set +a
-nohup /usr/local/bin/twigd --config /etc/twig/config.yaml > /var/log/twig/twigd.log 2>&1 &
+nohup /usr/local/bin/sashikid --config /etc/sashiki/config.yaml > /var/log/sashiki/sashikid.log 2>&1 &
 for i in $(seq 1 20); do
   curl -sf http://127.0.0.1:8080/v1/healthz > /dev/null && break
   sleep 0.5
@@ -176,15 +175,15 @@ log "scenario: create (実測: clone+mount+mysqld で 60〜90 秒想定)"
 $SSH "sudo bash -s" <<'EOS'
 set -euo pipefail
 q() { mysql -udev@$1 -pdev -h127.0.0.1 -P3306 -N -e "$2" 2>/dev/null; }
-fail() { echo "FSX E2E FAILED: $*" >&2; tail -20 /var/log/twig/twigd.log; exit 1; }
+fail() { echo "FSX E2E FAILED: $*" >&2; tail -20 /var/log/sashiki/sashikid.log; exit 1; }
 
-time twig create pr-1 || fail "create"
+time sashiki create pr-1 || fail "create"
 [ "$(q pr-1 'SELECT COUNT(*) FROM app.items')" = "3" ] || fail "pr-1 should have 3 items"
 
 echo "--- 破壊 → reset (作り直し+付け替え) ---"
 q pr-1 "DELETE FROM app.items"
 [ "$(q pr-1 'SELECT COUNT(*) FROM app.items')" = "0" ] || fail "delete should work"
-time twig reset pr-1 || fail "reset"
+time sashiki reset pr-1 || fail "reset"
 [ "$(q pr-1 'SELECT COUNT(*) FROM app.items')" = "3" ] || fail "reset should restore 3 items"
 
 echo "--- lazy create は fsx では無効(仕様 15-3) ---"
@@ -193,8 +192,8 @@ if mysql -udev@pr-lazy -pdev -h127.0.0.1 -P3306 -e "SELECT 1" 2>/dev/null; then
 fi
 
 echo "--- delete (非同期・行は即消える) ---"
-time twig delete pr-1 || fail "delete"
-twig list | grep -q pr-1 && fail "branch should be gone from list"
+time sashiki delete pr-1 || fail "delete"
+sashiki list | grep -q pr-1 && fail "branch should be gone from list"
 echo "FSX E2E PASSED"
 EOS
 

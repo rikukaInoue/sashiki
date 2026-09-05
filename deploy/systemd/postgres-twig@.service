@@ -1,13 +1,13 @@
 [Unit]
-Description=twig PostgreSQL instance %i
+Description=sashiki PostgreSQL instance %i
 After=network.target zfs-mount.service
 
 [Service]
 Type=simple
 User=postgres
 Group=postgres
-EnvironmentFile=/etc/twig/%i.env
-# LISTEN_ADDRESSES は twigd が env ファイルに書く(engine.postgres.listen_addresses)。
+EnvironmentFile=/etc/sashiki/%i.env
+# LISTEN_ADDRESSES は sashikid が env ファイルに書く(engine.postgres.listen_addresses)。
 # 既定 127.0.0.1。リモート接続を許す場合は base の pg_hba.conf に host 行も必要。
 ExecStart=/bin/sh -c 'exec ${PGBIN}/postgres -D ${DATADIR} -p ${PORT} -c listen_addresses=${LISTEN_ADDRESSES:-127.0.0.1} -c unix_socket_directories=/tmp'
 # fast shutdown を明示する(systemd 既定の SIGTERM は smart shutdown となり

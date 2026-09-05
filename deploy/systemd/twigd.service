@@ -1,16 +1,16 @@
 [Unit]
-Description=twig daemon
+Description=sashiki daemon
 After=network.target zfs-mount.service
 
 [Service]
-User=twig
-Group=twig
-EnvironmentFile=-/etc/twig/twigd.env
-ExecStart=/usr/local/bin/twigd --config /etc/twig/config.yaml
+User=sashiki
+Group=sashiki
+EnvironmentFile=-/etc/sashiki/sashikid.env
+ExecStart=/usr/local/bin/sashikid --config /etc/sashiki/config.yaml
 Restart=on-failure
 
 [Install]
 WantedBy=multi-user.target
 
-# twig ユーザーには sudoers で以下だけを許可する:
-#   twig ALL=(root) NOPASSWD: /usr/sbin/zfs, /usr/bin/systemctl start mysqld@*, /usr/bin/systemctl stop mysqld@*, /usr/bin/systemctl is-active mysqld@*
+# sashiki ユーザーには sudoers で以下だけを許可する:
+#   sashiki ALL=(root) NOPASSWD: /usr/sbin/zfs, /usr/bin/systemctl start mysqld@*, /usr/bin/systemctl stop mysqld@*, /usr/bin/systemctl is-active mysqld@*

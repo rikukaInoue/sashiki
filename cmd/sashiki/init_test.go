@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rikukaInoue/twig/internal/config"
+	"github.com/rikukaInoue/sashiki/internal/config"
 )
 
 // renderConfig の出力が config.Load でそのまま読める YAML であること。
@@ -29,7 +29,7 @@ func TestRenderConfigIsLoadable(t *testing.T) {
 	if cfg.Storage.Zfs.BaseDataset != "mypool/base" {
 		t.Errorf("base_dataset = %q", cfg.Storage.Zfs.BaseDataset)
 	}
-	// init が生成する構成は sudo なし(twigd を root 相当で動かす想定)
+	// init が生成する構成は sudo なし(sashikid を root 相当で動かす想定)
 	if cfg.Storage.Zfs.Sudo || cfg.Engine.Mysql.Sudo {
 		t.Error("generated config should have sudo: false")
 	}
@@ -39,7 +39,7 @@ func TestRenderConfigIsLoadable(t *testing.T) {
 func TestEmbeddedUnitFile(t *testing.T) {
 	s := string(mysqldUnit)
 	for _, want := range []string{
-		"EnvironmentFile=/etc/twig/%i.env",
+		"EnvironmentFile=/etc/sashiki/%i.env",
 		"--datadir=${DATADIR}",
 		"--port=${PORT}",
 		"User=mysql",

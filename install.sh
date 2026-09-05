@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# twig インストーラ: 最新 release の deb を取得して dpkg -i する。
-#   curl -fsSL https://raw.githubusercontent.com/rikukaInoue/twig/main/install.sh | sudo bash
+# sashiki インストーラ: 最新 release の deb を取得して dpkg -i する。
+#   curl -fsSL https://raw.githubusercontent.com/rikukaInoue/sashiki/main/install.sh | sudo bash
 # private リポジトリの間は GITHUB_TOKEN(repo 読み取り)が必要:
 #   curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" .../install.sh | sudo -E bash
 set -euo pipefail
 
-REPO=rikukaInoue/twig
+REPO=rikukaInoue/sashiki
 ARCH=$(dpkg --print-architecture 2>/dev/null || uname -m)
 case "$ARCH" in
   x86_64) ARCH=amd64 ;;
@@ -35,8 +35,8 @@ fi
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-echo "downloading twig (${ARCH}) ..."
-curl -fsSL "${auth[@]}" -H "Accept: application/octet-stream" -o "$tmp/twig.deb" "$asset_url"
-dpkg -i "$tmp/twig.deb"
-echo "installed: $(twig version)"
-echo "next: sudo twig init --pool dbpool --device <dev>  (lsblk でデバイス確認)"
+echo "downloading sashiki (${ARCH}) ..."
+curl -fsSL "${auth[@]}" -H "Accept: application/octet-stream" -o "$tmp/sashiki.deb" "$asset_url"
+dpkg -i "$tmp/sashiki.deb"
+echo "installed: $(sashiki version)"
+echo "next: sudo sashiki init --pool dbpool --device <dev>  (lsblk でデバイス確認)"

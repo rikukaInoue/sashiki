@@ -6,7 +6,7 @@
 // 不変条件「スナップショットは必ず正常終了状態でのみ取得する」の担保は
 // スクリプトの exit 0 だけに頼らず、snapshot 取得前に base の datadir を
 // 掴んでいるプロセスが残っていないことを検証する(quiesce チェック)。
-package branch
+package workspace
 
 import (
 	"context"
@@ -25,7 +25,7 @@ var ErrRefreshRunning = fmt.Errorf("baseline refresh is already running")
 
 // RefreshConfig は refresh の設定。
 type RefreshConfig struct {
-	Script  string        // /etc/twig/refresh.sh
+	Script  string        // /etc/sashiki/refresh.sh
 	Timeout time.Duration // 既定 1h
 	// CheckQuiesced は snapshot 取得前の検証(テストで注入)。nil なら
 	// storage の BasePath から既定実装を組み立てる。
@@ -54,7 +54,7 @@ func RefreshLastError() string {
 // tag には baseline-YYYYMMDDHHMMSS を使う。
 func (m *Manager) RefreshBaseline(ctx context.Context, rc RefreshConfig) (tag string, err error) {
 	if rc.Script == "" {
-		rc.Script = "/etc/twig/refresh.sh"
+		rc.Script = "/etc/sashiki/refresh.sh"
 	}
 	if rc.Timeout == 0 {
 		rc.Timeout = time.Hour
@@ -87,8 +87,8 @@ func (m *Manager) RefreshBaseline(ctx context.Context, rc RefreshConfig) (tag st
 func (m *Manager) runRefresh(ctx context.Context, rc RefreshConfig, tag string) error {
 	cmd := exec.CommandContext(ctx, rc.Script)
 	cmd.Env = append(os.Environ(),
-		"TWIG_EVENT=baseline-refresh",
-		"TWIG_BASELINE_TAG="+tag,
+		"SASHIKI_EVENT=baseline-refresh",
+		"SASHIKI_BASELINE_TAG="+tag,
 	)
 	out, scriptErr := cmd.CombinedOutput()
 	if scriptErr != nil {

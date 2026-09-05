@@ -1,24 +1,24 @@
-# twig branch action
+# sashiki branch action
 
-PR の open/close に連動して twig の DB ブランチを作成・削除する composite action。
+PR の open/close に連動して sashiki の DB ブランチを作成・削除する composite action。
 
 ## 使い方
 
 ```yaml
-# .github/workflows/twig.yml
-name: twig
+# .github/workflows/sashiki.yml
+name: sashiki
 on:
   pull_request:
     types: [opened, reopened, synchronize, closed]
 
 jobs:
   branch:
-    runs-on: [self-hosted, vpc]   # twigd の API に届くランナー
+    runs-on: [self-hosted, vpc]   # sashikid の API に届くランナー
     steps:
-      - uses: rikukaInoue/twig/action@main
+      - uses: rikukaInoue/sashiki/action@main
         with:
-          api_url: http://twig.internal:8080
-          token: ${{ secrets.TWIG_API_TOKEN }}
+          api_url: http://sashiki.internal:8080
+          token: ${{ secrets.SASHIKI_API_TOKEN }}
           comment: "true"           # PR に接続先をコメント(マーカー付きで冪等更新)
 ```
 

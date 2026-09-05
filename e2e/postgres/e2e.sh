@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # PostgreSQL エンジンの E2E。素の Ubuntu (VM/EC2) 上で root 実行。
 # loopback zpool + postgres 16 で create/reset/delete を検証する。
-#   usage: sudo ./e2e.sh <twigd> <twig>
+#   usage: sudo ./e2e.sh <sashikid> <sashiki>
 set -euo pipefail
 
-TWIGD_BIN=${1:?usage: e2e.sh <twigd> <twig>}
-TWIG_BIN=${2:?usage: e2e.sh <twigd> <twig>}
+SASHIKID_BIN=${1:?usage: e2e.sh <sashikid> <sashiki>}
+SASHIKI_BIN=${2:?usage: e2e.sh <sashikid> <sashiki>}
 POOL=tpgpool
-POOL_IMG=/var/tmp/twig-pg-zpool.img
+POOL_IMG=/var/tmp/sashiki-pg-zpool.img
 
 log() { echo -e "\n=== $* ==="; }
-fail() { echo "PG E2E FAILED: $*" >&2; tail -20 /var/log/twig-pg/twigd.log 2>/dev/null; exit 1; }
+fail() { echo "PG E2E FAILED: $*" >&2; tail -20 /var/log/sashiki-pg/sashikid.log 2>/dev/null; exit 1; }
 
 log "packages"
 export DEBIAN_FRONTEND=noninteractive
@@ -21,12 +21,12 @@ systemctl disable postgresql 2>/dev/null || true
 PGBIN=$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -1)
 
 log "cleanup previous run"
-systemctl stop 'postgres-twig@*' 2>/dev/null || true
-pkill -f "twigd --config /etc/twig-pg" 2>/dev/null || true
+systemctl stop 'postgres-sashiki@*' 2>/dev/null || true
+pkill -f "sashikid --config /etc/sashiki-pg" 2>/dev/null || true
 zpool destroy $POOL 2>/dev/null || true
 rm -f "$POOL_IMG"
-rm -rf /etc/twig-pg /var/lib/twig-pg /var/log/twig-pg
-mkdir -p /etc/twig-pg/hooks /var/lib/twig-pg/branches /var/log/twig-pg/hooks
+rm -rf /etc/sashiki-pg /var/lib/sashiki-pg /var/log/sashiki-pg
+mkdir -p /etc/sashiki-pg/hooks /var/lib/sashiki-pg/branches /var/log/sashiki-pg/hooks
 
 log "zpool (recordsize=8k for postgres)"
 truncate -s 3G "$POOL_IMG"
@@ -55,23 +55,23 @@ SQL
 sudo -u postgres $PGBIN/pg_ctl stop -D /$POOL/base/data -m fast -w > /dev/null
 zfs snapshot $POOL/base@baseline
 
-log "install unit + config + start twigd"
-install -m 755 "$TWIGD_BIN" /usr/local/bin/twigd-pg
-install -m 755 "$TWIG_BIN" /usr/local/bin/twig-pg
+log "install unit + config + start sashikid"
+install -m 755 "$SASHIKID_BIN" /usr/local/bin/sashikid-pg
+install -m 755 "$SASHIKI_BIN" /usr/local/bin/sashiki-pg
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-UNIT_SRC="$SCRIPT_DIR/../../deploy/systemd/postgres-twig@.service"
-[ -f "$UNIT_SRC" ] || UNIT_SRC="$SCRIPT_DIR/postgres-twig@.service"
-sed "s|/etc/twig/%i.env|/etc/twig-pg/%i.env|" "$UNIT_SRC" > /etc/systemd/system/postgres-twig@.service
+UNIT_SRC="$SCRIPT_DIR/../../deploy/systemd/postgres-sashiki@.service"
+[ -f "$UNIT_SRC" ] || UNIT_SRC="$SCRIPT_DIR/postgres-sashiki@.service"
+sed "s|/etc/sashiki/%i.env|/etc/sashiki-pg/%i.env|" "$UNIT_SRC" > /etc/systemd/system/postgres-sashiki@.service
 systemctl daemon-reload
 
-cat > /etc/twig-pg/config.yaml <<YAML
+cat > /etc/sashiki-pg/config.yaml <<YAML
 listen:
   api: "127.0.0.1:8090"
   proxy: ""
-state_db: /var/lib/twig-pg/state.db
+state_db: /var/lib/sashiki-pg/state.db
 storage:
-  backend: zfs
-  zfs:
+  backend: ebs-zfs
+  ebs-zfs:
     pool: $POOL
     base_dataset: $POOL/base
     branch_parent: $POOL/branches
@@ -81,37 +81,37 @@ engine:
   type: postgres
   postgres:
     bin_dir: $PGBIN
-    env_dir: /etc/twig-pg
+    env_dir: /etc/sashiki-pg
     sudo: false
 branches:
   name_pattern: "^[a-z0-9-]{1,32}$"
   max_branches: 5
 hooks:
-  dir: /etc/twig-pg/hooks
-  log_dir: /var/log/twig-pg/hooks
+  dir: /etc/sashiki-pg/hooks
+  log_dir: /var/log/sashiki-pg/hooks
 YAML
-/usr/local/bin/twigd-pg --config /etc/twig-pg/config.yaml > /var/log/twig-pg/twigd.log 2>&1 &
-TWIGD_PID=$!
-trap 'kill $TWIGD_PID 2>/dev/null || true' EXIT
+/usr/local/bin/sashikid-pg --config /etc/sashiki-pg/config.yaml > /var/log/sashiki-pg/sashikid.log 2>&1 &
+SASHIKID_PID=$!
+trap 'kill $SASHIKID_PID 2>/dev/null || true' EXIT
 for _ in $(seq 1 30); do curl -sf http://127.0.0.1:8090/v1/healthz > /dev/null 2>&1 && break; sleep 0.5; done
-curl -sf http://127.0.0.1:8090/v1/healthz > /dev/null || fail "twigd did not start"
+curl -sf http://127.0.0.1:8090/v1/healthz > /dev/null || fail "sashikid did not start"
 
-export TWIG_API_URL=http://127.0.0.1:8090
+export SASHIKI_API_URL=http://127.0.0.1:8090
 q() { sudo -u postgres psql -h 127.0.0.1 -p "$1" -d app -t -A -c "$2" 2>/dev/null; }
 
 log "create pg-1"
-time twig-pg create pg-1
-PORT=$(twig-pg show pg-1 --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["port"])')
+time sashiki-pg create pg-1
+PORT=$(sashiki-pg show pg-1 --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["port"])')
 [ "$(q $PORT 'SELECT COUNT(*) FROM items')" = "3" ] || fail "pg-1 should have 3 items"
 
 log "破壊 → reset"
 q $PORT "DELETE FROM items" > /dev/null
-time twig-pg reset pg-1
+time sashiki-pg reset pg-1
 [ "$(q $PORT 'SELECT COUNT(*) FROM items')" = "3" ] || fail "reset should restore"
 # initdb 既定では logging_collector が無効でサーバーログは journald に行く。
 # data/log を grep しても常にパスしてしまうので journal 側を確認する。
 # パイプで grep -q に流すと pipefail × SIGPIPE で判定が化けるため変数に受ける(#49)。
-pg_journal=$(journalctl -u 'postgres-twig@pg-1' --no-pager 2>/dev/null || true)
+pg_journal=$(journalctl -u 'postgres-sashiki@pg-1' --no-pager 2>/dev/null || true)
 grep -qi "database system was not properly shut down" <<<"$pg_journal" \
   && fail "crash recovery ran (dirty @init)"
 # チェック自体が生きていることの確認: 正常起動ログは journal に必ず出る
@@ -119,11 +119,11 @@ grep -qi "database system is ready to accept connections" <<<"$pg_journal" \
   || fail "journal に postgres のログが見つからない(crash recovery チェックが機能していない)"
 
 log "delete"
-time twig-pg delete pg-1
+time sashiki-pg delete pg-1
 grep -q pg- <<<"$(zfs list -r $POOL/branches)" && fail "dataset should be destroyed"
 
 log "cleanup"
-kill $TWIGD_PID 2>/dev/null || true
+kill $SASHIKID_PID 2>/dev/null || true
 zpool destroy $POOL
 rm -f "$POOL_IMG"
 echo "PG E2E PASSED"

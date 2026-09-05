@@ -1,4 +1,4 @@
-module github.com/rikukaInoue/twig
+module github.com/rikukaInoue/sashiki
 
 go 1.26.1
 

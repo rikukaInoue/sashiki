@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rikukaInoue/twig/internal/branch"
-	"github.com/rikukaInoue/twig/internal/state"
+	"github.com/rikukaInoue/sashiki/internal/state"
+	"github.com/rikukaInoue/sashiki/internal/workspace"
 )
 
 // TokenChecker は Bearer トークンの検証(state.db の tokens テーブル)。
@@ -27,7 +27,7 @@ type TokenChecker interface {
 
 // Server は REST API サーバー。
 type Server struct {
-	mgr    *branch.Manager
+	mgr    *workspace.Manager
 	domain string
 	engine string // mysql | postgres。データブラウザは mysql のみ対応
 	user   string
@@ -39,7 +39,7 @@ type Server struct {
 }
 
 // New は Server を作る。tokens は nil 可(env トークンのみ)。
-func New(mgr *branch.Manager, domain, engineType, proxyUser, proxyPass, token string, tokens TokenChecker) *Server {
+func New(mgr *workspace.Manager, domain, engineType, proxyUser, proxyPass, token string, tokens TokenChecker) *Server {
 	s := &Server{mgr: mgr, domain: domain, engine: engineType, user: proxyUser, pass: proxyPass, token: token, tokens: tokens, mux: http.NewServeMux()}
 	s.openDB = s.branchDB
 	s.mux.HandleFunc("GET /v1/branches", s.handleList)
@@ -113,14 +113,14 @@ func (s *Server) handleBaseline(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"current":            info.Current,
 		"snapshots":          info.Snapshots,
-		"refreshing":         branch.RefreshInProgress(),
-		"last_refresh_error": branch.RefreshLastError(),
+		"refreshing":         workspace.RefreshInProgress(),
+		"last_refresh_error": workspace.RefreshLastError(),
 	})
 }
 
 func (s *Server) handleBaselineRefresh(w http.ResponseWriter, r *http.Request) {
-	tag, err := s.mgr.RefreshBaseline(r.Context(), branch.RefreshConfig{})
-	if errors.Is(err, branch.ErrRefreshRunning) {
+	tag, err := s.mgr.RefreshBaseline(r.Context(), workspace.RefreshConfig{})
+	if errors.Is(err, workspace.ErrRefreshRunning) {
 		writeErr(w, http.StatusConflict, "refresh_running", err.Error())
 		return
 	}
@@ -161,7 +161,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	existOK := r.URL.Query().Get("exist_ok") == "true"
 	info, err := s.mgr.Create(r.Context(), req.Name, req.Port)
-	if errors.Is(err, branch.ErrExists) && existOK {
+	if errors.Is(err, workspace.ErrExists) && existOK {
 		if info, err = s.mgr.Get(r.Context(), req.Name); err == nil {
 			writeJSON(w, http.StatusOK, s.toJSON(info))
 			return
@@ -225,7 +225,7 @@ type branchJSON struct {
 	Error          string            `json:"error,omitempty"`
 }
 
-func (s *Server) toJSON(i branch.Info) branchJSON {
+func (s *Server) toJSON(i workspace.Info) branchJSON {
 	b := branchJSON{
 		Name:           i.Name,
 		State:          i.State,
@@ -249,13 +249,13 @@ func (s *Server) writeError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrUnsupportedEngine):
 		writeErr(w, http.StatusNotImplemented, "unsupported_engine", err.Error())
-	case errors.Is(err, branch.ErrInvalidName):
+	case errors.Is(err, workspace.ErrInvalidName):
 		writeErr(w, http.StatusBadRequest, "invalid_name", err.Error())
-	case errors.Is(err, branch.ErrExists):
+	case errors.Is(err, workspace.ErrExists):
 		writeErr(w, http.StatusConflict, "branch_exists", err.Error())
 	case errors.Is(err, state.ErrNotFound):
 		writeErr(w, http.StatusNotFound, "branch_not_found", err.Error())
-	case errors.Is(err, branch.ErrLimitReached), errors.Is(err, branch.ErrNoFreePort):
+	case errors.Is(err, workspace.ErrLimitReached), errors.Is(err, workspace.ErrNoFreePort):
 		writeErr(w, http.StatusInsufficientStorage, "limit_reached", err.Error())
 	case strings.Contains(err.Error(), "hook"):
 		writeErr(w, http.StatusInternalServerError, "hook_failed", err.Error())

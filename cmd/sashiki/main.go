@@ -1,4 +1,4 @@
-// twig: CLI。twigd の REST API を叩く(仕様 14-5 の v0.1 サブセット)。
+// sashiki: CLI。sashikid の REST API を叩く(仕様 14-5 の v0.1 サブセット)。
 package main
 
 import (
@@ -31,16 +31,16 @@ func main() {
 
 func usage() int {
 	fmt.Fprint(os.Stderr, `Usage:
-  twig create <name> [--port N] [--json]
-  twig delete <name>
-  twig reset  <name> [--json]
-  twig list   [--json]
-  twig show   <name> [--json]
-  twig connect <name>
-  twig init   --pool <p> [--device <dev>] [--skip-packages] [--yes]
-  twig baseline import|list
-  twig token create|list|revoke
-  twig version
+  sashiki create <name> [--port N] [--json]
+  sashiki delete <name>
+  sashiki reset  <name> [--json]
+  sashiki list   [--json]
+  sashiki show   <name> [--json]
+  sashiki connect <name>
+  sashiki init   --pool <p> [--device <dev>] [--skip-packages] [--yes]
+  sashiki baseline import|list
+  sashiki token create|list|revoke
+  sashiki version
 `)
 	return exitUsage
 }
@@ -70,7 +70,7 @@ func run(args []string) int {
 	case "token":
 		return cmdToken(rest)
 	case "version":
-		fmt.Println("twig", version)
+		fmt.Println("sashiki", version)
 		return exitOK
 	default:
 		return usage()
@@ -80,21 +80,21 @@ func run(args []string) int {
 // --- API client ---
 
 func apiURL() string {
-	if v := os.Getenv("TWIG_API_URL"); v != "" {
+	if v := os.Getenv("SASHIKI_API_URL"); v != "" {
 		return v
 	}
 	return "http://127.0.0.1:8080"
 }
 
 func apiToken() string {
-	if v := os.Getenv("TWIG_API_TOKEN"); v != "" {
+	if v := os.Getenv("SASHIKI_API_TOKEN"); v != "" {
 		return v
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	b, err := os.ReadFile(home + "/.config/twig/token")
+	b, err := os.ReadFile(home + "/.config/sashiki/token")
 	if err != nil {
 		return ""
 	}
@@ -194,11 +194,11 @@ func cmdCreate(args []string) int {
 	}
 	code, data, err := call("POST", "/v1/branches", map[string]any{"name": pos[0], "port": port})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "twig:", err)
+		fmt.Fprintln(os.Stderr, "sashiki:", err)
 		return exitError
 	}
 	if code != http.StatusCreated && code != http.StatusOK {
-		fmt.Fprintln(os.Stderr, "twig:", apiError(data))
+		fmt.Fprintln(os.Stderr, "sashiki:", apiError(data))
 		return statusToExit(code)
 	}
 	if jsonOut {
@@ -217,11 +217,11 @@ func cmdDelete(args []string) int {
 	}
 	code, data, err := call("DELETE", "/v1/branches/"+args[0], nil)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "twig:", err)
+		fmt.Fprintln(os.Stderr, "sashiki:", err)
 		return exitError
 	}
 	if code != http.StatusNoContent {
-		fmt.Fprintln(os.Stderr, "twig:", apiError(data))
+		fmt.Fprintln(os.Stderr, "sashiki:", apiError(data))
 		return statusToExit(code)
 	}
 	fmt.Printf("branch '%s' deleted\n", args[0])
@@ -235,11 +235,11 @@ func cmdSimpleBranch(args []string, action string) int {
 	}
 	code, data, err := call("POST", "/v1/branches/"+pos[0]+"/"+action, nil)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "twig:", err)
+		fmt.Fprintln(os.Stderr, "sashiki:", err)
 		return exitError
 	}
 	if code != http.StatusOK {
-		fmt.Fprintln(os.Stderr, "twig:", apiError(data))
+		fmt.Fprintln(os.Stderr, "sashiki:", apiError(data))
 		return statusToExit(code)
 	}
 	if jsonOut {
@@ -257,11 +257,11 @@ func cmdList(args []string) int {
 	}
 	code, data, err := call("GET", "/v1/branches", nil)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "twig:", err)
+		fmt.Fprintln(os.Stderr, "sashiki:", err)
 		return exitError
 	}
 	if code != http.StatusOK {
-		fmt.Fprintln(os.Stderr, "twig:", apiError(data))
+		fmt.Fprintln(os.Stderr, "sashiki:", apiError(data))
 		return statusToExit(code)
 	}
 	if jsonOut {
@@ -292,11 +292,11 @@ func cmdShow(args []string) int {
 	}
 	code, data, err := call("GET", "/v1/branches/"+pos[0], nil)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "twig:", err)
+		fmt.Fprintln(os.Stderr, "sashiki:", err)
 		return exitError
 	}
 	if code != http.StatusOK {
-		fmt.Fprintln(os.Stderr, "twig:", apiError(data))
+		fmt.Fprintln(os.Stderr, "sashiki:", apiError(data))
 		return statusToExit(code)
 	}
 	if jsonOut {
@@ -319,20 +319,20 @@ func cmdConnect(args []string) int {
 	}
 	code, data, err := call("GET", "/v1/branches/"+args[0], nil)
 	if err != nil || code != http.StatusOK {
-		fmt.Fprintln(os.Stderr, "twig:", apiError(data))
+		fmt.Fprintln(os.Stderr, "sashiki:", apiError(data))
 		return statusToExit(code)
 	}
 	var b branchView
 	_ = json.Unmarshal(data, &b)
 	mysqlPath, err := exec.LookPath("mysql")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "twig: mysql client not found in PATH")
+		fmt.Fprintln(os.Stderr, "sashiki: mysql client not found in PATH")
 		return exitError
 	}
 	argv := []string{"mysql", "-udev", "-pdev", "-h127.0.0.1", "-P" + strconv.Itoa(b.Port)}
 	// CLI はそのまま mysql に化ける。
 	if err := syscall.Exec(mysqlPath, argv, os.Environ()); err != nil {
-		fmt.Fprintln(os.Stderr, "twig: exec mysql:", err)
+		fmt.Fprintln(os.Stderr, "sashiki: exec mysql:", err)
 		return exitError
 	}
 	return exitOK

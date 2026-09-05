@@ -25,7 +25,7 @@ import (
 	"time"
 
 	"github.com/go-sql-driver/mysql"
-	"github.com/rikukaInoue/twig/internal/state"
+	"github.com/rikukaInoue/sashiki/internal/state"
 )
 
 const (

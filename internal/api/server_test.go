@@ -12,10 +12,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rikukaInoue/twig/internal/branch"
-	"github.com/rikukaInoue/twig/internal/engine"
-	"github.com/rikukaInoue/twig/internal/state"
-	"github.com/rikukaInoue/twig/internal/storage"
+	"github.com/rikukaInoue/sashiki/internal/engine"
+	"github.com/rikukaInoue/sashiki/internal/state"
+	"github.com/rikukaInoue/sashiki/internal/storage"
+	"github.com/rikukaInoue/sashiki/internal/workspace"
 )
 
 type fakeStorage struct{}
@@ -64,14 +64,14 @@ func newTestServer(t *testing.T, token string) *httptest.Server {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	fs := fakeStorage{}
-	mgr, err := branch.New(branch.Config{
+	mgr, err := workspace.New(workspace.Config{
 		NamePattern: `^[a-z0-9-]{1,32}$`, MaxBranches: 10,
 		PortLow: 3401, PortHigh: 3410, EngineType: "mysql", StateDir: t.TempDir(),
 	}, fs, fs, fakeEngine{}, nil, db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(New(mgr, "twig.internal", "mysql", "dev", "dev", token, nil))
+	srv := httptest.NewServer(New(mgr, "sashiki.internal", "mysql", "dev", "dev", token, nil))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -96,7 +96,7 @@ func TestAPILifecycle(t *testing.T) {
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&b)
 	_ = resp.Body.Close()
-	if b.State != "running" || b.User != "dev@pr-1" || b.Host != "twig.internal" {
+	if b.State != "running" || b.User != "dev@pr-1" || b.Host != "sashiki.internal" {
 		t.Errorf("branch = %+v", b)
 	}
 
@@ -149,7 +149,7 @@ func TestAPIAuthFromNonLoopback(t *testing.T) {
 	db, _ := state.Open(filepath.Join(t.TempDir(), "s.db"))
 	defer func() { _ = db.Close() }()
 	fs := fakeStorage{}
-	mgr, _ := branch.New(branch.Config{NamePattern: `^.+$`, PortLow: 1, PortHigh: 2, EngineType: "mysql"}, fs, fs, fakeEngine{}, nil, db)
+	mgr, _ := workspace.New(workspace.Config{NamePattern: `^.+$`, PortLow: 1, PortHigh: 2, EngineType: "mysql"}, fs, fs, fakeEngine{}, nil, db)
 	s := New(mgr, "d", "mysql", "dev", "dev", "secret", db)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/branches", nil)
@@ -200,27 +200,27 @@ func TestAPIAuthWithDBToken(t *testing.T) {
 	db, _ := state.Open(filepath.Join(t.TempDir(), "s.db"))
 	defer func() { _ = db.Close() }()
 	fs := fakeStorage{}
-	mgr, _ := branch.New(branch.Config{NamePattern: `^.+$`, PortLow: 1, PortHigh: 2, EngineType: "mysql"}, fs, fs, fakeEngine{}, nil, db)
+	mgr, _ := workspace.New(workspace.Config{NamePattern: `^.+$`, PortLow: 1, PortHigh: 2, EngineType: "mysql"}, fs, fs, fakeEngine{}, nil, db)
 	s := New(mgr, "d", "mysql", "dev", "dev", "", db)
 
-	// トークン登録(平文 "twig_abc" のハッシュ)
-	sum := sha256.Sum256([]byte("twig_abc"))
+	// トークン登録(平文 "sashiki_abc" のハッシュ)
+	sum := sha256.Sum256([]byte("sashiki_abc"))
 	if err := db.CreateToken("t1", hex.EncodeToString(sum[:])); err != nil {
 		t.Fatal(err)
 	}
 	req := httptest.NewRequest(http.MethodGet, "/v1/branches", nil)
 	req.RemoteAddr = "10.0.0.5:1"
-	req.Header.Set("Authorization", "Bearer twig_abc")
+	req.Header.Set("Authorization", "Bearer sashiki_abc")
 	if !s.authorized(req) {
 		t.Error("db token should be accepted")
 	}
-	req.Header.Set("Authorization", "Bearer twig_wrong")
+	req.Header.Set("Authorization", "Bearer sashiki_wrong")
 	if s.authorized(req) {
 		t.Error("wrong token should be denied")
 	}
 	// revoke 後は拒否
 	_ = db.RevokeToken("t1")
-	req.Header.Set("Authorization", "Bearer twig_abc")
+	req.Header.Set("Authorization", "Bearer sashiki_abc")
 	if s.authorized(req) {
 		t.Error("revoked token should be denied")
 	}
@@ -246,7 +246,7 @@ func TestMetricsHandler(t *testing.T) {
 	db, _ := state.Open(filepath.Join(t.TempDir(), "s.db"))
 	defer func() { _ = db.Close() }()
 	fs := fakeStorage{}
-	mgr, _ := branch.New(branch.Config{NamePattern: `^.+$`, PortLow: 3401, PortHigh: 3410, EngineType: "mysql", StateDir: t.TempDir()}, fs, fs, fakeEngine{}, nil, db)
+	mgr, _ := workspace.New(workspace.Config{NamePattern: `^.+$`, PortLow: 3401, PortHigh: 3410, EngineType: "mysql", StateDir: t.TempDir()}, fs, fs, fakeEngine{}, nil, db)
 	_, _ = mgr.Create(context.Background(), "pr-1", 0)
 
 	ms := httptest.NewServer(MetricsHandler(mgr))
@@ -259,10 +259,10 @@ func TestMetricsHandler(t *testing.T) {
 	body := new(strings.Builder)
 	_, _ = io.Copy(body, resp.Body)
 	out := body.String()
-	if !strings.Contains(out, `twig_branches{state="running"} 1`) {
+	if !strings.Contains(out, `sashiki_branches{state="running"} 1`) {
 		t.Errorf("metrics missing running gauge:\n%s", out)
 	}
-	if !strings.Contains(out, `twig_branch_used_bytes{branch="pr-1"} 42`) {
+	if !strings.Contains(out, `sashiki_branch_used_bytes{branch="pr-1"} 42`) {
 		t.Errorf("metrics missing used bytes:\n%s", out)
 	}
 }

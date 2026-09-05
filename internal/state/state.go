@@ -1,4 +1,4 @@
-// Package state は twigd の状態を SQLite に保持する(仕様 14-3)。
+// Package state は sashikid の状態を SQLite に保持する(仕様 14-3)。
 // used_bytes は保存しない(zfs get を都度引く)。
 package state
 
@@ -57,7 +57,7 @@ func Open(path string) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	// twigd はシングルプロセスで、SQLite への同時書き込みを避ける。
+	// sashikid はシングルプロセスで、SQLite への同時書き込みを避ける。
 	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("init schema: %w", err)

@@ -1,5 +1,5 @@
-// twig baseline: ベースライン管理。
-// import はローカル root 操作(twigd 不要): base の mysqld を初期化 →
+// sashiki baseline: ベースライン管理。
+// import はローカル root 操作(sashikid 不要): base の mysqld を初期化 →
 // ダンプ投入 → 接続ユーザー作成 → 正常終了 → @baseline snapshot。
 // 「スナップショットは必ず正常終了状態でのみ取得する」不変条件はここで守られる。
 package main
@@ -17,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/rikukaInoue/twig/internal/config"
+	"github.com/rikukaInoue/sashiki/internal/config"
 )
 
 func cmdBaseline(args []string) int {
@@ -36,8 +36,8 @@ func cmdBaseline(args []string) int {
 
 func usageBaseline() int {
 	fmt.Fprint(os.Stderr, `Usage:
-  twig baseline import --from <dump.sql> [--config <path>]   ベース構築 + @baseline 取得 (root)
-  twig baseline list [--json]                                snapshot 一覧 (twigd 経由)
+  sashiki baseline import --from <dump.sql> [--config <path>]   ベース構築 + @baseline 取得 (root)
+  sashiki baseline list [--json]                                snapshot 一覧 (sashikid 経由)
 `)
 	return exitUsage
 }
@@ -50,7 +50,7 @@ type baselineImportOpts struct {
 }
 
 func cmdBaselineImport(args []string) int {
-	opts := baselineImportOpts{configPath: "/etc/twig/config.yaml"}
+	opts := baselineImportOpts{configPath: "/etc/sashiki/config.yaml"}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--from":
@@ -70,22 +70,22 @@ func cmdBaselineImport(args []string) int {
 		}
 	}
 	if os.Geteuid() != 0 {
-		fmt.Fprintln(os.Stderr, "twig baseline import: root で実行してください")
+		fmt.Fprintln(os.Stderr, "sashiki baseline import: root で実行してください")
 		return exitError
 	}
 	if opts.from != "" {
 		if _, err := os.Stat(opts.from); err != nil {
-			fmt.Fprintf(os.Stderr, "twig baseline import: --from %s: %v\n", opts.from, err)
+			fmt.Fprintf(os.Stderr, "sashiki baseline import: --from %s: %v\n", opts.from, err)
 			return exitError
 		}
 	}
 	cfg, err := config.Load(opts.configPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "twig baseline import: config: %v\n", err)
+		fmt.Fprintf(os.Stderr, "sashiki baseline import: config: %v\n", err)
 		return exitError
 	}
 	if err := runBaselineImport(cfg, opts); err != nil {
-		fmt.Fprintln(os.Stderr, "twig baseline import:", err)
+		fmt.Fprintln(os.Stderr, "sashiki baseline import:", err)
 		return exitError
 	}
 	return exitOK
@@ -102,7 +102,7 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 
 	mountOut, err := exec.Command("zfs", "get", "-H", "-o", "value", "mountpoint", base).Output()
 	if err != nil {
-		return fmt.Errorf("dataset %s が見つかりません。先に twig init を実行してください", base)
+		return fmt.Errorf("dataset %s が見つかりません。先に sashiki init を実行してください", base)
 	}
 	dataDir := filepath.Join(strings.TrimSpace(string(mountOut)), "data")
 
@@ -121,7 +121,7 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 		return err
 	}
 
-	sock := "/tmp/twig-baseline.sock"
+	sock := "/tmp/sashiki-baseline.sock"
 	logErr := filepath.Join(cfg.Hooks.LogDir, "..", "baseline.err")
 
 	fmt.Println("→ mysqld 初期化")
@@ -131,7 +131,7 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	fmt.Println("→ mysqld 起動")
 	if err := runAsUser(mysqlUID, mysqlGID, "/usr/sbin/mysqld",
 		"--datadir="+dataDir, "--port=0", "--skip-networking",
-		"--socket="+sock, "--pid-file=/tmp/twig-baseline.pid",
+		"--socket="+sock, "--pid-file=/tmp/sashiki-baseline.pid",
 		"--log-error="+logErr, "--daemonize"); err != nil {
 		return fmt.Errorf("start: %w", err)
 	}
@@ -175,7 +175,7 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 		return fmt.Errorf("shutdown: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	stopped = true
-	if err := waitGone("/tmp/twig-baseline.pid", 30*time.Second); err != nil {
+	if err := waitGone("/tmp/sashiki-baseline.pid", 30*time.Second); err != nil {
 		return err
 	}
 
@@ -183,7 +183,7 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	if out, err := exec.Command("zfs", "snapshot", snap).CombinedOutput(); err != nil {
 		return fmt.Errorf("snapshot: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	fmt.Println("baseline import 完了。twig create <name> でブランチを作れます")
+	fmt.Println("baseline import 完了。sashiki create <name> でブランチを作れます")
 	return nil
 }
 
@@ -238,7 +238,7 @@ func chownR(root string, uid, gid uint32) error {
 	})
 }
 
-// --- list (twigd 経由) ---
+// --- list (sashikid 経由) ---
 
 func cmdBaselineList(args []string) int {
 	_, _, jsonOut, err := parseFlags(args)
@@ -247,11 +247,11 @@ func cmdBaselineList(args []string) int {
 	}
 	code, data, err := call("GET", "/v1/baseline", nil)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "twig:", err)
+		fmt.Fprintln(os.Stderr, "sashiki:", err)
 		return exitError
 	}
 	if code != http.StatusOK {
-		fmt.Fprintln(os.Stderr, "twig:", apiError(data))
+		fmt.Fprintln(os.Stderr, "sashiki:", apiError(data))
 		return statusToExit(code)
 	}
 	if jsonOut {

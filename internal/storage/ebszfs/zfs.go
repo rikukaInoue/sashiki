@@ -1,7 +1,7 @@
 // Package zfs はローカル OpenZFS バックエンド。zfs/zpool コマンドを実行する。
-// twigd の実行ユーザーには sudoers で /usr/sbin/zfs のみを許可する想定
+// sashikid の実行ユーザーには sudoers で /usr/sbin/zfs のみを許可する想定
 // (deploy/systemd/README 参照)。
-package zfs
+package ebszfs
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rikukaInoue/twig/internal/storage"
+	"github.com/rikukaInoue/sashiki/internal/storage"
 )
 
 // Config は zfs バックエンドの設定。

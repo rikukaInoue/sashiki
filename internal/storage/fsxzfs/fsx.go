@@ -6,7 +6,7 @@
 // 完了判定は Volume の Lifecycle ではなく AdministrativeActions を見る
 // (restore/clone 中も Lifecycle は AVAILABLE のまま — 実測で datadir を
 // 壊した教訓)。
-package fsx
+package fsxzfs
 
 import (
 	"context"
@@ -24,17 +24,17 @@ import (
 
 	awsfsx "github.com/aws/aws-sdk-go-v2/service/fsx"
 	"github.com/aws/aws-sdk-go-v2/service/fsx/types"
-	"github.com/rikukaInoue/twig/internal/storage"
+	"github.com/rikukaInoue/sashiki/internal/storage"
 )
 
 // Config は fsx バックエンドの設定。
 type Config struct {
 	FileSystemID     string // fs-xxxx
 	BaseVolumeID     string // fsvol-xxxx (base)
-	ParentVolumeID   string // fsvol-xxxx (root。クローンのぶら下げ先)
+	ParentVolumeID   string // fsvol-xxxx (root)。空なら filesystem から自動発見
 	BaselineSnapshot string // baseline (base ボリューム上の snapshot 名)
 	DNSName          string // fs-xxxx.fsx.<region>.amazonaws.com
-	MountRoot        string // /mnt/twig
+	MountRoot        string // /mnt/sashiki
 	PollInterval     time.Duration
 }
 
@@ -45,6 +45,7 @@ type API interface {
 	DescribeVolumes(ctx context.Context, in *awsfsx.DescribeVolumesInput, opts ...func(*awsfsx.Options)) (*awsfsx.DescribeVolumesOutput, error)
 	CreateSnapshot(ctx context.Context, in *awsfsx.CreateSnapshotInput, opts ...func(*awsfsx.Options)) (*awsfsx.CreateSnapshotOutput, error)
 	DescribeSnapshots(ctx context.Context, in *awsfsx.DescribeSnapshotsInput, opts ...func(*awsfsx.Options)) (*awsfsx.DescribeSnapshotsOutput, error)
+	DescribeFileSystems(ctx context.Context, in *awsfsx.DescribeFileSystemsInput, opts ...func(*awsfsx.Options)) (*awsfsx.DescribeFileSystemsOutput, error)
 }
 
 // Backend は storage.Storage の FSx 実装。
@@ -59,7 +60,7 @@ type Backend struct {
 // New は fsx バックエンドを作る。
 func New(cfg Config, api API) *Backend {
 	if cfg.MountRoot == "" {
-		cfg.MountRoot = "/mnt/twig"
+		cfg.MountRoot = "/mnt/sashiki"
 	}
 	if cfg.PollInterval == 0 {
 		cfg.PollInterval = 5 * time.Second
@@ -164,9 +165,33 @@ func (b *Backend) waitVolumeReady(ctx context.Context, volID string) error {
 
 // Clone はクローンボリュームを作成し、NFS マウントして返す。
 // FSx のボリューム名はパス衝突を避けるため世代サフィックス付き
-// (name-g<hex>)にし、twig-branch タグで元の名前に紐づける。
+// (name-g<hex>)にし、sashiki-branch タグで元の名前に紐づける。
 // reset の「作り直し + 付け替え」で新旧が一時的に共存できる。
+// parentVolume は クローンのぶら下げ先(root volume)。設定が空なら
+// filesystem から自動発見してキャッシュする。
+func (b *Backend) parentVolume(ctx context.Context) (string, error) {
+	if b.cfg.ParentVolumeID != "" {
+		return b.cfg.ParentVolumeID, nil
+	}
+	out, err := b.api.DescribeFileSystems(ctx, &awsfsx.DescribeFileSystemsInput{
+		FileSystemIds: []string{b.cfg.FileSystemID},
+	})
+	if err != nil {
+		return "", fmt.Errorf("describe filesystem: %w", err)
+	}
+	if len(out.FileSystems) == 0 || out.FileSystems[0].OpenZFSConfiguration == nil ||
+		out.FileSystems[0].OpenZFSConfiguration.RootVolumeId == nil {
+		return "", fmt.Errorf("root volume of %s not found", b.cfg.FileSystemID)
+	}
+	b.cfg.ParentVolumeID = *out.FileSystems[0].OpenZFSConfiguration.RootVolumeId
+	return b.cfg.ParentVolumeID, nil
+}
+
 func (b *Backend) Clone(ctx context.Context, baseline storage.SnapshotRef, name string) (storage.Volume, error) {
+	parent, err := b.parentVolume(ctx)
+	if err != nil {
+		return storage.Volume{}, err
+	}
 	gen := make([]byte, 3)
 	_, _ = rand.Read(gen)
 	fsxName := fmt.Sprintf("%s-g%s", name, hex.EncodeToString(gen))
@@ -174,7 +199,7 @@ func (b *Backend) Clone(ctx context.Context, baseline storage.SnapshotRef, name 
 		VolumeType: types.VolumeTypeOpenzfs,
 		Name:       &fsxName,
 		OpenZFSConfiguration: &types.CreateOpenZFSVolumeConfiguration{
-			ParentVolumeId: &b.cfg.ParentVolumeID,
+			ParentVolumeId: &parent,
 			OriginSnapshot: &types.CreateOpenZFSOriginSnapshotConfiguration{
 				SnapshotARN:  (*string)(&baseline),
 				CopyStrategy: types.OpenZFSCopyStrategyClone,
@@ -187,8 +212,8 @@ func (b *Backend) Clone(ctx context.Context, baseline storage.SnapshotRef, name 
 			}},
 		},
 		Tags: []types.Tag{
-			{Key: strPtr("twig"), Value: strPtr("true")},
-			{Key: strPtr("twig-branch"), Value: &name},
+			{Key: strPtr("sashiki"), Value: strPtr("true")},
+			{Key: strPtr("sashiki-branch"), Value: &name},
 		},
 	})
 	if err != nil {

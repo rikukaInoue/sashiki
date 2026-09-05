@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rikukaInoue/twig/internal/branch"
-	"github.com/rikukaInoue/twig/internal/state"
+	"github.com/rikukaInoue/sashiki/internal/state"
+	"github.com/rikukaInoue/sashiki/internal/workspace"
 )
 
 // --- database/sql/driver のフェイク(外部依存なしで *sql.Rows を作る) ---
@@ -71,14 +71,14 @@ func newQueryTestServer(t *testing.T, engineType string, rows func() *fakeRows) 
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	fs := fakeStorage{}
-	mgr, err := branch.New(branch.Config{
+	mgr, err := workspace.New(workspace.Config{
 		NamePattern: `^[a-z0-9-]{1,32}$`, MaxBranches: 10,
 		PortLow: 3401, PortHigh: 3410, EngineType: "mysql", StateDir: t.TempDir(),
 	}, fs, fs, fakeEngine{}, nil, db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := New(mgr, "twig.internal", engineType, "dev", "dev", "", nil)
+	s := New(mgr, "sashiki.internal", engineType, "dev", "dev", "", nil)
 	if rows != nil {
 		s.openDB = func(ctx context.Context, name string) (*sql.DB, error) {
 			return sql.OpenDB(fakeConnector{rows: rows}), nil
@@ -226,7 +226,7 @@ func TestQuerySchemaRequireAuthFromNonLoopback(t *testing.T) {
 	s := newQueryTestServer(t, "mysql", nil)
 	s.token = "secret"
 	for _, path := range []string{"/v1/branches/pr-q/schema", "/v1/branches/pr-q/query"} {
-		req := httptest.NewRequest("GET", "http://twig.internal"+path, nil)
+		req := httptest.NewRequest("GET", "http://sashiki.internal"+path, nil)
 		req.RemoteAddr = "10.0.0.5:1234"
 		w := httptest.NewRecorder()
 		s.ServeHTTP(w, req)

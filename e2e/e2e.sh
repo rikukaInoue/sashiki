@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# twig E2E: 素の Ubuntu (VM / EC2) 上で root 実行する。
+# sashiki E2E: 素の Ubuntu (VM / EC2) 上で root 実行する。
 # ループバックファイルの zpool を使うので追加ディスク不要。
-#   usage: sudo ./e2e.sh <twigd-binary> <twig-binary>
+#   usage: sudo ./e2e.sh <sashikid-binary> <sashiki-binary>
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-TWIGD_BIN=${1:?usage: e2e.sh <twigd> <twig>}
-TWIG_BIN=${2:?usage: e2e.sh <twigd> <twig>}
+SASHIKID_BIN=${1:?usage: e2e.sh <sashikid> <sashiki>}
+SASHIKI_BIN=${2:?usage: e2e.sh <sashikid> <sashiki>}
 POOL=tpool
-POOL_IMG=/var/tmp/twig-e2e-zpool.img
+POOL_IMG=/var/tmp/sashiki-e2e-zpool.img
 
 log() { echo -e "\n=== $* ==="; }
 fail() { echo "E2E FAILED: $*" >&2; exit 1; }
@@ -52,84 +52,84 @@ aa-status 2>/dev/null | grep -i mysqld || echo "apparmor: mysqld profile not loa
 # --- 1. クリーンアップ(再実行安全) ---
 log "cleanup previous run"
 systemctl stop 'mysqld@*' 2>/dev/null || true
-pkill -f "twigd --config" 2>/dev/null || true
+pkill -f "sashikid --config" 2>/dev/null || true
 zpool destroy $POOL 2>/dev/null || true
 rm -f "$POOL_IMG"
-rm -rf /var/lib/twig /var/log/twig /etc/twig
-mkdir -p /var/lib/twig/branches /var/log/twig/hooks /etc/twig/hooks
+rm -rf /var/lib/sashiki /var/log/sashiki /etc/sashiki
+mkdir -p /var/lib/sashiki/branches /var/log/sashiki/hooks /etc/sashiki/hooks
 
-# --- 2. twig init (zpool/データセット/unit/config を作る) ---
-log "twig install + init"
-install -m 755 "$TWIGD_BIN" /usr/local/bin/twigd
-install -m 755 "$TWIG_BIN" /usr/local/bin/twig
+# --- 2. sashiki init (zpool/データセット/unit/config を作る) ---
+log "sashiki install + init"
+install -m 755 "$SASHIKID_BIN" /usr/local/bin/sashikid
+install -m 755 "$SASHIKI_BIN" /usr/local/bin/sashiki
 truncate -s 3G "$POOL_IMG"
-twig init --pool $POOL --device "$POOL_IMG" --skip-packages --yes
+sashiki init --pool $POOL --device "$POOL_IMG" --skip-packages --yes
 zfs list $POOL/base $POOL/branches > /dev/null || fail "init should create datasets"
 # 再実行安全であること(主要ステップがスキップされ成功する)
-init2=$(twig init --pool $POOL --skip-packages --yes) || fail "init re-run should succeed"
+init2=$(sashiki init --pool $POOL --skip-packages --yes) || fail "init re-run should succeed"
 grep -q "スキップ" <<<"$init2" || fail "init should be idempotent"
 # E2E 用にポートレンジと上限を絞る
-sed -i 's/port_range: \[3401, 3600\]/port_range: [3401, 3410]/' /etc/twig/config.yaml
-sed -i 's/max_branches: 50/max_branches: 5/' /etc/twig/config.yaml
+sed -i 's/port_range: \[3401, 3600\]/port_range: [3401, 3410]/' /etc/sashiki/config.yaml
+sed -i 's/max_branches: 50/max_branches: 5/' /etc/sashiki/config.yaml
 
-# --- 3. ベースライン: twig baseline import ---
-log "twig baseline import"
-cat > /tmp/twig-e2e-sample.sql <<'SQL'
+# --- 3. ベースライン: sashiki baseline import ---
+log "sashiki baseline import"
+cat > /tmp/sashiki-e2e-sample.sql <<'SQL'
 CREATE DATABASE app;
 CREATE TABLE app.items (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(64));
 INSERT INTO app.items (name) VALUES ('alpha'), ('beta'), ('gamma');
 SQL
-twig baseline import --from /tmp/twig-e2e-sample.sql
+sashiki baseline import --from /tmp/sashiki-e2e-sample.sql
 zfs list $POOL/base@baseline > /dev/null || fail "baseline snapshot should exist"
 # 二重 import は拒否されること
-if twig baseline import --from /tmp/twig-e2e-sample.sql 2>/dev/null; then
+if sashiki baseline import --from /tmp/sashiki-e2e-sample.sql 2>/dev/null; then
   fail "second import should fail (baseline exists)"
 fi
 
-# --- 4. twigd 起動 ---
-log "start twigd"
-/usr/local/bin/twigd --config /etc/twig/config.yaml > /var/log/twig/twigd.log 2>&1 &
-TWIGD_PID=$!
-trap 'kill $TWIGD_PID 2>/dev/null || true' EXIT
+# --- 4. sashikid 起動 ---
+log "start sashikid"
+/usr/local/bin/sashikid --config /etc/sashiki/config.yaml > /var/log/sashiki/sashikid.log 2>&1 &
+SASHIKID_PID=$!
+trap 'kill $SASHIKID_PID 2>/dev/null || true' EXIT
 for _ in $(seq 1 30); do
   curl -sf http://127.0.0.1:8080/v1/healthz > /dev/null 2>&1 && break
   sleep 0.5
 done
-curl -sf http://127.0.0.1:8080/v1/healthz > /dev/null || fail "twigd did not start: $(tail -5 /var/log/twig/twigd.log)"
+curl -sf http://127.0.0.1:8080/v1/healthz > /dev/null || fail "sashikid did not start: $(tail -5 /var/log/sashiki/sashikid.log)"
 
 # --- 5. シナリオ ---
 q() { mysql -udev -pdev -h127.0.0.1 -P"$1" -N -e "$2" 2>/dev/null; }
 
 log "create pr-1"
-time twig create pr-1
+time sashiki create pr-1
 [ "$(q 3401 'SELECT COUNT(*) FROM app.items')" = "3" ] || fail "pr-1 should have 3 items"
 
 log "create pr-2 (isolation)"
-twig create pr-2
+sashiki create pr-2
 q 3401 "DELETE FROM app.items; DROP TABLE app.items" || fail "break pr-1"
 [ "$(q 3402 'SELECT COUNT(*) FROM app.items')" = "3" ] || fail "pr-2 must be isolated"
 
 log "reset pr-1"
-time twig reset pr-1
+time sashiki reset pr-1
 [ "$(q 3401 'SELECT COUNT(*) FROM app.items')" = "3" ] || fail "reset should restore 3 items"
-if grep -qi "crash recovery" /var/log/twig/pr-1.err; then
+if grep -qi "crash recovery" /var/log/sashiki/pr-1.err; then
   fail "crash recovery ran (dirty @init)"
 fi
 
 log "duplicate create must fail (exit 4)"
 set +e
-twig create pr-1 2>/dev/null
+sashiki create pr-1 2>/dev/null
 rc=$?
 set -e
 [ "$rc" -eq 4 ] || fail "duplicate create: exit=$rc, want 4"
 
 log "invalid name must fail"
-if twig create "BAD_NAME" 2>/dev/null; then
+if sashiki create "BAD_NAME" 2>/dev/null; then
   fail "invalid name should fail"
 fi
 
 log "list"
-twig list
+sashiki list
 
 log "proxy: dev@<branch> ルーティング"
 # 固定ポート 3306 経由で pr-1 に接続できること
@@ -150,40 +150,40 @@ if mysql -udev -pdev -h127.0.0.1 -P3306 -e "SELECT 1" 2>/dev/null; then
 fi
 
 log "metrics & Web UI"
-probe http://127.0.0.1:9100/metrics 'twig_branches{state="running"} 2' \
+probe http://127.0.0.1:9100/metrics 'sashiki_branches{state="running"} 2' \
   || fail "metrics should report 2 running"
-probe http://127.0.0.1:8080/ "twig" || fail "web ui should serve"
+probe http://127.0.0.1:8080/ "sashiki" || fail "web ui should serve"
 
 log "proxy: lazy create (未知ブランチ名で接続すると生える)"
 val=$(mysql -udev@pr-lazy -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.items" 2>/dev/null) \
   || fail "lazy create: connect should auto-create branch"
 [ "$val" = "3" ] || fail "lazy create: query result = $val"
-grep -q "pr-lazy" <<<"$(twig list)" || fail "lazy create: branch should appear in list"
-twig delete pr-lazy
+grep -q "pr-lazy" <<<"$(sashiki list)" || fail "lazy create: branch should appear in list"
+sashiki delete pr-lazy
 
 log "wake API"
-twig create pr-wake > /dev/null
+sashiki create pr-wake > /dev/null
 systemctl stop mysqld@pr-wake
 # wake は冪等(running でも 200)なので再試行してよい
 probe http://127.0.0.1:8080/v1/branches/pr-wake/wake "" -X POST || fail "wake should succeed"
 val=$(mysql -udev@pr-wake -pdev -h127.0.0.1 -P3306 -N -e "SELECT 1" 2>/dev/null) || fail "wake: connect after wake"
 [ "$val" = "1" ] || fail "wake: query"
-twig delete pr-wake
+sashiki delete pr-wake
 
 log "baseline refresh (current 切り替え)"
-cat > /etc/twig/refresh.sh <<REFRESH
+cat > /etc/sashiki/refresh.sh <<REFRESH
 #!/usr/bin/env bash
 set -euo pipefail
 DATADIR=/$POOL/base/data
-SOCK=/tmp/twig-refresh.sock
+SOCK=/tmp/sashiki-refresh.sock
 mysqld --user=mysql --datadir="\$DATADIR" --skip-networking --socket="\$SOCK" \
-  --pid-file=/tmp/twig-refresh.pid --log-error=/var/log/twig/refresh.err --daemonize
+  --pid-file=/tmp/sashiki-refresh.pid --log-error=/var/log/sashiki/refresh.err --daemonize
 for _ in \$(seq 1 60); do mysqladmin -uroot -S "\$SOCK" ping >/dev/null 2>&1 && break; sleep 1; done
 mysql -uroot -S "\$SOCK" -e "INSERT INTO app.items (name) VALUES ('from-refresh')"
 mysqladmin -uroot -S "\$SOCK" shutdown
 sleep 2
 REFRESH
-chmod +x /etc/twig/refresh.sh
+chmod +x /etc/sashiki/refresh.sh
 code=$(curl -s -o /tmp/refresh-resp -w '%{http_code}' -X POST http://127.0.0.1:8080/v1/baseline/refresh)
 [ "$code" = "202" ] || { cat /tmp/refresh-resp; fail "refresh should return 202 (got $code)"; }
 for _ in $(seq 1 60); do
@@ -192,56 +192,56 @@ for _ in $(seq 1 60); do
 done
 probe http://127.0.0.1:8080/v1/baseline "baseline-" || fail "current should be rotated baseline"
 # 新ブランチは新 baseline(4行)、既存 pr-1 は旧 baseline(3行)のまま
-twig create pr-new > /dev/null
+sashiki create pr-new > /dev/null
 val=$(mysql -udev@pr-new -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.items" 2>/dev/null)
 [ "$val" = "4" ] || fail "new branch should see refreshed baseline (got $val)"
 val=$(mysql -udev@pr-1 -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.items" 2>/dev/null)
 [ "$val" = "3" ] || fail "existing branch should keep old baseline (got $val)"
-twig delete pr-new
+sashiki delete pr-new
 
 log "github action entrypoint (create/idempotent/delete)"
 AE="$SCRIPT_DIR/../action/entrypoint.sh"
 [ -f "$AE" ] || AE="$SCRIPT_DIR/action-entrypoint.sh"   # Lima はフラットコピー
 [ -f "$AE" ] || fail "action entrypoint not found"
-export TWIG_API_URL=http://127.0.0.1:8080 TWIG_BRANCH=pr-77
-: > /tmp/twig-action-out
-TWIG_EVENT=opened TWIG_OUTPUT=/tmp/twig-action-out bash "$AE" || fail "action: opened should create"
-grep -q "created=true" /tmp/twig-action-out || fail "action: created=true expected"
-: > /tmp/twig-action-out
-TWIG_EVENT=synchronize TWIG_OUTPUT=/tmp/twig-action-out bash "$AE" || fail "action: synchronize should succeed on existing branch"
-grep -q "created=false" /tmp/twig-action-out || fail "action: created=false expected for existing"
-TWIG_EVENT=closed bash "$AE" || fail "action: closed should delete"
-TWIG_EVENT=closed bash "$AE" || fail "action: closed should be idempotent (404 OK)"
-unset TWIG_API_URL TWIG_BRANCH
+export SASHIKI_API_URL=http://127.0.0.1:8080 SASHIKI_BRANCH=pr-77
+: > /tmp/sashiki-action-out
+SASHIKI_EVENT=opened SASHIKI_OUTPUT=/tmp/sashiki-action-out bash "$AE" || fail "action: opened should create"
+grep -q "created=true" /tmp/sashiki-action-out || fail "action: created=true expected"
+: > /tmp/sashiki-action-out
+SASHIKI_EVENT=synchronize SASHIKI_OUTPUT=/tmp/sashiki-action-out bash "$AE" || fail "action: synchronize should succeed on existing branch"
+grep -q "created=false" /tmp/sashiki-action-out || fail "action: created=false expected for existing"
+SASHIKI_EVENT=closed bash "$AE" || fail "action: closed should delete"
+SASHIKI_EVENT=closed bash "$AE" || fail "action: closed should be idempotent (404 OK)"
+unset SASHIKI_API_URL SASHIKI_BRANCH
 
 log "delete"
-twig delete pr-1
-twig delete pr-2
+sashiki delete pr-1
+sashiki delete pr-2
 grep -q pr- <<<"$(zfs list -r $POOL/branches)" && fail "datasets should be destroyed"
 
 log "token 管理"
-out=$(twig token create --name e2e-test) || fail "token create"
-tok=$(echo "$out" | grep -o "twig_[0-9a-f]*")
+out=$(sashiki token create --name e2e-test) || fail "token create"
+tok=$(echo "$out" | grep -o "sashiki_[0-9a-f]*")
 [ -n "$tok" ] || fail "token: 平文が表示されるべき"
-grep -q e2e-test <<<"$(twig token list)" || fail "token list"
+grep -q e2e-test <<<"$(sashiki token list)" || fail "token list"
 # 非 loopback からの検証は環境上できないため、DB トークンの受理はユニットテストで担保
-twig token revoke e2e-test || fail "token revoke"
-grep -q e2e-test <<<"$(twig token list)" && fail "token should be revoked"
+sashiki token revoke e2e-test || fail "token revoke"
+grep -q e2e-test <<<"$(sashiki token list)" && fail "token should be revoked"
 
 log "idle stop & TTL (リーパー)"
-# 短い閾値で twigd を再起動
-kill $TWIGD_PID 2>/dev/null || true
+# 短い閾値で sashikid を再起動
+kill $SASHIKID_PID 2>/dev/null || true
 sleep 1
-cp /etc/twig/config.yaml /tmp/twig-config.bak
-sed -i "s/idle_stop_after: 30m.*/idle_stop_after: 3s/; s/delete_after_idle: 168h.*/delete_after_idle: 15s/" /etc/twig/config.yaml
-sed -i "/delete_after_idle: 15s/a\\  reaper_interval: 1s" /etc/twig/config.yaml
-grep -A1 "delete_after_idle" /etc/twig/config.yaml
-/usr/local/bin/twigd --config /etc/twig/config.yaml > /var/log/twig/twigd2.log 2>&1 &
-TWIGD_PID=$!
+cp /etc/sashiki/config.yaml /tmp/sashiki-config.bak
+sed -i "s/idle_stop_after: 30m.*/idle_stop_after: 3s/; s/delete_after_idle: 168h.*/delete_after_idle: 15s/" /etc/sashiki/config.yaml
+sed -i "/delete_after_idle: 15s/a\\  reaper_interval: 1s" /etc/sashiki/config.yaml
+grep -A1 "delete_after_idle" /etc/sashiki/config.yaml
+/usr/local/bin/sashikid --config /etc/sashiki/config.yaml > /var/log/sashiki/sashikid2.log 2>&1 &
+SASHIKID_PID=$!
 sleep 1
-twig create pr-idle > /dev/null
+sashiki create pr-idle > /dev/null
 sleep 6   # idle_stop_after(3s) + リーパー数周期
-grep -q "pr-idle.*sleeping" <<<"$(twig list)" || { twig list; fail "reaper: pr-idle should be sleeping" ; }
+grep -q "pr-idle.*sleeping" <<<"$(sashiki list)" || { sashiki list; fail "reaper: pr-idle should be sleeping" ; }
 systemctl is-active --quiet mysqld@pr-idle && fail "reaper: mysqld should be stopped"
 # 再接続で起床(sleeping → running)
 val=$(mysql -udev@pr-idle -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.items" 2>/dev/null) \
@@ -249,19 +249,19 @@ val=$(mysql -udev@pr-idle -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM a
 [ "$val" = "4" ] || fail "reaper: wake query = $val (refresh後のbaselineは4行)"
 # TTL: 15 秒放置で自動削除
 sleep 18
-grep -q pr-idle <<<"$(twig list)" && fail "reaper: pr-idle should be TTL-deleted"
+grep -q pr-idle <<<"$(sashiki list)" && fail "reaper: pr-idle should be TTL-deleted"
 # 設定を戻して再起動
-kill $TWIGD_PID 2>/dev/null || true
+kill $SASHIKID_PID 2>/dev/null || true
 sleep 1
-cp /tmp/twig-config.bak /etc/twig/config.yaml
-/usr/local/bin/twigd --config /etc/twig/config.yaml >> /var/log/twig/twigd.log 2>&1 &
-TWIGD_PID=$!
+cp /tmp/sashiki-config.bak /etc/sashiki/config.yaml
+/usr/local/bin/sashikid --config /etc/sashiki/config.yaml >> /var/log/sashiki/sashikid.log 2>&1 &
+SASHIKID_PID=$!
 sleep 1
 
 
 # --- 6. 後片付け ---
 log "cleanup"
-kill $TWIGD_PID 2>/dev/null || true
+kill $SASHIKID_PID 2>/dev/null || true
 zpool destroy $POOL
 rm -f "$POOL_IMG"
 

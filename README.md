@@ -1,13 +1,13 @@
-# twig
+# sashiki
 
 **PR ごとに使い捨ての本物 MySQL が生える。** ZFS の Copy-on-Write クローンで、何 GB のデータベースでも数秒で複製・リセット・削除する。
 
 ```
-$ twig create pr-123
-branch 'pr-123' ready: mysql -udev@pr-123 -h twig.internal -P3401
+$ sashiki create pr-123
+branch 'pr-123' ready: mysql -udev@pr-123 -h sashiki.internal -P3401
 
-$ twig reset pr-123     # 壊しても数秒で作成時点に戻る
-$ twig delete pr-123    # PR を閉じたら消す
+$ sashiki reset pr-123     # 壊しても数秒で作成時点に戻る
+$ sashiki delete pr-123    # PR を閉じたら消す
 ```
 
 - 複製は **CoW なのでコピーしない**。クローン直後のディスク消費は数百 KB
@@ -24,19 +24,19 @@ $ twig delete pr-123    # PR を閉じたら消す
 ## Quick Start (Ubuntu 24.04)
 
 ```bash
-sudo twig init --pool dbpool --device /dev/nvme1n1   # デバイス名は lsblk で確認
+sudo sashiki init --pool dbpool --device /dev/nvme1n1   # デバイス名は lsblk で確認
 # ベースデータを投入して baseline の snapshot を取得する(init 完了時のガイダンス参照)
-sudo systemctl enable --now twigd
-twig create pr-1
+sudo systemctl enable --now sashikid
+sashiki create pr-1
 ```
 
-`twig init` は パッケージ導入・AppArmor 無効化・zpool/データセット作成・
+`sashiki init` は パッケージ導入・AppArmor 無効化・zpool/データセット作成・
 systemd ユニット・config 生成までを冪等に行う(構成済みステップはスキップ)。
 
 ## アーキテクチャ
 
 ```
-twig CLI ──HTTP──▶ twigd ──┬─▶ storage (zfs | fsx)   クローン・スナップショット・破棄
+sashiki CLI ──HTTP──▶ sashikid ──┬─▶ storage (zfs | fsx)   クローン・スナップショット・破棄
                            ├─▶ engine  (mysql)        mysqld@<branch> の起動・停止・ready
                            ├─▶ hooks                  on-create / on-reset / on-delete
                            └─▶ state.db (SQLite)      name / port / state / origin
@@ -49,7 +49,7 @@ twig CLI ──HTTP──▶ twigd ──┬─▶ storage (zfs | fsx)   クロ�
 ## 開発
 
 ```bash
-make build   # bin/twigd, bin/twig
+make build   # bin/sashikid, bin/sashiki
 make test    # ユニットテスト(ZFS 不要、モックで動く)
 make lint    # golangci-lint
 ```
