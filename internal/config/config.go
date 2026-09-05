@@ -60,8 +60,18 @@ type ZfsStorage struct {
 
 // Engine はエンジン設定。
 type Engine struct {
-	Type  string      `yaml:"type"` // mysql
-	Mysql MysqlEngine `yaml:"mysql"`
+	Type     string         `yaml:"type"` // mysql | postgres
+	Mysql    MysqlEngine    `yaml:"mysql"`
+	Postgres PostgresEngine `yaml:"postgres"`
+}
+
+// PostgresEngine は postgres エンジンの設定。
+// 注意: プロトコルプロキシは MySQL 専用のため、postgres ブランチへの接続は
+// 直接ポート(twig show <name>)になる。
+type PostgresEngine struct {
+	BinDir string `yaml:"bin_dir"` // 既定 /usr/lib/postgresql/16/bin
+	EnvDir string `yaml:"env_dir"`
+	Sudo   bool   `yaml:"sudo"`
 }
 
 // MysqlEngine は mysql エンジンの設定。
@@ -174,8 +184,8 @@ func (c Config) Validate() error {
 			return fmt.Errorf("storage.fsx requires region, filesystem_id, base_volume_id, parent_volume_id, dns_name")
 		}
 	}
-	if c.Engine.Type != "mysql" {
-		return fmt.Errorf("engine.type %q is not supported in v0.1 (mysql only)", c.Engine.Type)
+	if c.Engine.Type != "mysql" && c.Engine.Type != "postgres" {
+		return fmt.Errorf("engine.type %q is not supported (mysql | postgres)", c.Engine.Type)
 	}
 	if _, err := regexp.Compile(c.Branches.NamePattern); err != nil {
 		return fmt.Errorf("branches.name_pattern: %w", err)
