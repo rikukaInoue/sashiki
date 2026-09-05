@@ -21,8 +21,8 @@ import (
 	"github.com/rikukaInoue/twig/internal/proxy"
 	"github.com/rikukaInoue/twig/internal/state"
 	"github.com/rikukaInoue/twig/internal/storage"
-	storagefsx "github.com/rikukaInoue/twig/internal/storage/fsx"
-	storagezfs "github.com/rikukaInoue/twig/internal/storage/zfs"
+	storagezfs "github.com/rikukaInoue/twig/internal/storage/ebszfs"
+	storagefsx "github.com/rikukaInoue/twig/internal/storage/fsxzfs"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	awsfsxsdk "github.com/aws/aws-sdk-go-v2/service/fsx"
@@ -49,7 +49,7 @@ func main() {
 	var st storage.Storage
 	var bp branch.BaselineProvider
 	switch cfg.Storage.Backend {
-	case "fsx":
+	case "fsx-zfs":
 		awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(),
 			awsconfig.WithRegion(cfg.Storage.Fsx.Region))
 		if err != nil {

@@ -31,11 +31,16 @@ type Listen struct {
 	Metrics string `yaml:"metrics"`
 }
 
-// Storage はバックエンド設定。
+// Storage はバックエンド設定。backend は ebs-zfs | fsx-zfs
+// (旧名 zfs / fsx も互換のため受け付けて正規化する)。
 type Storage struct {
-	Backend string     `yaml:"backend"` // zfs | fsx
-	Zfs     ZfsStorage `yaml:"zfs"`
-	Fsx     FsxStorage `yaml:"fsx"`
+	Backend string     `yaml:"backend"`
+	Zfs     ZfsStorage `yaml:"ebs-zfs"`
+	Fsx     FsxStorage `yaml:"fsx-zfs"`
+
+	// 旧キー(v0.1 互換)。Load で新フィールドへ移す。
+	LegacyZfs *ZfsStorage `yaml:"zfs"`
+	LegacyFsx *FsxStorage `yaml:"fsx"`
 }
 
 // FsxStorage は fsx バックエンドの設定。
@@ -119,7 +124,7 @@ func Default() Config {
 		Domain:  "twig.internal",
 		StateDB: "/var/lib/twig/state.db",
 		Storage: Storage{
-			Backend: "zfs",
+			Backend: "ebs-zfs",
 			Zfs: ZfsStorage{
 				Pool:             "dbpool",
 				BaseDataset:      "dbpool/base",
@@ -167,21 +172,41 @@ func Load(path string) (Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return cfg, fmt.Errorf("parse %s: %w", path, err)
 	}
+	cfg.normalize()
 	if err := cfg.Validate(); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
 }
 
+// normalize は旧名(zfs / fsx)を新名(ebs-zfs / fsx-zfs)へ移す。
+func (c *Config) normalize() {
+	switch c.Storage.Backend {
+	case "zfs":
+		c.Storage.Backend = "ebs-zfs"
+	case "fsx":
+		c.Storage.Backend = "fsx-zfs"
+	}
+	if c.Storage.LegacyZfs != nil {
+		c.Storage.Zfs = *c.Storage.LegacyZfs
+		c.Storage.LegacyZfs = nil
+	}
+	if c.Storage.LegacyFsx != nil {
+		c.Storage.Fsx = *c.Storage.LegacyFsx
+		c.Storage.LegacyFsx = nil
+	}
+}
+
 // Validate は設定の整合性チェック。
 func (c Config) Validate() error {
-	if c.Storage.Backend != "zfs" && c.Storage.Backend != "fsx" {
-		return fmt.Errorf("storage.backend %q is not supported (zfs | fsx)", c.Storage.Backend)
+	if c.Storage.Backend != "ebs-zfs" && c.Storage.Backend != "fsx-zfs" {
+		return fmt.Errorf("storage.backend %q is not supported (ebs-zfs | fsx-zfs)", c.Storage.Backend)
 	}
-	if c.Storage.Backend == "fsx" {
+	if c.Storage.Backend == "fsx-zfs" {
 		f := c.Storage.Fsx
-		if f.Region == "" || f.FilesystemID == "" || f.BaseVolumeID == "" || f.ParentVolumeID == "" || f.DNSName == "" {
-			return fmt.Errorf("storage.fsx requires region, filesystem_id, base_volume_id, parent_volume_id, dns_name")
+		// parent_volume_id は省略可(filesystem のルートボリュームを自動発見)
+		if f.Region == "" || f.FilesystemID == "" || f.BaseVolumeID == "" || f.DNSName == "" {
+			return fmt.Errorf("storage.fsx-zfs requires region, filesystem_id, base_volume_id, dns_name")
 		}
 	}
 	if c.Engine.Type != "mysql" && c.Engine.Type != "postgres" {

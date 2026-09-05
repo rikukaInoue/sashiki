@@ -8,8 +8,8 @@ state_db: /var/lib/twig/state.db
 domain: twig.internal
 
 storage:
-  backend: zfs
-  zfs:
+  backend: ebs-zfs
+  ebs-zfs:
     pool: {{.Pool}}
     base_dataset: {{.Pool}}/base
     branch_parent: {{.Pool}}/branches

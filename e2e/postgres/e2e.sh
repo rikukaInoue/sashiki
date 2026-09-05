@@ -68,8 +68,8 @@ listen:
   proxy: ""
 state_db: /var/lib/twig-pg/state.db
 storage:
-  backend: zfs
-  zfs:
+  backend: ebs-zfs
+  ebs-zfs:
     pool: $POOL
     base_dataset: $POOL/base
     branch_parent: $POOL/branches

@@ -1,4 +1,4 @@
-package fsx
+package fsxzfs
 
 import (
 	"context"
@@ -97,6 +97,13 @@ func (m *mockAPI) DescribeSnapshots(ctx context.Context, in *awsfsx.DescribeSnap
 	}}}, nil
 }
 
+func (m *mockAPI) DescribeFileSystems(ctx context.Context, in *awsfsx.DescribeFileSystemsInput, _ ...func(*awsfsx.Options)) (*awsfsx.DescribeFileSystemsOutput, error) {
+	root := "fsvol-root-discovered"
+	return &awsfsx.DescribeFileSystemsOutput{FileSystems: []types.FileSystem{{
+		OpenZFSConfiguration: &types.OpenZFSFileSystemConfiguration{RootVolumeId: &root},
+	}}}, nil
+}
+
 func newTestBackend(m *mockAPI) *Backend {
 	b := New(Config{
 		FileSystemID:     "fs-1",
@@ -180,5 +187,17 @@ func TestCapabilitiesDeclareSlowControlPlane(t *testing.T) {
 	}
 	if !c.AsyncDelete {
 		t.Error("AsyncDelete should be true")
+	}
+}
+
+func TestParentVolumeAutoDiscovery(t *testing.T) {
+	m := newMockAPI()
+	b := newTestBackend(m)
+	b.cfg.ParentVolumeID = "" // 未指定 → filesystem から自動発見
+	if _, err := b.Clone(context.Background(), "arn:snap", "pr-1"); err != nil {
+		t.Fatal(err)
+	}
+	if b.cfg.ParentVolumeID != "fsvol-root-discovered" {
+		t.Errorf("parent = %q, want discovered root", b.cfg.ParentVolumeID)
 	}
 }

@@ -138,12 +138,11 @@ listen:
 state_db: /var/lib/twig/state.db
 domain: twig.internal
 storage:
-  backend: fsx
-  fsx:
+  backend: fsx-zfs
+  fsx-zfs:
     region: $REGION
     filesystem_id: $FSID
     base_volume_id: $BASEVOL
-    parent_volume_id: $ROOTVOL
     baseline_snapshot: baseline
     dns_name: $DNS
     mount_root: /mnt/twig

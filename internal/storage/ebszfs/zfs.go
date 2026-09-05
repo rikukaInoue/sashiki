@@ -1,7 +1,8 @@
-// Package zfs はローカル OpenZFS バックエンド。zfs/zpool コマンドを実行する。
+// Package ebszfs は EC2 直付け EBS(または NVMe インスタンスストア)上の
+// zpool を使うローカル OpenZFS バックエンド。zfs/zpool コマンドを実行する。
 // twigd の実行ユーザーには sudoers で /usr/sbin/zfs のみを許可する想定
 // (deploy/systemd/README 参照)。
-package zfs
+package ebszfs
 
 import (
 	"context"

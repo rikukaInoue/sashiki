@@ -1,4 +1,4 @@
-// Package fsx は FSx for OpenZFS バックエンド。snapshot/clone を AWS API で
+// Package fsxzfs は FSx for OpenZFS バックエンド。snapshot/clone を AWS API で
 // 行い、ボリュームを NFS でマウントして使う。実測(RESULTS-FSX.md):
 // clone 52〜71秒 / restore 10分超 / delete 6分 — コントロールプレーンは
 // 「分」の世界なので、Capabilities でそれを宣言しコアに挙動を切り替えさせる。
@@ -6,7 +6,7 @@
 // 完了判定は Volume の Lifecycle ではなく AdministrativeActions を見る
 // (restore/clone 中も Lifecycle は AVAILABLE のまま — 実測で datadir を
 // 壊した教訓)。
-package fsx
+package fsxzfs
 
 import (
 	"context"
@@ -31,7 +31,7 @@ import (
 type Config struct {
 	FileSystemID     string // fs-xxxx
 	BaseVolumeID     string // fsvol-xxxx (base)
-	ParentVolumeID   string // fsvol-xxxx (root。クローンのぶら下げ先)
+	ParentVolumeID   string // fsvol-xxxx (root)。空なら filesystem から自動発見
 	BaselineSnapshot string // baseline (base ボリューム上の snapshot 名)
 	DNSName          string // fs-xxxx.fsx.<region>.amazonaws.com
 	MountRoot        string // /mnt/twig
@@ -45,6 +45,7 @@ type API interface {
 	DescribeVolumes(ctx context.Context, in *awsfsx.DescribeVolumesInput, opts ...func(*awsfsx.Options)) (*awsfsx.DescribeVolumesOutput, error)
 	CreateSnapshot(ctx context.Context, in *awsfsx.CreateSnapshotInput, opts ...func(*awsfsx.Options)) (*awsfsx.CreateSnapshotOutput, error)
 	DescribeSnapshots(ctx context.Context, in *awsfsx.DescribeSnapshotsInput, opts ...func(*awsfsx.Options)) (*awsfsx.DescribeSnapshotsOutput, error)
+	DescribeFileSystems(ctx context.Context, in *awsfsx.DescribeFileSystemsInput, opts ...func(*awsfsx.Options)) (*awsfsx.DescribeFileSystemsOutput, error)
 }
 
 // Backend は storage.Storage の FSx 実装。
@@ -162,11 +163,35 @@ func (b *Backend) waitVolumeReady(ctx context.Context, volID string) error {
 	}
 }
 
+// parentVolume は クローンのぶら下げ先(root volume)。設定が空なら
+// filesystem から自動発見してキャッシュする。
+func (b *Backend) parentVolume(ctx context.Context) (string, error) {
+	if b.cfg.ParentVolumeID != "" {
+		return b.cfg.ParentVolumeID, nil
+	}
+	out, err := b.api.DescribeFileSystems(ctx, &awsfsx.DescribeFileSystemsInput{
+		FileSystemIds: []string{b.cfg.FileSystemID},
+	})
+	if err != nil {
+		return "", fmt.Errorf("describe filesystem: %w", err)
+	}
+	if len(out.FileSystems) == 0 || out.FileSystems[0].OpenZFSConfiguration == nil ||
+		out.FileSystems[0].OpenZFSConfiguration.RootVolumeId == nil {
+		return "", fmt.Errorf("root volume of %s not found", b.cfg.FileSystemID)
+	}
+	b.cfg.ParentVolumeID = *out.FileSystems[0].OpenZFSConfiguration.RootVolumeId
+	return b.cfg.ParentVolumeID, nil
+}
+
 // Clone はクローンボリュームを作成し、NFS マウントして返す。
 // FSx のボリューム名はパス衝突を避けるため世代サフィックス付き
 // (name-g<hex>)にし、twig-branch タグで元の名前に紐づける。
 // reset の「作り直し + 付け替え」で新旧が一時的に共存できる。
 func (b *Backend) Clone(ctx context.Context, baseline storage.SnapshotRef, name string) (storage.Volume, error) {
+	parent, err := b.parentVolume(ctx)
+	if err != nil {
+		return storage.Volume{}, err
+	}
 	gen := make([]byte, 3)
 	_, _ = rand.Read(gen)
 	fsxName := fmt.Sprintf("%s-g%s", name, hex.EncodeToString(gen))
@@ -174,7 +199,7 @@ func (b *Backend) Clone(ctx context.Context, baseline storage.SnapshotRef, name 
 		VolumeType: types.VolumeTypeOpenzfs,
 		Name:       &fsxName,
 		OpenZFSConfiguration: &types.CreateOpenZFSVolumeConfiguration{
-			ParentVolumeId: &b.cfg.ParentVolumeID,
+			ParentVolumeId: &parent,
 			OriginSnapshot: &types.CreateOpenZFSOriginSnapshotConfiguration{
 				SnapshotARN:  (*string)(&baseline),
 				CopyStrategy: types.OpenZFSCopyStrategyClone,
