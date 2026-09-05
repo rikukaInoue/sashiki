@@ -3,7 +3,12 @@
 // postgres を起動する。MySQL プロトコルプロキシは使えないため、接続は
 // 直接ポート(twig show <name> で確認)になる(既知の制限)。
 //
-// storage 側の注意: Postgres のページサイズは 8KB のため、base データセットは
+// リモート接続する場合は engine.postgres.listen_addresses を "*" 等に広げ、
+// かつ base の pg_hba.conf にクライアント側ネットワークの host 行が必要
+// (pg_hba はブランチにクローンされるので base に入れておく)。
+//
+// storage 側の注意: Postgres のページサイズは 8KB のため、base データセットと
+// branch_parent(クローンは名前空間上の親からプロパティを継承する)は
 // recordsize=8k で作るのが望ましい(zfs backend の設定で変更可能)。
 package postgres
 
@@ -21,11 +26,12 @@ import (
 
 // Config は postgres エンジンの設定。
 type Config struct {
-	EnvDir       string // /etc/twig
-	UnitTemplate string // 既定 "postgres-twig" → postgres-twig@<branch>.service
-	BinDir       string // 既定 /usr/lib/postgresql/16/bin
-	ReadyTimeout time.Duration
-	Sudo         bool
+	EnvDir          string // /etc/twig
+	UnitTemplate    string // 既定 "postgres-twig" → postgres-twig@<branch>.service
+	BinDir          string // 既定 /usr/lib/postgresql/16/bin
+	ListenAddresses string // 既定 127.0.0.1。リモート接続を許すなら "*" 等
+	ReadyTimeout    time.Duration
+	Sudo            bool
 }
 
 // Engine は engine.Engine の PostgreSQL + systemd 実装。
@@ -41,6 +47,9 @@ func New(cfg Config) *Engine {
 	}
 	if cfg.BinDir == "" {
 		cfg.BinDir = "/usr/lib/postgresql/16/bin"
+	}
+	if cfg.ListenAddresses == "" {
+		cfg.ListenAddresses = "127.0.0.1"
 	}
 	if cfg.ReadyTimeout == 0 {
 		cfg.ReadyTimeout = 30 * time.Second
@@ -70,7 +79,8 @@ func (e *Engine) unit(branch string) string {
 
 // Start は env ファイルを書いて systemd ユニットを起動する。
 func (e *Engine) Start(ctx context.Context, ins engine.Instance) error {
-	env := fmt.Sprintf("PORT=%d\nDATADIR=%s\nPGBIN=%s\n", ins.Port, ins.DataDir, e.cfg.BinDir)
+	env := fmt.Sprintf("PORT=%d\nDATADIR=%s\nPGBIN=%s\nLISTEN_ADDRESSES=%s\n",
+		ins.Port, ins.DataDir, e.cfg.BinDir, e.cfg.ListenAddresses)
 	if err := os.WriteFile(filepath.Join(e.cfg.EnvDir, ins.Branch+".env"), []byte(env), 0o644); err != nil {
 		return fmt.Errorf("write env: %w", err)
 	}

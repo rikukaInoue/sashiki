@@ -33,7 +33,9 @@ truncate -s 3G "$POOL_IMG"
 zpool create -o ashift=12 $POOL "$POOL_IMG"
 zfs set compression=lz4 atime=off $POOL
 zfs create -o recordsize=8k -o logbias=throughput $POOL/base
-zfs create $POOL/branches
+# クローンのプロパティは origin ではなく名前空間上の親から継承されるため、
+# branch_parent にも recordsize=8k が必要
+zfs create -o recordsize=8k -o logbias=throughput $POOL/branches
 
 log "base postgres"
 mkdir -p /$POOL/base/data
@@ -106,8 +108,15 @@ log "破壊 → reset"
 q $PORT "DELETE FROM items" > /dev/null
 time twig-pg reset pg-1
 [ "$(q $PORT 'SELECT COUNT(*) FROM items')" = "3" ] || fail "reset should restore"
-grep -qi "database system was not properly shut down" /$POOL/branches/pg-1/data/log/*.log 2>/dev/null \
+# initdb 既定では logging_collector が無効でサーバーログは journald に行く。
+# data/log を grep しても常にパスしてしまうので journal 側を確認する。
+journalctl -u 'postgres-twig@pg-1' --no-pager 2>/dev/null \
+  | grep -qi "database system was not properly shut down" \
   && fail "crash recovery ran (dirty @init)"
+# チェック自体が生きていることの確認: 正常起動ログは journal に必ず出る
+journalctl -u 'postgres-twig@pg-1' --no-pager 2>/dev/null \
+  | grep -qi "database system is ready to accept connections" \
+  || fail "journal に postgres のログが見つからない(crash recovery チェックが機能していない)"
 
 log "delete"
 time twig-pg delete pg-1

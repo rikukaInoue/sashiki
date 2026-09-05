@@ -67,11 +67,14 @@ type Engine struct {
 
 // PostgresEngine は postgres エンジンの設定。
 // 注意: プロトコルプロキシは MySQL 専用のため、postgres ブランチへの接続は
-// 直接ポート(twig show <name>)になる。
+// 直接ポート(twig show <name>)になる。リモート接続する場合は
+// listen_addresses を広げ、base の pg_hba.conf に host 行を入れておくこと。
 type PostgresEngine struct {
-	BinDir string `yaml:"bin_dir"` // 既定 /usr/lib/postgresql/16/bin
-	EnvDir string `yaml:"env_dir"`
-	Sudo   bool   `yaml:"sudo"`
+	PortRange       [2]int `yaml:"port_range"` // 既定 [5433, 5632]
+	BinDir          string `yaml:"bin_dir"`    // 既定 /usr/lib/postgresql/16/bin
+	EnvDir          string `yaml:"env_dir"`
+	ListenAddresses string `yaml:"listen_addresses"` // 既定 127.0.0.1
+	Sudo            bool   `yaml:"sudo"`
 }
 
 // MysqlEngine は mysql エンジンの設定。
@@ -138,6 +141,12 @@ func Default() Config {
 				EnvDir:         "/etc/twig",
 				Sudo:           true,
 			},
+			Postgres: PostgresEngine{
+				PortRange:       [2]int{5433, 5632},
+				EnvDir:          "/etc/twig",
+				ListenAddresses: "127.0.0.1",
+				Sudo:            true,
+			},
 		},
 		Proxy: Proxy{MaxConnPerBranch: 50},
 		Branches: Branches{
@@ -193,5 +202,18 @@ func (c Config) Validate() error {
 	if c.Engine.Mysql.PortRange[0] <= 0 || c.Engine.Mysql.PortRange[1] < c.Engine.Mysql.PortRange[0] {
 		return fmt.Errorf("engine.mysql.port_range must be [low, high]")
 	}
+	if c.Engine.Type == "postgres" {
+		if c.Engine.Postgres.PortRange[0] <= 0 || c.Engine.Postgres.PortRange[1] < c.Engine.Postgres.PortRange[0] {
+			return fmt.Errorf("engine.postgres.port_range must be [low, high]")
+		}
+	}
 	return nil
+}
+
+// PortRange は選択中エンジンのポートレンジを返す。
+func (c Config) PortRange() [2]int {
+	if c.Engine.Type == "postgres" {
+		return c.Engine.Postgres.PortRange
+	}
+	return c.Engine.Mysql.PortRange
 }
