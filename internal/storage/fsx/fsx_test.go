@@ -13,6 +13,7 @@ import (
 
 type mockAPI struct {
 	volumes       map[string]*types.Volume // by id
+	order         []string                 // 挿入順(ページネーションの決定性のため)
 	createCalls   int
 	describeCalls int
 	pageSize      int
@@ -41,11 +42,18 @@ func (m *mockAPI) CreateVolume(ctx context.Context, in *awsfsx.CreateVolumeInput
 		},
 	}
 	m.volumes[id] = v
+	m.order = append(m.order, id)
 	return &awsfsx.CreateVolumeOutput{Volume: v}, nil
 }
 
 func (m *mockAPI) DeleteVolume(ctx context.Context, in *awsfsx.DeleteVolumeInput, _ ...func(*awsfsx.Options)) (*awsfsx.DeleteVolumeOutput, error) {
 	delete(m.volumes, *in.VolumeId)
+	for i, id := range m.order {
+		if id == *in.VolumeId {
+			m.order = append(m.order[:i], m.order[i+1:]...)
+			break
+		}
+	}
 	return &awsfsx.DeleteVolumeOutput{}, nil
 }
 
@@ -54,12 +62,12 @@ func (m *mockAPI) DescribeVolumes(ctx context.Context, in *awsfsx.DescribeVolume
 	// pageSize > 0 ならフィルタ検索を 1 件ずつページングする(ページネーション検証用)
 	if m.pageSize > 0 && len(in.VolumeIds) == 0 {
 		var all []types.Volume
-		for _, v := range m.volumes {
-			all = append(all, *v)
+		for _, id := range m.order {
+			all = append(all, *m.volumes[id])
 		}
 		start := 0
 		if in.NextToken != nil {
-			fmt.Sscanf(*in.NextToken, "%d", &start)
+			_, _ = fmt.Sscanf(*in.NextToken, "%d", &start)
 		}
 		end := start + m.pageSize
 		if end > len(all) {
@@ -88,8 +96,8 @@ func (m *mockAPI) DescribeVolumes(ctx context.Context, in *awsfsx.DescribeVolume
 			}
 		}
 	} else {
-		for _, v := range m.volumes {
-			out = append(out, *v)
+		for _, id := range m.order {
+			out = append(out, *m.volumes[id])
 		}
 	}
 	return &awsfsx.DescribeVolumesOutput{Volumes: out}, nil
