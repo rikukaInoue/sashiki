@@ -39,7 +39,7 @@ func (fakeStorage) SnapshotBase(ctx context.Context, tag string) (storage.Snapsh
 	return "", nil
 }
 func (fakeStorage) ListSnapshots(ctx context.Context) ([]storage.SnapshotRef, error) {
-	return nil, nil
+	return []storage.SnapshotRef{"p/base@baseline", "p/base@baseline-20260901"}, nil
 }
 func (fakeStorage) UsedBytes(ctx context.Context, v storage.Volume) (int64, error) { return 42, nil }
 func (fakeStorage) CurrentBaseline() storage.SnapshotRef                           { return "p/base@baseline" }
@@ -167,5 +167,28 @@ func TestAPIAuthFromNonLoopback(t *testing.T) {
 	req2.RemoteAddr = "127.0.0.1:9999"
 	if !s.authorized(req2) {
 		t.Error("loopback should be allowed without token")
+	}
+}
+
+func TestAPIBaseline(t *testing.T) {
+	srv := newTestServer(t, "")
+	resp, err := http.Get(srv.URL + "/v1/baseline")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var b struct {
+		Current   string   `json:"current"`
+		Snapshots []string `json:"snapshots"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&b)
+	if b.Current != "p/base@baseline" {
+		t.Errorf("current = %q", b.Current)
+	}
+	if len(b.Snapshots) != 2 {
+		t.Errorf("snapshots = %v", b.Snapshots)
 	}
 }

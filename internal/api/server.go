@@ -34,6 +34,7 @@ func New(mgr *branch.Manager, domain, proxyUser, token string) *Server {
 	s.mux.HandleFunc("GET /v1/branches/{name}", s.handleGet)
 	s.mux.HandleFunc("POST /v1/branches/{name}/reset", s.handleReset)
 	s.mux.HandleFunc("DELETE /v1/branches/{name}", s.handleDelete)
+	s.mux.HandleFunc("GET /v1/baseline", s.handleBaseline)
 	s.mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
 	return s
 }
@@ -65,6 +66,21 @@ func (s *Server) authorized(r *http.Request) bool {
 }
 
 // --- handlers ---
+
+func (s *Server) handleBaseline(w http.ResponseWriter, r *http.Request) {
+	info, err := s.mgr.Baseline(r.Context())
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	if info.Snapshots == nil {
+		info.Snapshots = []string{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"current":   info.Current,
+		"snapshots": info.Snapshots,
+	})
+}
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

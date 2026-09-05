@@ -52,38 +52,19 @@ echo "$init2" | grep -q "スキップ" || fail "init should be idempotent"
 sed -i 's/port_range: \[3401, 3600\]/port_range: [3401, 3410]/' /etc/twig/config.yaml
 sed -i 's/max_branches: 50/max_branches: 5/' /etc/twig/config.yaml
 
-# --- 3. ベース MySQL + 小さなサンプルデータ ---
-log "base mysql"
-mkdir -p /$POOL/base/data
-chown -R mysql:mysql /$POOL/base /var/log/twig
-if ! sudo -u mysql mysqld --initialize-insecure --datadir=/$POOL/base/data > /var/log/twig/init.log 2>&1; then
-  tail -30 /var/log/twig/init.log
-  dmesg 2>/dev/null | grep -i apparmor | tail -5
-  fail "mysqld --initialize failed"
-fi
-if ! sudo -u mysql mysqld --datadir=/$POOL/base/data --port=3306 \
-  --socket=/tmp/mysql-e2e-base.sock --pid-file=/tmp/mysql-e2e-base.pid \
-  --log-error=/var/log/twig/base.err --innodb-buffer-pool-size=128M --daemonize; then
-  tail -30 /var/log/twig/base.err
-  fail "base mysqld failed to start"
-fi
-for _ in $(seq 1 60); do
-  mysqladmin -uroot -S /tmp/mysql-e2e-base.sock ping > /dev/null 2>&1 && break
-  sleep 1
-done
-mysqladmin -uroot -S /tmp/mysql-e2e-base.sock ping > /dev/null 2>&1 \
-  || { tail -30 /var/log/twig/base.err; fail "base mysqld not ready"; }
-mysql -uroot -S /tmp/mysql-e2e-base.sock <<'SQL'
+# --- 3. ベースライン: twig baseline import ---
+log "twig baseline import"
+cat > /tmp/twig-e2e-sample.sql <<'SQL'
 CREATE DATABASE app;
 CREATE TABLE app.items (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(64));
 INSERT INTO app.items (name) VALUES ('alpha'), ('beta'), ('gamma');
-CREATE USER 'dev'@'%' IDENTIFIED BY 'dev';
-GRANT ALL PRIVILEGES ON *.* TO 'dev'@'%';
-FLUSH PRIVILEGES;
 SQL
-mysqladmin -uroot -S /tmp/mysql-e2e-base.sock shutdown
-sleep 2
-zfs snapshot $POOL/base@baseline
+twig baseline import --from /tmp/twig-e2e-sample.sql
+zfs list $POOL/base@baseline > /dev/null || fail "baseline snapshot should exist"
+# 二重 import は拒否されること
+if twig baseline import --from /tmp/twig-e2e-sample.sql 2>/dev/null; then
+  fail "second import should fail (baseline exists)"
+fi
 
 # --- 4. twigd 起動 ---
 log "start twigd"

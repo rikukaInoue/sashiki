@@ -281,6 +281,25 @@ func (m *Manager) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
+// BaselineInfo は現在のベースラインと base の snapshot 一覧。
+type BaselineInfo struct {
+	Current   string
+	Snapshots []string
+}
+
+// Baseline はベースライン情報を返す(API GET /baseline 用)。
+func (m *Manager) Baseline(ctx context.Context) (BaselineInfo, error) {
+	snaps, err := m.st.ListSnapshots(ctx)
+	if err != nil {
+		return BaselineInfo{}, err
+	}
+	info := BaselineInfo{Current: string(m.baseline.CurrentBaseline())}
+	for _, s := range snaps {
+		info.Snapshots = append(info.Snapshots, string(s))
+	}
+	return info, nil
+}
+
 // Get は 1 件の詳細。
 func (m *Manager) Get(ctx context.Context, name string) (Info, error) {
 	return m.info(ctx, name)
