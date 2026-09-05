@@ -164,7 +164,10 @@ hooks:
 YAML
 set -a; . /tmp/aws-env; set +a
 nohup /usr/local/bin/twigd --config /etc/twig/config.yaml > /var/log/twig/twigd.log 2>&1 &
-sleep 2
+for i in $(seq 1 20); do
+  curl -sf http://127.0.0.1:8080/v1/healthz > /dev/null && break
+  sleep 0.5
+done
 curl -sf http://127.0.0.1:8080/v1/healthz > /dev/null
 EOS
 

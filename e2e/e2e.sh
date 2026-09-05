@@ -13,6 +13,19 @@ POOL_IMG=/var/tmp/twig-e2e-zpool.img
 log() { echo -e "\n=== $* ==="; }
 fail() { echo "E2E FAILED: $*" >&2; exit 1; }
 
+# HTTP アサーション用。単発 curl は稀に接続レベルで落ちる(#49)ため
+# 3 回まで再試行し、失敗時は HTTP ステータスを stderr に残す。
+probe() { # probe <url> [curl-args...] : 本文を stdout へ
+  local url=$1; shift
+  local i
+  for i in 1 2 3; do
+    curl -sf "$@" "$url" && return 0
+    [ "$i" -lt 3 ] && sleep 1
+  done
+  echo "probe failed: $url (HTTP $(curl -s -o /dev/null -w '%{http_code}' "$@" "$url" 2>/dev/null))" >&2
+  return 1
+}
+
 # --- 0. 前提パッケージ ---
 log "packages"
 export DEBIAN_FRONTEND=noninteractive
@@ -131,9 +144,9 @@ if mysql -udev -pdev -h127.0.0.1 -P3306 -e "SELECT 1" 2>/dev/null; then
 fi
 
 log "metrics & Web UI"
-curl -sf http://127.0.0.1:9100/metrics | grep -q 'twig_branches{state="running"} 2' \
+probe http://127.0.0.1:9100/metrics | grep -q 'twig_branches{state="running"} 2' \
   || { curl -s http://127.0.0.1:9100/metrics | head -5; fail "metrics should report 2 running"; }
-curl -sf http://127.0.0.1:8080/ | grep -q "twig" || fail "web ui should serve"
+probe http://127.0.0.1:8080/ | grep -q "twig" || fail "web ui should serve"
 
 log "proxy: lazy create (未知ブランチ名で接続すると生える)"
 val=$(mysql -udev@pr-lazy -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.items" 2>/dev/null) \
@@ -145,7 +158,8 @@ twig delete pr-lazy
 log "wake API"
 twig create pr-wake > /dev/null
 systemctl stop mysqld@pr-wake
-curl -sf -X POST http://127.0.0.1:8080/v1/branches/pr-wake/wake > /dev/null || fail "wake should succeed"
+# wake は冪等(running でも 200)なので再試行してよい
+probe http://127.0.0.1:8080/v1/branches/pr-wake/wake -X POST > /dev/null || fail "wake should succeed"
 val=$(mysql -udev@pr-wake -pdev -h127.0.0.1 -P3306 -N -e "SELECT 1" 2>/dev/null) || fail "wake: connect after wake"
 [ "$val" = "1" ] || fail "wake: query"
 twig delete pr-wake
@@ -170,7 +184,7 @@ for _ in $(seq 1 60); do
   curl -s http://127.0.0.1:8080/v1/baseline | grep -q '"refreshing":false' && break
   sleep 1
 done
-curl -s http://127.0.0.1:8080/v1/baseline | grep -q "baseline-" || fail "current should be rotated baseline"
+probe http://127.0.0.1:8080/v1/baseline | grep -q "baseline-" || fail "current should be rotated baseline"
 # 新ブランチは新 baseline(4行)、既存 pr-1 は旧 baseline(3行)のまま
 twig create pr-new > /dev/null
 val=$(mysql -udev@pr-new -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.items" 2>/dev/null)
