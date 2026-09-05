@@ -18,7 +18,12 @@ import (
 	"github.com/rikukaInoue/twig/internal/hooks"
 	"github.com/rikukaInoue/twig/internal/proxy"
 	"github.com/rikukaInoue/twig/internal/state"
+	"github.com/rikukaInoue/twig/internal/storage"
+	storagefsx "github.com/rikukaInoue/twig/internal/storage/fsx"
 	storagezfs "github.com/rikukaInoue/twig/internal/storage/zfs"
+
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	awsfsxsdk "github.com/aws/aws-sdk-go-v2/service/fsx"
 )
 
 var version = "dev" // -ldflags で埋め込む
@@ -39,13 +44,34 @@ func main() {
 	}
 	defer func() { _ = db.Close() }()
 
-	zbe := storagezfs.New(storagezfs.Config{
-		Pool:             cfg.Storage.Zfs.Pool,
-		BaseDataset:      cfg.Storage.Zfs.BaseDataset,
-		BranchParent:     cfg.Storage.Zfs.BranchParent,
-		BaselineSnapshot: cfg.Storage.Zfs.BaselineSnapshot,
-		Sudo:             cfg.Storage.Zfs.Sudo,
-	})
+	var st storage.Storage
+	var bp branch.BaselineProvider
+	switch cfg.Storage.Backend {
+	case "fsx":
+		awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(),
+			awsconfig.WithRegion(cfg.Storage.Fsx.Region))
+		if err != nil {
+			log.Fatalf("aws config: %v", err)
+		}
+		fbe := storagefsx.New(storagefsx.Config{
+			FileSystemID:     cfg.Storage.Fsx.FilesystemID,
+			BaseVolumeID:     cfg.Storage.Fsx.BaseVolumeID,
+			ParentVolumeID:   cfg.Storage.Fsx.ParentVolumeID,
+			BaselineSnapshot: cfg.Storage.Fsx.BaselineSnapshot,
+			DNSName:          cfg.Storage.Fsx.DNSName,
+			MountRoot:        cfg.Storage.Fsx.MountRoot,
+		}, awsfsxsdk.NewFromConfig(awsCfg))
+		st, bp = fbe, fbe
+	default:
+		zbe := storagezfs.New(storagezfs.Config{
+			Pool:             cfg.Storage.Zfs.Pool,
+			BaseDataset:      cfg.Storage.Zfs.BaseDataset,
+			BranchParent:     cfg.Storage.Zfs.BranchParent,
+			BaselineSnapshot: cfg.Storage.Zfs.BaselineSnapshot,
+			Sudo:             cfg.Storage.Zfs.Sudo,
+		})
+		st, bp = zbe, zbe
+	}
 
 	eng := enginemysql.New(enginemysql.Config{
 		EnvDir:    cfg.Engine.Mysql.EnvDir,
@@ -69,7 +95,7 @@ func main() {
 		DeleteAfterIdle: cfg.Branches.DeleteAfterIdle,
 		AvailableMem:    availableMem,
 		BufferPoolBytes: parseSize(cfg.Engine.Mysql.BufferPoolSize),
-	}, zbe, zbe, eng, hr, db)
+	}, st, bp, eng, hr, db)
 	if err != nil {
 		log.Fatalf("manager: %v", err)
 	}

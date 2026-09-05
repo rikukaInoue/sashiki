@@ -240,7 +240,7 @@ func (m *Manager) Reset(ctx context.Context, name string) (Info, error) {
 		return Info{}, err
 	}
 	if !m.st.Capabilities().FastRollback {
-		return Info{}, errors.New("reset is not supported on this storage backend yet (planned: recreate+repoint)")
+		return m.resetRecreate(ctx, b)
 	}
 	if err := m.db.SetState(name, state.StateResetting, ""); err != nil {
 		return Info{}, err
@@ -271,6 +271,57 @@ func (m *Manager) Reset(ctx context.Context, name string) (Info, error) {
 		return Info{}, err
 	}
 	return m.info(ctx, name)
+}
+
+// resetRecreate は遅いバックエンド(fsx)の reset: baseline から新クローンを
+// 作り、mysqld を新ボリュームへ付け替え、旧ボリュームは裏で非同期削除する。
+// 体感 reset ≈ clone 時間(約70秒)。restore API(10分超)は使わない(仕様 15-3)。
+func (m *Manager) resetRecreate(ctx context.Context, b state.Branch) (Info, error) {
+	if err := m.db.SetState(b.Name, state.StateResetting, ""); err != nil {
+		return Info{}, err
+	}
+	oldVol, err := m.resolveVolume(ctx, b)
+	if err != nil {
+		_ = m.db.SetState(b.Name, state.StateError, err.Error())
+		return Info{}, err
+	}
+	newVol, err := m.st.Clone(ctx, storage.SnapshotRef(b.OriginSnapshot), b.Name)
+	if err != nil {
+		_ = m.db.SetState(b.Name, state.StateError, err.Error())
+		return Info{}, fmt.Errorf("recreate clone: %w", err)
+	}
+	oldIns := m.instance(b, oldVol)
+	_ = m.eng.Stop(ctx, oldIns)
+	newIns := m.instance(b, newVol)
+	if err := m.eng.Start(ctx, newIns); err != nil {
+		_ = m.db.SetState(b.Name, state.StateError, err.Error())
+		return Info{}, err
+	}
+	if err := m.eng.WaitReady(ctx, newIns); err != nil {
+		_ = m.db.SetState(b.Name, state.StateError, err.Error())
+		return Info{}, err
+	}
+	// 旧ボリュームは裏で削除(fsx は約6分かかるがユーザーは待たない)
+	if job, err := m.st.DeleteAsync(ctx, oldVol); err == nil {
+		go m.pollDeletion(job)
+	}
+	_ = m.runHook(ctx, hooks.OnReset, b, newVol)
+	if err := m.db.SetState(b.Name, state.StateRunning, ""); err != nil {
+		return Info{}, err
+	}
+	return m.info(ctx, b.Name)
+}
+
+// pollDeletion は非同期削除の完了をバックグラウンドで待つ(結果はログのみ)。
+func (m *Manager) pollDeletion(job storage.JobID) {
+	ctx := context.Background()
+	for i := 0; i < 240; i++ { // 最大 ~20 分
+		st, err := m.st.Poll(ctx, job)
+		if err != nil || st != storage.JobRunning {
+			return
+		}
+		time.Sleep(5 * time.Second)
+	}
 }
 
 // Delete はブランチを削除する。
@@ -306,8 +357,10 @@ func (m *Manager) Delete(ctx context.Context, name string) error {
 	if status == storage.JobCompleted {
 		return m.db.DeleteBranch(name)
 	}
-	// 非同期バックエンドでは deleting のまま残し、回収ループが Poll する(v1.0)。
-	return nil
+	// 非同期バックエンド: 行は消して(発行済みポートは解放)、実削除の完了は
+	// バックグラウンドで見届ける。
+	go m.pollDeletion(job)
+	return m.db.DeleteBranch(name)
 }
 
 // SetActiveConns は接続数の参照先を設定する(プロキシは Manager に依存する
