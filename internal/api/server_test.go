@@ -71,7 +71,7 @@ func newTestServer(t *testing.T, token string) *httptest.Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(New(mgr, "twig.internal", "dev", token, nil))
+	srv := httptest.NewServer(New(mgr, "twig.internal", "mysql", "dev", "dev", token, nil))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -150,7 +150,7 @@ func TestAPIAuthFromNonLoopback(t *testing.T) {
 	defer func() { _ = db.Close() }()
 	fs := fakeStorage{}
 	mgr, _ := branch.New(branch.Config{NamePattern: `^.+$`, PortLow: 1, PortHigh: 2, EngineType: "mysql"}, fs, fs, fakeEngine{}, nil, db)
-	s := New(mgr, "d", "dev", "secret", db)
+	s := New(mgr, "d", "mysql", "dev", "dev", "secret", db)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/branches", nil)
 	req.RemoteAddr = "10.0.0.5:12345"
@@ -201,7 +201,7 @@ func TestAPIAuthWithDBToken(t *testing.T) {
 	defer func() { _ = db.Close() }()
 	fs := fakeStorage{}
 	mgr, _ := branch.New(branch.Config{NamePattern: `^.+$`, PortLow: 1, PortHigh: 2, EngineType: "mysql"}, fs, fs, fakeEngine{}, nil, db)
-	s := New(mgr, "d", "dev", "", db)
+	s := New(mgr, "d", "mysql", "dev", "dev", "", db)
 
 	// トークン登録(平文 "twig_abc" のハッシュ)
 	sum := sha256.Sum256([]byte("twig_abc"))

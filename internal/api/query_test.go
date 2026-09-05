@@ -1,0 +1,237 @@
+package api
+
+import (
+	"bytes"
+	"context"
+	"database/sql"
+	"database/sql/driver"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/rikukaInoue/twig/internal/branch"
+	"github.com/rikukaInoue/twig/internal/state"
+)
+
+// --- database/sql/driver のフェイク(外部依存なしで *sql.Rows を作る) ---
+
+type fakeRows struct {
+	cols []string
+	data [][]driver.Value
+	i    int
+}
+
+func (r *fakeRows) Columns() []string { return r.cols }
+func (r *fakeRows) Close() error      { return nil }
+func (r *fakeRows) Next(dest []driver.Value) error {
+	if r.i >= len(r.data) {
+		return io.EOF
+	}
+	copy(dest, r.data[r.i])
+	r.i++
+	return nil
+}
+
+type fakeStmt struct{ rows func() *fakeRows }
+
+func (s fakeStmt) Close() error  { return nil }
+func (s fakeStmt) NumInput() int { return 0 }
+func (s fakeStmt) Exec([]driver.Value) (driver.Result, error) {
+	return nil, errors.New("exec not supported")
+}
+func (s fakeStmt) Query([]driver.Value) (driver.Rows, error) { return s.rows(), nil }
+
+type fakeConn struct{ rows func() *fakeRows }
+
+func (c fakeConn) Prepare(string) (driver.Stmt, error) { return fakeStmt(c), nil }
+func (c fakeConn) Close() error                        { return nil }
+func (c fakeConn) Begin() (driver.Tx, error)           { return nil, errors.New("tx not supported") }
+
+type fakeDriver struct{}
+
+func (fakeDriver) Open(string) (driver.Conn, error) { return nil, errors.New("use connector") }
+
+type fakeConnector struct{ rows func() *fakeRows }
+
+func (c fakeConnector) Connect(context.Context) (driver.Conn, error) {
+	return fakeConn(c), nil
+}
+func (c fakeConnector) Driver() driver.Driver { return fakeDriver{} }
+
+// newQueryTestServer は openDB をフェイク DB に差し替えた Server を作る。
+func newQueryTestServer(t *testing.T, engineType string, rows func() *fakeRows) *Server {
+	t.Helper()
+	db, err := state.Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	fs := fakeStorage{}
+	mgr, err := branch.New(branch.Config{
+		NamePattern: `^[a-z0-9-]{1,32}$`, MaxBranches: 10,
+		PortLow: 3401, PortHigh: 3410, EngineType: "mysql", StateDir: t.TempDir(),
+	}, fs, fs, fakeEngine{}, nil, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(mgr, "twig.internal", engineType, "dev", "dev", "", nil)
+	if rows != nil {
+		s.openDB = func(ctx context.Context, name string) (*sql.DB, error) {
+			return sql.OpenDB(fakeConnector{rows: rows}), nil
+		}
+	}
+	return s
+}
+
+func postQuery(s *Server, body, contentType, origin, host string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest("POST", "http://"+host+"/v1/branches/pr-q/query", bytes.NewBufferString(body))
+	req.RemoteAddr = "127.0.0.1:9999"
+	req.Header.Set("Content-Type", contentType)
+	if origin != "" {
+		req.Header.Set("Origin", origin)
+	}
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, req)
+	return w
+}
+
+func TestQueryRowLimitAndConversion(t *testing.T) {
+	big := bytes.Repeat([]byte("x"), maxCellBytes+100)
+	rows := func() *fakeRows {
+		r := &fakeRows{cols: []string{"id", "blob", "nul"}}
+		r.data = append(r.data, []driver.Value{int64(0), append([]byte(nil), big...), nil})
+		for i := 1; i < 250; i++ {
+			r.data = append(r.data, []driver.Value{int64(i), []byte("v"), nil})
+		}
+		return r
+	}
+	s := newQueryTestServer(t, "mysql", rows)
+
+	w := postQuery(s, `{"sql":"SELECT * FROM t"}`, "application/json", "", "localhost:8080")
+	if w.Code != 200 {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Columns   []string `json:"columns"`
+		Rows      [][]any  `json:"rows"`
+		Truncated bool     `json:"truncated"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Rows) != maxRows || !resp.Truncated {
+		t.Errorf("rows=%d truncated=%v, want %d/true", len(resp.Rows), resp.Truncated, maxRows)
+	}
+	// []byte → string 変換と NULL
+	if resp.Rows[1][1] != "v" || resp.Rows[1][2] != nil {
+		t.Errorf("row conversion: %+v", resp.Rows[1])
+	}
+	// 巨大セルの切り詰め
+	cell, _ := resp.Rows[0][1].(string)
+	if len(cell) > maxCellBytes+64 || !strings.HasSuffix(cell, "…(truncated)") {
+		t.Errorf("big cell should be truncated (len=%d suffix=%q)", len(cell), cell[max(0, len(cell)-20):])
+	}
+}
+
+func TestSchemaGrouping(t *testing.T) {
+	rows := func() *fakeRows {
+		return &fakeRows{
+			cols: []string{"s", "t", "r", "c", "ct", "n", "k"},
+			data: [][]driver.Value{
+				{[]byte("app"), []byte("items"), int64(3), []byte("id"), []byte("bigint"), []byte("NO"), []byte("PRI")},
+				{[]byte("app"), []byte("items"), int64(3), []byte("name"), []byte("text"), []byte("YES"), []byte("")},
+				{[]byte("app"), []byte("users"), int64(1), []byte("id"), []byte("bigint"), []byte("NO"), []byte("PRI")},
+				{[]byte("logs"), []byte("events"), int64(9), []byte("id"), []byte("bigint"), []byte("NO"), []byte("PRI")},
+			},
+		}
+	}
+	s := newQueryTestServer(t, "mysql", rows)
+
+	req := httptest.NewRequest("GET", "http://localhost:8080/v1/branches/pr-q/schema", nil)
+	req.RemoteAddr = "127.0.0.1:9999"
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Databases []schemaDB `json:"databases"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Databases) != 2 {
+		t.Fatalf("databases = %d, want 2", len(resp.Databases))
+	}
+	app := resp.Databases[0]
+	if app.Name != "app" || len(app.Tables) != 2 || len(app.Tables[0].Columns) != 2 {
+		t.Errorf("grouping broken: %+v", app)
+	}
+	if !app.Tables[0].Columns[1].Nullable || app.Tables[0].Columns[0].Key != "PRI" {
+		t.Errorf("column attrs broken: %+v", app.Tables[0].Columns)
+	}
+}
+
+func TestQueryRejectsWrongContentType(t *testing.T) {
+	s := newQueryTestServer(t, "mysql", nil)
+	w := postQuery(s, `{"sql":"SELECT 1"}`, "text/plain", "", "localhost:8080")
+	if w.Code != 415 {
+		t.Errorf("text/plain should be 415, got %d", w.Code)
+	}
+}
+
+func TestQueryRejectsCrossOrigin(t *testing.T) {
+	s := newQueryTestServer(t, "mysql", nil)
+	w := postQuery(s, `{"sql":"SELECT 1"}`, "application/json", "https://evil.example", "localhost:8080")
+	if w.Code != 403 {
+		t.Errorf("cross-site Origin should be 403, got %d", w.Code)
+	}
+	// localhost Origin は許可(UI 自身の fetch)
+	w = postQuery(s, `{"sql":"SELECT 1"}`, "application/json", "http://localhost:8080", "localhost:8080")
+	if w.Code == 403 {
+		t.Errorf("localhost Origin should not be rejected, got %d", w.Code)
+	}
+}
+
+func TestQueryRejectsDNSRebindingHost(t *testing.T) {
+	s := newQueryTestServer(t, "mysql", nil)
+	// loopback 接続なのに Host が外部名 → DNS リバインディングの疑い
+	w := postQuery(s, `{"sql":"SELECT 1"}`, "application/json", "", "evil.example")
+	if w.Code != 403 {
+		t.Errorf("rebound Host should be 403, got %d", w.Code)
+	}
+}
+
+func TestQueryUnsupportedEngine(t *testing.T) {
+	s := newQueryTestServer(t, "postgres", nil) // openDB は本物の branchDB のまま
+	w := postQuery(s, `{"sql":"SELECT 1"}`, "application/json", "", "localhost:8080")
+	if w.Code != 501 {
+		t.Errorf("postgres engine should be 501, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestQueryInvalidBody(t *testing.T) {
+	s := newQueryTestServer(t, "mysql", nil)
+	w := postQuery(s, `{}`, "application/json", "", "localhost:8080")
+	if w.Code != 400 {
+		t.Errorf("empty sql should be 400, got %d", w.Code)
+	}
+}
+
+func TestQuerySchemaRequireAuthFromNonLoopback(t *testing.T) {
+	s := newQueryTestServer(t, "mysql", nil)
+	s.token = "secret"
+	for _, path := range []string{"/v1/branches/pr-q/schema", "/v1/branches/pr-q/query"} {
+		req := httptest.NewRequest("GET", "http://twig.internal"+path, nil)
+		req.RemoteAddr = "10.0.0.5:1234"
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, req)
+		if w.Code != 401 {
+			t.Errorf("%s without token should be 401, got %d", path, w.Code)
+		}
+	}
+}

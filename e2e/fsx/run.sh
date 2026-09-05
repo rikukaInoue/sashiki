@@ -20,7 +20,8 @@ log() { echo -e "\n=== $* ==="; }
 CLEANUP=()
 cleanup() {
   log "teardown"
-  for c in "${CLEANUP[@]}"; do eval "$c" || true; done
+  # 逆順で実行(SG は FSx/EC2 が消えて ENI が外れてから)
+  for ((i=${#CLEANUP[@]}-1; i>=0; i--)); do eval "${CLEANUP[$i]}" || true; done
 }
 trap cleanup EXIT
 
