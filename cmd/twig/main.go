@@ -39,6 +39,7 @@ func usage() int {
   twig connect <name>
   twig init   --pool <p> [--device <dev>] [--skip-packages] [--yes]
   twig baseline import|list
+  twig token create|list|revoke
   twig version
 `)
 	return exitUsage
@@ -66,6 +67,8 @@ func run(args []string) int {
 		return cmdInit(rest)
 	case "baseline":
 		return cmdBaseline(rest)
+	case "token":
+		return cmdToken(rest)
 	case "version":
 		fmt.Println("twig", version)
 		return exitOK

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,18 +18,24 @@ import (
 	"github.com/rikukaInoue/twig/internal/state"
 )
 
+// TokenChecker は Bearer トークンの検証(state.db の tokens テーブル)。
+type TokenChecker interface {
+	CheckTokenHash(hash string) (bool, error)
+}
+
 // Server は REST API サーバー。
 type Server struct {
 	mgr    *branch.Manager
 	domain string
 	user   string
-	token  string // 空なら外部トークン認証なし(localhost のみ想定)
+	token  string // 環境変数トークン(後方互換)。空なら無効
+	tokens TokenChecker
 	mux    *http.ServeMux
 }
 
-// New は Server を作る。
-func New(mgr *branch.Manager, domain, proxyUser, token string) *Server {
-	s := &Server{mgr: mgr, domain: domain, user: proxyUser, token: token, mux: http.NewServeMux()}
+// New は Server を作る。tokens は nil 可(env トークンのみ)。
+func New(mgr *branch.Manager, domain, proxyUser, token string, tokens TokenChecker) *Server {
+	s := &Server{mgr: mgr, domain: domain, user: proxyUser, token: token, tokens: tokens, mux: http.NewServeMux()}
 	s.mux.HandleFunc("GET /v1/branches", s.handleList)
 	s.mux.HandleFunc("POST /v1/branches", s.handleCreate)
 	s.mux.HandleFunc("GET /v1/branches/{name}", s.handleGet)
@@ -57,13 +64,24 @@ func (s *Server) authorized(r *http.Request) bool {
 			return true
 		}
 	}
-	if s.token == "" {
+	got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if got == "" {
 		return false
 	}
-	got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	gh := sha256.Sum256([]byte(got))
-	th := sha256.Sum256([]byte(s.token))
-	return subtle.ConstantTimeCompare(gh[:], th[:]) == 1
+	if s.token != "" {
+		th := sha256.Sum256([]byte(s.token))
+		if subtle.ConstantTimeCompare(gh[:], th[:]) == 1 {
+			return true
+		}
+	}
+	if s.tokens != nil {
+		ok, err := s.tokens.CheckTokenHash(hex.EncodeToString(gh[:]))
+		if err == nil && ok {
+			return true
+		}
+	}
+	return false
 }
 
 // --- handlers ---

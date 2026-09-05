@@ -253,3 +253,69 @@ func (d *DB) LastHookStatus(branch string) (map[string]string, error) {
 	}
 	return out, rows.Err()
 }
+
+// Token は tokens テーブルの 1 行。
+type Token struct {
+	Name       string
+	CreatedAt  time.Time
+	LastUsedAt *time.Time
+}
+
+// CreateToken はトークンのハッシュを保存する。同名は上書きしない。
+func (d *DB) CreateToken(name, hash string) error {
+	_, err := d.sql.Exec(
+		`INSERT INTO tokens (name, hash, created_at) VALUES (?, ?, ?)`,
+		name, hash, time.Now().UTC().Format(timeFmt))
+	return err
+}
+
+// RevokeToken は削除する。
+func (d *DB) RevokeToken(name string) error {
+	res, err := d.sql.Exec(`DELETE FROM tokens WHERE name = ?`, name)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ListTokens は一覧(ハッシュは返さない)。
+func (d *DB) ListTokens() ([]Token, error) {
+	rows, err := d.sql.Query(`SELECT name, created_at, last_used_at FROM tokens ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Token
+	for rows.Next() {
+		var t Token
+		var created string
+		var lastUsed sql.NullString
+		if err := rows.Scan(&t.Name, &created, &lastUsed); err != nil {
+			return nil, err
+		}
+		if ts, err := time.Parse(timeFmt, created); err == nil {
+			t.CreatedAt = ts
+		}
+		if lastUsed.Valid {
+			if ts, err := time.Parse(timeFmt, lastUsed.String); err == nil {
+				t.LastUsedAt = &ts
+			}
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// CheckTokenHash はハッシュが登録済みなら true を返し、last_used_at を更新する。
+func (d *DB) CheckTokenHash(hash string) (bool, error) {
+	res, err := d.sql.Exec(`UPDATE tokens SET last_used_at = ? WHERE hash = ?`,
+		time.Now().UTC().Format(timeFmt), hash)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
