@@ -1,7 +1,8 @@
 # twigd の設定。twig init が生成した初期値。詳細は README の設定リファレンス。
 listen:
-  api: "127.0.0.1:8080"
+  api: "127.0.0.1:8080"     # Web UI もここ (GET /)
   proxy: "0.0.0.0:3306"
+  metrics: "127.0.0.1:9100"
 
 state_db: /var/lib/twig/state.db
 domain: twig.internal

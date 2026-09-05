@@ -46,6 +46,7 @@ func New(mgr *branch.Manager, domain, proxyUser, token string, tokens TokenCheck
 	s.mux.HandleFunc("GET /v1/baseline", s.handleBaseline)
 	s.mux.HandleFunc("POST /v1/baseline/refresh", s.handleBaselineRefresh)
 	s.mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
+	s.mux.HandleFunc("GET /", s.handleWebUI)
 	return s
 }
 
