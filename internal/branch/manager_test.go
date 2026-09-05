@@ -523,3 +523,35 @@ func TestMemoryGuardRejectsCreate(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestReapSkipsBranchesWithActiveConnections(t *testing.T) {
+	eng := &mockEngine{}
+	m := newTestManagerCfg(t, &mockStorage{}, eng, "", func(c *Config) {
+		c.IdleStopAfter = time.Nanosecond
+		c.DeleteAfterIdle = time.Millisecond
+	})
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	// 長寿命接続が 1 本張られている状態
+	m.SetActiveConns(func(name string) int { return 1 })
+	time.Sleep(5 * time.Millisecond)
+	if err := m.Reap(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	info, err := m.Get(context.Background(), "pr-1")
+	if err != nil {
+		t.Fatalf("branch should survive while connected: %v", err)
+	}
+	if info.State != state.StateRunning {
+		t.Errorf("state = %s, want running (in use)", info.State)
+	}
+	// 接続が切れたら回収される
+	m.SetActiveConns(func(name string) int { return 0 })
+	if err := m.Reap(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Get(context.Background(), "pr-1"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("should be reaped after disconnect: %v", err)
+	}
+}

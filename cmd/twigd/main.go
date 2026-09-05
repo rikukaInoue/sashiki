@@ -90,6 +90,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("proxy: %v", err)
 		}
+		mgr.SetActiveConns(px.ActiveConns)
 		go func() {
 			if err := px.Listen(ctx); err != nil {
 				log.Fatalf("proxy: %v", err)

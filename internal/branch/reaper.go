@@ -42,6 +42,11 @@ func (m *Manager) Reap(ctx context.Context) error {
 	}
 	now := time.Now()
 	for _, b := range branches {
+		// 長寿命接続を張ったままのブランチは last_conn_at が進まないため、
+		// 現在の接続数を見て使用中なら停止・削除の対象から外す。
+		if m.activeConns(b.Name) > 0 {
+			continue
+		}
 		activity := b.CreatedAt
 		if b.LastConnAt != nil && b.LastConnAt.After(activity) {
 			activity = *b.LastConnAt

@@ -100,6 +100,13 @@ func (s *Server) acquire(branch string) bool {
 	return true
 }
 
+// ActiveConns はブランチの現在の素通し接続数を返す(リーパーの使用中判定用)。
+func (s *Server) ActiveConns(branch string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.conns[branch]
+}
+
 func (s *Server) release(branch string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

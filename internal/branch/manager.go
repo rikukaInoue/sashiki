@@ -48,6 +48,11 @@ type Config struct {
 	IdleStopAfter   time.Duration // 0 = アイドル停止しない
 	DeleteAfterIdle time.Duration // 0 = 自動削除しない
 
+	// ActiveConns はブランチの現在の接続数(プロキシが提供)。nil なら常に 0 扱い。
+	// last_conn_at は接続開始時刻しか進まないため、長寿命接続を張ったまま
+	// 使用中のブランチをリーパーが停止・削除しないための判定に使う。
+	ActiveConns func(name string) int
+
 	// メモリガード: create 時に空きメモリを確認する。AvailableMem が nil なら無効。
 	// OOM killer は新しいブランチではなく既存の無関係な mysqld を殺す(PoC 実測)ため、
 	// 事後の監視ではなく事前の拒否で守る。
@@ -303,6 +308,19 @@ func (m *Manager) Delete(ctx context.Context, name string) error {
 	}
 	// 非同期バックエンドでは deleting のまま残し、回収ループが Poll する(v1.0)。
 	return nil
+}
+
+// SetActiveConns は接続数の参照先を設定する(プロキシは Manager に依存する
+// ため、twigd がプロキシ起動後に配線する)。
+func (m *Manager) SetActiveConns(fn func(name string) int) {
+	m.cfg.ActiveConns = fn
+}
+
+func (m *Manager) activeConns(name string) int {
+	if m.cfg.ActiveConns == nil {
+		return 0
+	}
+	return m.cfg.ActiveConns(name)
 }
 
 // RouteBranch はプロキシ用: ブランチのポートを返す。
