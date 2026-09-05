@@ -47,7 +47,7 @@ func (s fakeStmt) Query([]driver.Value) (driver.Rows, error) { return s.rows(), 
 
 type fakeConn struct{ rows func() *fakeRows }
 
-func (c fakeConn) Prepare(string) (driver.Stmt, error) { return fakeStmt{rows: c.rows}, nil }
+func (c fakeConn) Prepare(string) (driver.Stmt, error) { return fakeStmt(c), nil }
 func (c fakeConn) Close() error                        { return nil }
 func (c fakeConn) Begin() (driver.Tx, error)           { return nil, errors.New("tx not supported") }
 
@@ -58,7 +58,7 @@ func (fakeDriver) Open(string) (driver.Conn, error) { return nil, errors.New("us
 type fakeConnector struct{ rows func() *fakeRows }
 
 func (c fakeConnector) Connect(context.Context) (driver.Conn, error) {
-	return fakeConn{rows: c.rows}, nil
+	return fakeConn(c), nil
 }
 func (c fakeConnector) Driver() driver.Driver { return fakeDriver{} }
 
