@@ -22,6 +22,8 @@ type mockStorage struct {
 	caps             storage.Capabilities
 	renamed          []string
 	baselinesDeleted []string
+	poolUsed         int64
+	poolTotal        int64
 	cloned           []string
 	snapshots        []string
 	rollbacks        []string
@@ -89,6 +91,14 @@ func (m *mockStorage) CurrentBaseline() storage.SnapshotRef { return "pool/base@
 func (m *mockStorage) DeleteBaselineSnapshot(ctx context.Context, snap storage.SnapshotRef) error {
 	m.baselinesDeleted = append(m.baselinesDeleted, string(snap))
 	return nil
+}
+
+func (m *mockStorage) PoolCapacity(ctx context.Context) (int64, int64, error) {
+	return m.poolUsed, m.poolTotal, nil
+}
+
+func (m *mockStorage) LogicalBytes(ctx context.Context, vol storage.Volume) (int64, error) {
+	return 500 * 1024 * 1024 * 1024, nil // 論理 500GiB(CoW: private とは別)
 }
 
 type mockEngine struct {
@@ -875,5 +885,57 @@ func TestWakeChecksAdmission(t *testing.T) {
 	m.cfg.AvailableMem = func() (int64, error) { return 100 * 1024 * 1024, nil }
 	if _, err := m.Wake(context.Background(), "pr-1"); !errors.Is(err, ErrLimitReached) {
 		t.Errorf("wake should check admission: %v", err)
+	}
+}
+
+func TestAdmitStorageRejectsAboveCriticalWatermark(t *testing.T) {
+	st := &mockStorage{poolUsed: 95, poolTotal: 100} // 95%
+	m := newTestManagerCfg(t, st, &mockEngine{}, "", func(c *Config) {
+		c.CriticalWatermark = 0.9
+	})
+	if _, err := m.Create(context.Background(), "pr-1", 0); !errors.Is(err, ErrLimitReached) {
+		t.Errorf("err = %v, want ErrLimitReached (storage)", err)
+	}
+	if err := (func() error { _, e := m.Create(context.Background(), "pr-2", 0); return e })(); err != nil && !strings.Contains(err.Error(), "storage") {
+		t.Errorf("error should mention storage: %v", err)
+	}
+	// 使用率を下げれば通る
+	st.poolUsed = 50
+	if _, err := m.Create(context.Background(), "pr-ok", 0); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCapacityReportsPoolAndPorts(t *testing.T) {
+	st := &mockStorage{poolUsed: 30, poolTotal: 100}
+	m := newTestManagerCfg(t, st, &mockEngine{}, "", func(c *Config) {
+		c.HighWatermark = 0.8
+		c.CriticalWatermark = 0.95
+	})
+	_, _ = m.Create(context.Background(), "pr-1", 0)
+	cap, err := m.Capacity(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cap.PoolUsedRatio != 0.3 {
+		t.Errorf("pool ratio = %v, want 0.3", cap.PoolUsedRatio)
+	}
+	if cap.PortsUsed != 1 {
+		t.Errorf("ports used = %d, want 1", cap.PortsUsed)
+	}
+	if cap.Running != 1 {
+		t.Errorf("running = %d", cap.Running)
+	}
+}
+
+func TestInfoReportsLogicalAndPrivate(t *testing.T) {
+	st := &mockStorage{}
+	m := newTestManager(t, st, &mockEngine{}, "")
+	info, err := m.Create(context.Background(), "pr-1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.LogicalBytes <= info.UsedBytes {
+		t.Errorf("logical (%d) should exceed private (%d) for CoW clone", info.LogicalBytes, info.UsedBytes)
 	}
 }

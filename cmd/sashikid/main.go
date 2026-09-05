@@ -120,6 +120,8 @@ func main() {
 		MemoryHeadroomBytes: parseSize(cfg.Engine.Mysql.MemoryHeadroom),
 		BufferPoolBytes:     parseSize(cfg.Engine.Mysql.BufferPoolSize),
 		MaxRunning:          cfg.Engine.Mysql.MaxRunning,
+		HighWatermark:       cfg.Storage.HighWatermark,
+		CriticalWatermark:   cfg.Storage.CriticalWatermark,
 	}, st, bp, eng, hr, db)
 	if err != nil {
 		log.Fatalf("manager: %v", err)

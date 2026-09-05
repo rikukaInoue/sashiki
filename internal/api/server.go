@@ -77,6 +77,7 @@ func New(mgr *workspace.Manager, domain, engineType, proxyUser, proxyPass, token
 	s.mux.HandleFunc("GET /v1/baselines", s.handleListBaselines)
 	s.mux.HandleFunc("POST /v1/baseline/set", s.handleSetBaseline)
 	s.mux.HandleFunc("POST /v1/baseline/gc", s.handleGCBaselines)
+	s.mux.HandleFunc("GET /v1/capacity", s.handleCapacity)
 	s.mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /", s.handleWebUI)
 	return s
@@ -203,6 +204,26 @@ func (s *Server) handleGCBaselines(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": res.Deleted, "kept": res.Kept})
+}
+
+func (s *Server) handleCapacity(w http.ResponseWriter, r *http.Request) {
+	c, err := s.mgr.Capacity(r.Context())
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"storage": map[string]any{
+			"pool_used_bytes":    c.PoolUsedBytes,
+			"pool_total_bytes":   c.PoolTotalBytes,
+			"pool_used_ratio":    c.PoolUsedRatio,
+			"high_watermark":     c.HighWatermark,
+			"critical_watermark": c.CritWatermark,
+		},
+		"ports":    map[string]any{"used": c.PortsUsed, "total": c.PortsTotal},
+		"memory":   map[string]any{"available_bytes": c.MemAvailableBytes, "expected_rss_bytes": c.ExpectedRSSBytes},
+		"branches": map[string]any{"running": c.Running, "max_running": c.MaxRunning, "max_branches": c.MaxBranches},
+	})
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
@@ -417,6 +438,7 @@ type branchJSON struct {
 	CreatedAt      string            `json:"created_at"`
 	LastConnAt     *string           `json:"last_conn_at,omitempty"`
 	UsedBytes      int64             `json:"used_bytes"`
+	LogicalBytes   int64             `json:"logical_bytes,omitempty"`
 	HookStatus     map[string]string `json:"hook_status,omitempty"`
 	Error          string            `json:"error,omitempty"`
 	FailedOp       string            `json:"failed_operation,omitempty"`
@@ -440,6 +462,7 @@ func (s *Server) toJSON(i workspace.Info) branchJSON {
 		OriginSnapshot: i.OriginSnapshot,
 		CreatedAt:      i.CreatedAt.UTC().Format(time.RFC3339),
 		UsedBytes:      i.UsedBytes,
+		LogicalBytes:   i.LogicalBytes,
 		HookStatus:     i.HookStatus,
 		Error:          i.ErrorMessage,
 		FailedOp:       i.FailedOp,

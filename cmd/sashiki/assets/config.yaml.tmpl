@@ -9,6 +9,8 @@ domain: sashiki.internal
 
 storage:
   backend: ebs-zfs
+  high_watermark: 0.8        # pool使用率がこれを超えるとwarning(メトリクス)
+  critical_watermark: 0.95   # これを超えるとcreate/wake/recreateを拒否
   ebs-zfs:
     pool: {{.Pool}}
     base_dataset: {{.Pool}}/base

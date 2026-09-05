@@ -74,5 +74,16 @@ type Renamer interface {
 	Rename(ctx context.Context, vol Volume, newName string) (Volume, error)
 }
 
+// CapacityReporter は pool の使用量を報告できるバックエンド(watermark 用)。
+type CapacityReporter interface {
+	PoolCapacity(ctx context.Context) (used, total int64, err error)
+}
+
+// LogicalSizer は volume の logical(referenced)サイズを報告できるバックエンド。
+// CoW では Logical(482GiB)と Private delta(18MiB)が大きく乖離する(仕様 14-4)。
+type LogicalSizer interface {
+	LogicalBytes(ctx context.Context, vol Volume) (int64, error)
+}
+
 // NopSnapshot は SnapshotInit を持たないバックエンドが返す番兵値。
 const NopSnapshot SnapshotRef = ""

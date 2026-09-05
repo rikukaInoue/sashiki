@@ -44,6 +44,7 @@ func usage() int {
   sashiki baseline import|list
   sashiki token create|list|revoke
   sashiki op list | show <id> | wait <id>
+  sashiki capacity
   sashiki version
 `)
 	return exitUsage
@@ -81,6 +82,8 @@ func run(args []string) int {
 		return cmdToken(rest)
 	case "op":
 		return cmdOp(rest)
+	case "capacity":
+		return cmdCapacity(rest)
 	case "version":
 		fmt.Println("sashiki", version)
 		return exitOK
@@ -165,19 +168,20 @@ func statusToExit(code int) int {
 }
 
 type branchView struct {
-	Name        string   `json:"name"`
-	State       string   `json:"state"`
-	Port        int      `json:"port"`
-	Host        string   `json:"host"`
-	User        string   `json:"user"`
-	CreatedAt   string   `json:"created_at"`
-	LastConnAt  *string  `json:"last_conn_at"`
-	UsedBytes   int64    `json:"used_bytes"`
-	Error       string   `json:"error"`
-	FailedOp    string   `json:"failed_operation"`
-	ErrorCode   string   `json:"error_code"`
-	Recoverable bool     `json:"recoverable"`
-	Suggestions []string `json:"suggested_actions"`
+	Name         string   `json:"name"`
+	State        string   `json:"state"`
+	Port         int      `json:"port"`
+	Host         string   `json:"host"`
+	User         string   `json:"user"`
+	CreatedAt    string   `json:"created_at"`
+	LastConnAt   *string  `json:"last_conn_at"`
+	UsedBytes    int64    `json:"used_bytes"`
+	LogicalBytes int64    `json:"logical_bytes"`
+	Error        string   `json:"error"`
+	FailedOp     string   `json:"failed_operation"`
+	ErrorCode    string   `json:"error_code"`
+	Recoverable  bool     `json:"recoverable"`
+	Suggestions  []string `json:"suggested_actions"`
 }
 
 // --- commands ---
@@ -344,8 +348,8 @@ func cmdShow(args []string) int {
 	}
 	var b branchView
 	_ = json.Unmarshal(data, &b)
-	fmt.Printf("name:  %s\nstate: %s\nport:  %d\nuser:  %s\nused:  %s\n",
-		b.Name, b.State, b.Port, b.User, humanBytes(b.UsedBytes))
+	fmt.Printf("name:    %s\nstate:   %s\nport:    %d\nuser:    %s\nprivate: %s (CoW差分)\nlogical: %s\n",
+		b.Name, b.State, b.Port, b.User, humanBytes(b.UsedBytes), humanBytes(b.LogicalBytes))
 	if b.Error != "" {
 		fmt.Printf("error: %s\n", b.Error)
 		if b.ErrorCode != "" {

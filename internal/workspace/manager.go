@@ -61,6 +61,11 @@ type Config struct {
 	MemoryHeadroomBytes int64 // 0 なら ExpectedRSS を headroom に使う
 	BufferPoolBytes     int64
 	MaxRunning          int // 同時稼働 mysqld 数の上限(volume 数の MaxBranches とは別)
+
+	// storage watermark(仕様 14-2): pool 使用率が critical を超えたら
+	// create/wake/recreate を拒否。high は warning(メトリクス)。
+	HighWatermark     float64 // 0.0-1.0(0=無効)
+	CriticalWatermark float64
 }
 
 // Manager はブランチライフサイクルの実装。
@@ -118,8 +123,9 @@ func (m *Manager) lock(name string) func() {
 // Info は API に返すブランチ情報。
 type Info struct {
 	state.Branch
-	UsedBytes  int64
-	HookStatus map[string]string
+	UsedBytes    int64 // Private delta(zfs used)。CoW 差分
+	LogicalBytes int64 // Logical(zfs referenced)
+	HookStatus   map[string]string
 }
 
 func (m *Manager) instance(b state.Branch, vol storage.Volume) engine.Instance {
@@ -195,6 +201,9 @@ func (m *Manager) CreateWithMeta(ctx context.Context, name string, port int, met
 		return Info{}, err
 	}
 	if err := m.admitMemory("create"); err != nil {
+		return Info{}, err
+	}
+	if err := m.admitStorage(ctx, "create"); err != nil {
 		return Info{}, err
 	}
 
@@ -324,6 +333,9 @@ func (m *Manager) recreateFrom(ctx context.Context, b state.Branch, origin stora
 	// recreate は新 mysqld を起動する。旧は Kill されるので純増ではないが、
 	// 一時的に新旧が並ぶため admission を確認する。
 	if err := m.admitMemory("recreate"); err != nil {
+		return Info{}, err
+	}
+	if err := m.admitStorage(ctx, "recreate"); err != nil {
 		return Info{}, err
 	}
 	if err := m.db.SetState(b.Name, state.StateResetting, ""); err != nil {
@@ -612,6 +624,9 @@ func (m *Manager) Wake(ctx context.Context, name string) (Info, error) {
 		if err := m.admitMemory("wake"); err != nil {
 			return Info{}, err
 		}
+		if err := m.admitStorage(ctx, "wake"); err != nil {
+			return Info{}, err
+		}
 	}
 	vol, err := m.resolveVolume(ctx, b)
 	if err != nil {
@@ -705,6 +720,11 @@ func (m *Manager) info(ctx context.Context, name string) (Info, error) {
 	if vol, err := m.resolveVolume(ctx, b); err == nil {
 		if used, err := m.st.UsedBytes(ctx, vol); err == nil {
 			info.UsedBytes = used
+		}
+		if ls, ok := m.st.(storage.LogicalSizer); ok {
+			if logical, err := ls.LogicalBytes(ctx, vol); err == nil {
+				info.LogicalBytes = logical
+			}
 		}
 	}
 	if hs, err := m.db.LastHookStatus(name); err == nil && len(hs) > 0 {
