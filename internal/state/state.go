@@ -319,3 +319,32 @@ func (d *DB) CheckTokenHash(hash string) (bool, error) {
 	n, _ := res.RowsAffected()
 	return n > 0, nil
 }
+
+// SetCurrentBaseline は snapshot を登録して current に切り替える。
+func (d *DB) SetCurrentBaseline(snapshot string) error {
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`UPDATE baselines SET is_current = 0`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO baselines (snapshot, created_at, is_current) VALUES (?, ?, 1)
+		 ON CONFLICT(snapshot) DO UPDATE SET is_current = 1`,
+		snapshot, time.Now().UTC().Format(timeFmt)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// CurrentBaselineOverride は DB に記録された current baseline を返す(無ければ false)。
+func (d *DB) CurrentBaselineOverride() (string, bool) {
+	var snap string
+	err := d.sql.QueryRow(`SELECT snapshot FROM baselines WHERE is_current = 1`).Scan(&snap)
+	if err != nil {
+		return "", false
+	}
+	return snap, true
+}
