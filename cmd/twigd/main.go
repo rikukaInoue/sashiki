@@ -18,9 +18,12 @@ import (
 	storagezfs "github.com/rikukaInoue/twig/internal/storage/zfs"
 )
 
+var version = "dev" // -ldflags で埋め込む
+
 func main() {
 	configPath := flag.String("config", "/etc/twig/config.yaml", "path to config.yaml")
 	flag.Parse()
+	log.Printf("twigd %s", version)
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
