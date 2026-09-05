@@ -1,7 +1,7 @@
 // twig baseline: ベースライン管理。
 // import はローカル root 操作(twigd 不要): base の mysqld を初期化 →
 // ダンプ投入 → 接続ユーザー作成 → 正常終了 → @baseline snapshot。
-// 「スナップショットは必ず正常終了状態で撮る」不変条件はここで守られる。
+// 「スナップショットは必ず正常終了状態でのみ取得する」不変条件はここで守られる。
 package main
 
 import (
@@ -97,7 +97,7 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 
 	// 既存 @baseline があれば失敗(上書きは派生ブランチを壊すため refresh フローで扱う)
 	if err := exec.Command("zfs", "list", snap).Run(); err == nil {
-		return fmt.Errorf("snapshot %s は既に存在します。撮り直しは baseline refresh (issue #10) で対応予定", snap)
+		return fmt.Errorf("snapshot %s は既に存在します。取得し直しは baseline refresh (issue #10) で対応予定", snap)
 	}
 
 	mountOut, err := exec.Command("zfs", "get", "-H", "-o", "value", "mountpoint", base).Output()

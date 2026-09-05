@@ -97,7 +97,7 @@ func (b *Backend) ResolveVolume(ctx context.Context, name string) (storage.Volum
 	return storage.Volume{Name: name, Dataset: ds, Path: mp}, nil
 }
 
-// SnapshotInit は clone 直後(mysqld 起動前)に @init を撮る。
+// SnapshotInit は clone 直後(mysqld 起動前)に @init を取得する。
 func (b *Backend) SnapshotInit(ctx context.Context, vol storage.Volume) (storage.SnapshotRef, error) {
 	snap := vol.Dataset + "@init"
 	if _, err := b.run(ctx, "snapshot", snap); err != nil {
@@ -126,7 +126,7 @@ func (b *Backend) Poll(ctx context.Context, job storage.JobID) (storage.JobStatu
 	return storage.JobCompleted, nil
 }
 
-// SnapshotBase は base から新しいベースライン snapshot を撮る。
+// SnapshotBase は base から新しいベースライン snapshot を取得する。
 func (b *Backend) SnapshotBase(ctx context.Context, tag string) (storage.SnapshotRef, error) {
 	snap := b.cfg.BaseDataset + "@" + tag
 	if _, err := b.run(ctx, "snapshot", snap); err != nil {

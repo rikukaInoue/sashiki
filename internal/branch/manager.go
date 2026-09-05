@@ -128,7 +128,7 @@ func (m *Manager) allocPort(requested int) (int, error) {
 //
 // hook がある場合の順序: clone → 起動 → ready → on-create → 正常終了 →
 // @init snapshot → 再起動。hook の結果(マイグレーション適用済み)を
-// reset の戻り先にしつつ、@init を必ずクリーンな状態で撮るため。
+// reset の戻り先にしつつ、@init を必ずクリーンな状態でのみ取得するため。
 // hook がない場合: clone → @init snapshot → 起動(最速経路)。
 func (m *Manager) Create(ctx context.Context, name string, port int) (Info, error) {
 	if !m.nameRe.MatchString(name) {
@@ -179,7 +179,7 @@ func (m *Manager) Create(ctx context.Context, name string, port int) (Info, erro
 		if err := m.runHook(ctx, hooks.OnCreate, b, vol); err != nil {
 			return fail(err)
 		}
-		// @init は必ず正常終了状態で撮る(クラッシュリカバリ防止)。
+		// @init は必ず正常終了状態でのみ取得する(クラッシュリカバリ防止)。
 		if err := m.eng.Stop(ctx, ins); err != nil {
 			return fail(fmt.Errorf("engine stop before @init: %w", err))
 		}
