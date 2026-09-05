@@ -24,6 +24,16 @@ engine:
     proxy_pass: dev
     env_dir: /etc/twig
     sudo: false
+  # postgres を使う場合(接続はプロキシでなく直接ポート、twig show <name> で確認):
+  #   - listen.proxy: "" にする(プロキシは MySQL 専用)
+  #   - idle_stop_after / delete_after_idle は接続追跡ができないため自動で無効化される
+  #   - リモート接続には listen_addresses を広げ、base の pg_hba.conf に host 行が必要
+  # postgres:
+  #   port_range: [5433, 5632]
+  #   bin_dir: /usr/lib/postgresql/16/bin
+  #   env_dir: /etc/twig
+  #   listen_addresses: 127.0.0.1
+  #   sudo: false
 
 branches:
   name_pattern: "^[a-z0-9-]{1,32}$"

@@ -14,7 +14,9 @@ import (
 	"github.com/rikukaInoue/twig/internal/api"
 	"github.com/rikukaInoue/twig/internal/branch"
 	"github.com/rikukaInoue/twig/internal/config"
+	"github.com/rikukaInoue/twig/internal/engine"
 	enginemysql "github.com/rikukaInoue/twig/internal/engine/mysql"
+	enginepostgres "github.com/rikukaInoue/twig/internal/engine/postgres"
 	"github.com/rikukaInoue/twig/internal/hooks"
 	"github.com/rikukaInoue/twig/internal/proxy"
 	"github.com/rikukaInoue/twig/internal/state"
@@ -73,20 +75,39 @@ func main() {
 		st, bp = zbe, zbe
 	}
 
-	eng := enginemysql.New(enginemysql.Config{
-		EnvDir:    cfg.Engine.Mysql.EnvDir,
-		ProxyUser: cfg.Engine.Mysql.ProxyUser,
-		ProxyPass: cfg.Engine.Mysql.ProxyPass,
-		Sudo:      cfg.Engine.Mysql.Sudo,
-	})
+	var eng engine.Engine
+	switch cfg.Engine.Type {
+	case "postgres":
+		eng = enginepostgres.New(enginepostgres.Config{
+			EnvDir:          cfg.Engine.Postgres.EnvDir,
+			BinDir:          cfg.Engine.Postgres.BinDir,
+			ListenAddresses: cfg.Engine.Postgres.ListenAddresses,
+			Sudo:            cfg.Engine.Postgres.Sudo,
+		})
+		// postgres はプロキシを通らないため last_conn_at が更新されず、
+		// リーパーが使用中ブランチを「アイドル」と誤判定して停止・削除してしまう。
+		// 接続追跡ができるようになるまでアイドル回収は無効化する。
+		if cfg.Branches.IdleStopAfter > 0 || cfg.Branches.DeleteAfterIdle > 0 {
+			log.Printf("twigd: engine=postgres では接続追跡ができないため idle_stop_after / delete_after_idle を無効化します")
+			cfg.Branches.IdleStopAfter = 0
+			cfg.Branches.DeleteAfterIdle = 0
+		}
+	default:
+		eng = enginemysql.New(enginemysql.Config{
+			EnvDir:    cfg.Engine.Mysql.EnvDir,
+			ProxyUser: cfg.Engine.Mysql.ProxyUser,
+			ProxyPass: cfg.Engine.Mysql.ProxyPass,
+			Sudo:      cfg.Engine.Mysql.Sudo,
+		})
+	}
 
 	hr := hooks.NewRunner(cfg.Hooks.Dir, cfg.Hooks.LogDir, cfg.Hooks.Timeout)
 
 	mgr, err := branch.New(branch.Config{
 		NamePattern:     cfg.Branches.NamePattern,
 		MaxBranches:     cfg.Branches.MaxBranches,
-		PortLow:         cfg.Engine.Mysql.PortRange[0],
-		PortHigh:        cfg.Engine.Mysql.PortRange[1],
+		PortLow:         cfg.PortRange()[0],
+		PortHigh:        cfg.PortRange()[1],
 		EngineType:      cfg.Engine.Type,
 		StateDir:        "/var/lib/twig/branches",
 		LazyCreate:      cfg.Branches.LazyCreate,
@@ -120,7 +141,10 @@ func main() {
 		}()
 	}
 
-	if cfg.Listen.Proxy != "" {
+	if cfg.Listen.Proxy != "" && cfg.Engine.Type != "mysql" {
+		log.Printf("twigd: プロキシは MySQL 専用のため engine=%s では起動しません(警告を消すには listen.proxy: \"\")", cfg.Engine.Type)
+	}
+	if cfg.Listen.Proxy != "" && cfg.Engine.Type == "mysql" {
 		px, err := proxy.New(proxy.Config{
 			Listen:           cfg.Listen.Proxy,
 			NamePattern:      cfg.Branches.NamePattern,
