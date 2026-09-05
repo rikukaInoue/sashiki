@@ -114,7 +114,7 @@ func call(method, path string, body any) (int, []byte, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(resp.Body)
 	return resp.StatusCode, data, err
 }
@@ -264,15 +264,15 @@ func cmdList(args []string) int {
 	}
 	_ = json.Unmarshal(data, &resp)
 	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tPORT\tSTATE\tLAST_CONN\tUSED")
+	_, _ = fmt.Fprintln(tw, "NAME\tPORT\tSTATE\tLAST_CONN\tUSED")
 	for _, b := range resp.Branches {
 		last := "-"
 		if b.LastConnAt != nil {
 			last = *b.LastConnAt
 		}
-		fmt.Fprintf(tw, "%s\t%d\t%s\t%s\t%s\n", b.Name, b.Port, b.State, last, humanBytes(b.UsedBytes))
+		_, _ = fmt.Fprintf(tw, "%s\t%d\t%s\t%s\t%s\n", b.Name, b.Port, b.State, last, humanBytes(b.UsedBytes))
 	}
-	tw.Flush()
+	_ = tw.Flush()
 	return exitOK
 }
 

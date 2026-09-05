@@ -108,7 +108,7 @@ func newTestManager(t *testing.T, st *mockStorage, eng *mockEngine, hooksDir str
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 	var hr *hooks.Runner
 	if hooksDir != "" {
 		hr = hooks.NewRunner(hooksDir, t.TempDir(), time.Minute)

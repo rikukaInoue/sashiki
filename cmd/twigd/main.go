@@ -31,7 +31,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("state db: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	zbe := storagezfs.New(storagezfs.Config{
 		Pool:             cfg.Storage.Zfs.Pool,
