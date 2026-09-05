@@ -176,7 +176,7 @@ func (m *Manager) Create(ctx context.Context, name string, port int) (Info, erro
 		return Info{}, err
 	}
 
-	origin := m.baseline.CurrentBaseline()
+	origin := m.currentBaseline()
 	if err := m.db.CreateBranch(name, p, string(origin)); err != nil {
 		return Info{}, err
 	}
@@ -425,13 +425,21 @@ type BaselineInfo struct {
 	Snapshots []string
 }
 
+// currentBaseline は DB の切り替え記録を優先し、無ければバックエンド既定を使う。
+func (m *Manager) currentBaseline() storage.SnapshotRef {
+	if snap, ok := m.db.CurrentBaselineOverride(); ok {
+		return storage.SnapshotRef(snap)
+	}
+	return m.baseline.CurrentBaseline()
+}
+
 // Baseline はベースライン情報を返す(API GET /baseline 用)。
 func (m *Manager) Baseline(ctx context.Context) (BaselineInfo, error) {
 	snaps, err := m.st.ListSnapshots(ctx)
 	if err != nil {
 		return BaselineInfo{}, err
 	}
-	info := BaselineInfo{Current: string(m.baseline.CurrentBaseline())}
+	info := BaselineInfo{Current: string(m.currentBaseline())}
 	for _, s := range snaps {
 		info.Snapshots = append(info.Snapshots, string(s))
 	}
