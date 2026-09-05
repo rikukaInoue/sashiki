@@ -5,6 +5,8 @@
 # 責務: base の mysqld を起動 → 最新データ投入(PII はここでマスク) →
 #       main の最新マイグレーション適用 → mysqld を正常終了。
 # snapshot の取得と current の切り替えは twigd 側が行う(スクリプトはやらない)。
+# twigd は snapshot 取得前に base の datadir を掴むプロセスが残っていないことを
+# 検証し、残っていれば SIGTERM で回収してから進む(exit 0 は信用しない)。
 #
 # 環境変数: TWIG_BASELINE_TAG (例: baseline-20260905T120000Z)
 set -euo pipefail

@@ -69,6 +69,11 @@ func (b *Backend) branchDataset(name string) string {
 	return b.cfg.BranchParent + "/" + name
 }
 
+// BasePath は base データセットのマウントポイント(quiesce チェック用)。
+func (b *Backend) BasePath(ctx context.Context) (string, error) {
+	return b.run(ctx, "get", "-H", "-o", "value", "mountpoint", b.cfg.BaseDataset)
+}
+
 // CurrentBaseline は現在のベースライン snapshot の完全修飾名。
 func (b *Backend) CurrentBaseline() storage.SnapshotRef {
 	return storage.SnapshotRef(b.cfg.BaseDataset + "@" + b.cfg.BaselineSnapshot)

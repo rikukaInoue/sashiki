@@ -103,9 +103,10 @@ func (s *Server) handleBaseline(w http.ResponseWriter, r *http.Request) {
 		info.Snapshots = []string{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"current":    info.Current,
-		"snapshots":  info.Snapshots,
-		"refreshing": branch.RefreshInProgress(),
+		"current":            info.Current,
+		"snapshots":          info.Snapshots,
+		"refreshing":         branch.RefreshInProgress(),
+		"last_refresh_error": branch.RefreshLastError(),
 	})
 }
 
