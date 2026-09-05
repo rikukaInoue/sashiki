@@ -1,0 +1,11 @@
+# twig E2E 用の Lima VM 定義。Colima ユーザーも `limactl` が入っていればこれで動く。
+#   limactl start --name=twig-e2e ./e2e/lima.yaml --yes
+images:
+  - location: "https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-arm64.img"
+    arch: "aarch64"
+  - location: "https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-amd64.img"
+    arch: "x86_64"
+cpus: 2
+memory: "3GiB"
+disk: "12GiB"
+mounts: []

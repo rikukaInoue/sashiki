@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# on-create フックの例: PR ブランチのマイグレーションを適用する。
+# /etc/twig/hooks/on-create.sh に置いて実行権限を付けると有効になる。
+# 受け取る環境変数は docs/DECISIONS.md と README を参照。
+set -euo pipefail
+
+echo "branch=${TWIG_BRANCH} port=${TWIG_PORT} socket=${TWIG_SOCKET}"
+
+# 例: PR 番号から Git ブランチを引いてマイグレーションを流す
+# PR="${TWIG_BRANCH#pr-}"
+# WORK="${TWIG_STATE_DIR}/repo"
+# mkdir -p "$TWIG_STATE_DIR"
+# git clone --depth 1 --branch "refs/pull/${PR}/head" git@github.com:yourorg/app.git "$WORK"
+# DATABASE_URL="mysql://root@localhost/app?socket=${TWIG_SOCKET}" "$WORK/bin/migrate" up

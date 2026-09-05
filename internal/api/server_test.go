@@ -1,0 +1,171 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/rikukaInoue/twig/internal/branch"
+	"github.com/rikukaInoue/twig/internal/engine"
+	"github.com/rikukaInoue/twig/internal/state"
+	"github.com/rikukaInoue/twig/internal/storage"
+)
+
+type fakeStorage struct{}
+
+func (fakeStorage) Capabilities() storage.Capabilities {
+	return storage.Capabilities{FastRollback: true}
+}
+func (fakeStorage) Clone(ctx context.Context, b storage.SnapshotRef, name string) (storage.Volume, error) {
+	return storage.Volume{Name: name, Dataset: "p/b/" + name, Path: "/p/b/" + name}, nil
+}
+func (fakeStorage) SnapshotInit(ctx context.Context, v storage.Volume) (storage.SnapshotRef, error) {
+	return storage.SnapshotRef(v.Dataset + "@init"), nil
+}
+func (fakeStorage) Rollback(ctx context.Context, v storage.Volume, s storage.SnapshotRef) error {
+	return nil
+}
+func (fakeStorage) DeleteAsync(ctx context.Context, v storage.Volume) (storage.JobID, error) {
+	return "done", nil
+}
+func (fakeStorage) Poll(ctx context.Context, j storage.JobID) (storage.JobStatus, error) {
+	return storage.JobCompleted, nil
+}
+func (fakeStorage) SnapshotBase(ctx context.Context, tag string) (storage.SnapshotRef, error) {
+	return "", nil
+}
+func (fakeStorage) ListSnapshots(ctx context.Context) ([]storage.SnapshotRef, error) {
+	return nil, nil
+}
+func (fakeStorage) UsedBytes(ctx context.Context, v storage.Volume) (int64, error) { return 42, nil }
+func (fakeStorage) CurrentBaseline() storage.SnapshotRef                           { return "p/base@baseline" }
+
+type fakeEngine struct{}
+
+func (fakeEngine) Start(ctx context.Context, i engine.Instance) error     { return nil }
+func (fakeEngine) Stop(ctx context.Context, i engine.Instance) error      { return nil }
+func (fakeEngine) WaitReady(ctx context.Context, i engine.Instance) error { return nil }
+func (fakeEngine) IsRunning(ctx context.Context, i engine.Instance) (bool, error) {
+	return true, nil
+}
+
+func newTestServer(t *testing.T, token string) *httptest.Server {
+	t.Helper()
+	db, err := state.Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	fs := fakeStorage{}
+	mgr, err := branch.New(branch.Config{
+		NamePattern: `^[a-z0-9-]{1,32}$`, MaxBranches: 10,
+		PortLow: 3401, PortHigh: 3410, EngineType: "mysql", StateDir: t.TempDir(),
+	}, fs, fs, fakeEngine{}, nil, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(New(mgr, "twig.internal", "dev", token))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestAPILifecycle(t *testing.T) {
+	srv := newTestServer(t, "")
+
+	// create
+	resp, err := http.Post(srv.URL+"/v1/branches", "application/json",
+		strings.NewReader(`{"name":"pr-1"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d", resp.StatusCode)
+	}
+	var b struct {
+		Name  string `json:"name"`
+		State string `json:"state"`
+		User  string `json:"user"`
+		Host  string `json:"host"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&b)
+	resp.Body.Close()
+	if b.State != "running" || b.User != "dev@pr-1" || b.Host != "twig.internal" {
+		t.Errorf("branch = %+v", b)
+	}
+
+	// duplicate → 409
+	resp, _ = http.Post(srv.URL+"/v1/branches", "application/json", strings.NewReader(`{"name":"pr-1"}`))
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("dup status = %d, want 409", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// exist_ok=true → 200
+	resp, _ = http.Post(srv.URL+"/v1/branches?exist_ok=true", "application/json", strings.NewReader(`{"name":"pr-1"}`))
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("exist_ok status = %d, want 200", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// invalid name → 400
+	resp, _ = http.Post(srv.URL+"/v1/branches", "application/json", strings.NewReader(`{"name":"BAD NAME"}`))
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("invalid status = %d, want 400", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// reset
+	resp, _ = http.Post(srv.URL+"/v1/branches/pr-1/reset", "application/json", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("reset status = %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// delete
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/v1/branches/pr-1", nil)
+	resp, _ = http.DefaultClient.Do(req)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("delete status = %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// not found → 404
+	resp, _ = http.Get(srv.URL + "/v1/branches/pr-1")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("get status = %d, want 404", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+func TestAPIAuthFromNonLoopback(t *testing.T) {
+	// httptest は loopback なので、authorized() を直接検証する。
+	db, _ := state.Open(filepath.Join(t.TempDir(), "s.db"))
+	defer db.Close()
+	fs := fakeStorage{}
+	mgr, _ := branch.New(branch.Config{NamePattern: `^.+$`, PortLow: 1, PortHigh: 2, EngineType: "mysql"}, fs, fs, fakeEngine{}, nil, db)
+	s := New(mgr, "d", "dev", "secret")
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/branches", nil)
+	req.RemoteAddr = "10.0.0.5:12345"
+	if s.authorized(req) {
+		t.Error("no token from non-loopback should be denied")
+	}
+	req.Header.Set("Authorization", "Bearer wrong")
+	if s.authorized(req) {
+		t.Error("wrong token should be denied")
+	}
+	req.Header.Set("Authorization", "Bearer secret")
+	if !s.authorized(req) {
+		t.Error("correct token should be allowed")
+	}
+	// loopback は無認証
+	req2 := httptest.NewRequest(http.MethodGet, "/v1/branches", nil)
+	req2.RemoteAddr = "127.0.0.1:9999"
+	if !s.authorized(req2) {
+		t.Error("loopback should be allowed without token")
+	}
+}

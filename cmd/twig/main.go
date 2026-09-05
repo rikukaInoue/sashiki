@@ -1,0 +1,343 @@
+// twig: CLI。twigd の REST API を叩く(仕様 14-5 の v0.1 サブセット)。
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"strconv"
+	"syscall"
+	"text/tabwriter"
+	"time"
+)
+
+const (
+	exitOK       = 0
+	exitError    = 1
+	exitUsage    = 2
+	exitNotFound = 3
+	exitExists   = 4
+)
+
+var version = "dev" // -ldflags で埋め込む
+
+func main() {
+	os.Exit(run(os.Args[1:]))
+}
+
+func usage() int {
+	fmt.Fprint(os.Stderr, `Usage:
+  twig create <name> [--port N] [--json]
+  twig delete <name>
+  twig reset  <name> [--json]
+  twig list   [--json]
+  twig show   <name> [--json]
+  twig connect <name>
+  twig version
+`)
+	return exitUsage
+}
+
+func run(args []string) int {
+	if len(args) < 1 {
+		return usage()
+	}
+	cmd, rest := args[0], args[1:]
+	switch cmd {
+	case "create":
+		return cmdCreate(rest)
+	case "delete":
+		return cmdDelete(rest)
+	case "reset":
+		return cmdSimpleBranch(rest, "reset")
+	case "list":
+		return cmdList(rest)
+	case "show":
+		return cmdShow(rest)
+	case "connect":
+		return cmdConnect(rest)
+	case "version":
+		fmt.Println("twig", version)
+		return exitOK
+	default:
+		return usage()
+	}
+}
+
+// --- API client ---
+
+func apiURL() string {
+	if v := os.Getenv("TWIG_API_URL"); v != "" {
+		return v
+	}
+	return "http://127.0.0.1:8080"
+}
+
+func apiToken() string {
+	if v := os.Getenv("TWIG_API_TOKEN"); v != "" {
+		return v
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	b, err := os.ReadFile(home + "/.config/twig/token")
+	if err != nil {
+		return ""
+	}
+	return string(bytes.TrimSpace(b))
+}
+
+func call(method, path string, body any) (int, []byte, error) {
+	var rd io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return 0, nil, err
+		}
+		rd = bytes.NewReader(b)
+	}
+	req, err := http.NewRequest(method, apiURL()+path, rd)
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if t := apiToken(); t != "" {
+		req.Header.Set("Authorization", "Bearer "+t)
+	}
+	client := &http.Client{Timeout: 15 * time.Minute} // create/reset はストレージ次第で長い
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	return resp.StatusCode, data, err
+}
+
+func apiError(data []byte) string {
+	var e struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(data, &e) == nil && e.Error.Message != "" {
+		return e.Error.Message
+	}
+	return string(data)
+}
+
+func statusToExit(code int) int {
+	switch code {
+	case http.StatusNotFound:
+		return exitNotFound
+	case http.StatusConflict:
+		return exitExists
+	default:
+		return exitError
+	}
+}
+
+type branchView struct {
+	Name       string  `json:"name"`
+	State      string  `json:"state"`
+	Port       int     `json:"port"`
+	Host       string  `json:"host"`
+	User       string  `json:"user"`
+	CreatedAt  string  `json:"created_at"`
+	LastConnAt *string `json:"last_conn_at"`
+	UsedBytes  int64   `json:"used_bytes"`
+	Error      string  `json:"error"`
+}
+
+// --- commands ---
+
+func parseFlags(args []string) (pos []string, port int, jsonOut bool, err error) {
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--json":
+			jsonOut = true
+		case "--port":
+			if i+1 >= len(args) {
+				return nil, 0, false, fmt.Errorf("--port requires a value")
+			}
+			i++
+			port, err = strconv.Atoi(args[i])
+			if err != nil {
+				return nil, 0, false, fmt.Errorf("--port: %w", err)
+			}
+		default:
+			pos = append(pos, args[i])
+		}
+	}
+	return pos, port, jsonOut, nil
+}
+
+func cmdCreate(args []string) int {
+	pos, port, jsonOut, err := parseFlags(args)
+	if err != nil || len(pos) != 1 {
+		return usage()
+	}
+	code, data, err := call("POST", "/v1/branches", map[string]any{"name": pos[0], "port": port})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "twig:", err)
+		return exitError
+	}
+	if code != http.StatusCreated && code != http.StatusOK {
+		fmt.Fprintln(os.Stderr, "twig:", apiError(data))
+		return statusToExit(code)
+	}
+	if jsonOut {
+		fmt.Println(string(data))
+		return exitOK
+	}
+	var b branchView
+	_ = json.Unmarshal(data, &b)
+	fmt.Printf("branch '%s' ready: mysql -u%s -h %s -P%d\n", b.Name, b.User, b.Host, b.Port)
+	return exitOK
+}
+
+func cmdDelete(args []string) int {
+	if len(args) != 1 {
+		return usage()
+	}
+	code, data, err := call("DELETE", "/v1/branches/"+args[0], nil)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "twig:", err)
+		return exitError
+	}
+	if code != http.StatusNoContent {
+		fmt.Fprintln(os.Stderr, "twig:", apiError(data))
+		return statusToExit(code)
+	}
+	fmt.Printf("branch '%s' deleted\n", args[0])
+	return exitOK
+}
+
+func cmdSimpleBranch(args []string, action string) int {
+	pos, _, jsonOut, err := parseFlags(args)
+	if err != nil || len(pos) != 1 {
+		return usage()
+	}
+	code, data, err := call("POST", "/v1/branches/"+pos[0]+"/"+action, nil)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "twig:", err)
+		return exitError
+	}
+	if code != http.StatusOK {
+		fmt.Fprintln(os.Stderr, "twig:", apiError(data))
+		return statusToExit(code)
+	}
+	if jsonOut {
+		fmt.Println(string(data))
+	} else {
+		fmt.Printf("branch '%s' %s\n", pos[0], action)
+	}
+	return exitOK
+}
+
+func cmdList(args []string) int {
+	_, _, jsonOut, err := parseFlags(args)
+	if err != nil {
+		return usage()
+	}
+	code, data, err := call("GET", "/v1/branches", nil)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "twig:", err)
+		return exitError
+	}
+	if code != http.StatusOK {
+		fmt.Fprintln(os.Stderr, "twig:", apiError(data))
+		return statusToExit(code)
+	}
+	if jsonOut {
+		fmt.Println(string(data))
+		return exitOK
+	}
+	var resp struct {
+		Branches []branchView `json:"branches"`
+	}
+	_ = json.Unmarshal(data, &resp)
+	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "NAME\tPORT\tSTATE\tLAST_CONN\tUSED")
+	for _, b := range resp.Branches {
+		last := "-"
+		if b.LastConnAt != nil {
+			last = *b.LastConnAt
+		}
+		fmt.Fprintf(tw, "%s\t%d\t%s\t%s\t%s\n", b.Name, b.Port, b.State, last, humanBytes(b.UsedBytes))
+	}
+	tw.Flush()
+	return exitOK
+}
+
+func cmdShow(args []string) int {
+	pos, _, jsonOut, err := parseFlags(args)
+	if err != nil || len(pos) != 1 {
+		return usage()
+	}
+	code, data, err := call("GET", "/v1/branches/"+pos[0], nil)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "twig:", err)
+		return exitError
+	}
+	if code != http.StatusOK {
+		fmt.Fprintln(os.Stderr, "twig:", apiError(data))
+		return statusToExit(code)
+	}
+	if jsonOut {
+		fmt.Println(string(data))
+		return exitOK
+	}
+	var b branchView
+	_ = json.Unmarshal(data, &b)
+	fmt.Printf("name:  %s\nstate: %s\nport:  %d\nuser:  %s\nused:  %s\n",
+		b.Name, b.State, b.Port, b.User, humanBytes(b.UsedBytes))
+	if b.Error != "" {
+		fmt.Printf("error: %s\n", b.Error)
+	}
+	return exitOK
+}
+
+func cmdConnect(args []string) int {
+	if len(args) != 1 {
+		return usage()
+	}
+	code, data, err := call("GET", "/v1/branches/"+args[0], nil)
+	if err != nil || code != http.StatusOK {
+		fmt.Fprintln(os.Stderr, "twig:", apiError(data))
+		return statusToExit(code)
+	}
+	var b branchView
+	_ = json.Unmarshal(data, &b)
+	mysqlPath, err := exec.LookPath("mysql")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "twig: mysql client not found in PATH")
+		return exitError
+	}
+	argv := []string{"mysql", "-udev", "-pdev", "-h127.0.0.1", "-P" + strconv.Itoa(b.Port)}
+	// CLI はそのまま mysql に化ける。
+	if err := syscall.Exec(mysqlPath, argv, os.Environ()); err != nil {
+		fmt.Fprintln(os.Stderr, "twig: exec mysql:", err)
+		return exitError
+	}
+	return exitOK
+}
+
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%dB", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f%c", float64(n)/float64(div), "KMGTPE"[exp])
+}

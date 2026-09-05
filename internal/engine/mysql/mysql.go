@@ -1,0 +1,115 @@
+// Package mysql は systemd テンプレートユニット(mysqld@<branch>)で
+// ブランチごとの mysqld を管理する engine.Engine 実装。
+// ポート等は /etc/twig/<branch>.env に書き、ユニットが EnvironmentFile で読む。
+package mysql
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/rikukaInoue/twig/internal/engine"
+)
+
+// Config は mysql エンジンの設定。
+type Config struct {
+	EnvDir       string // /etc/twig
+	UnitTemplate string // 既定 "mysqld"→ mysqld@<branch>.service
+	ProxyUser    string // ready 判定に使う接続ユーザー(既定 dev)
+	ProxyPass    string
+	ReadyTimeout time.Duration // 既定 30s
+	Sudo         bool
+}
+
+// Engine は engine.Engine の MySQL + systemd 実装。
+type Engine struct {
+	cfg Config
+	run func(ctx context.Context, name string, args ...string) (string, error)
+}
+
+// New は MySQL エンジンを作る。
+func New(cfg Config) *Engine {
+	if cfg.UnitTemplate == "" {
+		cfg.UnitTemplate = "mysqld"
+	}
+	if cfg.ProxyUser == "" {
+		cfg.ProxyUser = "dev"
+	}
+	if cfg.ReadyTimeout == 0 {
+		cfg.ReadyTimeout = 30 * time.Second
+	}
+	e := &Engine{cfg: cfg}
+	e.run = e.execCmd
+	return e
+}
+
+func (e *Engine) execCmd(ctx context.Context, name string, args ...string) (string, error) {
+	var cmd *exec.Cmd
+	if e.cfg.Sudo {
+		cmd = exec.CommandContext(ctx, "sudo", append([]string{"-n", name}, args...)...)
+	} else {
+		cmd = exec.CommandContext(ctx, name, args...)
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func (e *Engine) unit(branch string) string {
+	return fmt.Sprintf("%s@%s", e.cfg.UnitTemplate, branch)
+}
+
+func (e *Engine) envPath(branch string) string {
+	return filepath.Join(e.cfg.EnvDir, branch+".env")
+}
+
+// Start は env ファイルを書いて systemd ユニットを起動する。
+func (e *Engine) Start(ctx context.Context, ins engine.Instance) error {
+	env := fmt.Sprintf("PORT=%d\nDATADIR=%s\n", ins.Port, ins.DataDir)
+	if err := os.WriteFile(e.envPath(ins.Branch), []byte(env), 0o644); err != nil {
+		return fmt.Errorf("write env: %w", err)
+	}
+	_, err := e.run(ctx, "systemctl", "start", e.unit(ins.Branch))
+	return err
+}
+
+// Stop は systemd 経由で正常終了させ、env ファイルを消す。
+func (e *Engine) Stop(ctx context.Context, ins engine.Instance) error {
+	if _, err := e.run(ctx, "systemctl", "stop", e.unit(ins.Branch)); err != nil {
+		return err
+	}
+	// env は消してよい(再 Start 時に書き直す)。失敗しても致命ではない。
+	_ = os.Remove(e.envPath(ins.Branch))
+	return nil
+}
+
+// WaitReady は mysqladmin ping が通るまで 100ms 間隔で待つ。
+func (e *Engine) WaitReady(ctx context.Context, ins engine.Instance) error {
+	deadline := time.Now().Add(e.cfg.ReadyTimeout)
+	for time.Now().Before(deadline) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		cmd := exec.CommandContext(ctx, "mysqladmin",
+			"-u"+e.cfg.ProxyUser, "-p"+e.cfg.ProxyPass,
+			"-h127.0.0.1", fmt.Sprintf("-P%d", ins.Port), "ping")
+		if err := cmd.Run(); err == nil {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("timeout: mysqld@%s (port %d) did not become ready in %s",
+		ins.Branch, ins.Port, e.cfg.ReadyTimeout)
+}
+
+// IsRunning は systemctl is-active で判定する。
+func (e *Engine) IsRunning(ctx context.Context, ins engine.Instance) (bool, error) {
+	out, _ := e.run(ctx, "systemctl", "is-active", e.unit(ins.Branch))
+	return out == "active", nil
+}
