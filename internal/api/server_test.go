@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -222,5 +223,46 @@ func TestAPIAuthWithDBToken(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer twig_abc")
 	if s.authorized(req) {
 		t.Error("revoked token should be denied")
+	}
+}
+
+func TestMetricsAndWebUI(t *testing.T) {
+	srv := newTestServer(t, "")
+	// ブランチを1つ作ってから
+	resp, _ := http.Post(srv.URL+"/v1/branches", "application/json", strings.NewReader(`{"name":"pr-m"}`))
+	_ = resp.Body.Close()
+
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(resp.Header.Get("Content-Type"), "text/html") {
+		t.Errorf("webui status=%d type=%s", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+}
+
+func TestMetricsHandler(t *testing.T) {
+	db, _ := state.Open(filepath.Join(t.TempDir(), "s.db"))
+	defer func() { _ = db.Close() }()
+	fs := fakeStorage{}
+	mgr, _ := branch.New(branch.Config{NamePattern: `^.+$`, PortLow: 3401, PortHigh: 3410, EngineType: "mysql", StateDir: t.TempDir()}, fs, fs, fakeEngine{}, nil, db)
+	_, _ = mgr.Create(context.Background(), "pr-1", 0)
+
+	ms := httptest.NewServer(MetricsHandler(mgr))
+	defer ms.Close()
+	resp, err := http.Get(ms.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body := new(strings.Builder)
+	_, _ = io.Copy(body, resp.Body)
+	out := body.String()
+	if !strings.Contains(out, `twig_branches{state="running"} 1`) {
+		t.Errorf("metrics missing running gauge:\n%s", out)
+	}
+	if !strings.Contains(out, `twig_branch_used_bytes{branch="pr-1"} 42`) {
+		t.Errorf("metrics missing used bytes:\n%s", out)
 	}
 }
