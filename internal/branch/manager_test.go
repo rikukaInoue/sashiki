@@ -18,12 +18,12 @@ import (
 // --- mocks ---
 
 type mockStorage struct {
-	caps       storage.Capabilities
-	cloned     []string
-	snapshots  []string
-	rollbacks  []string
-	destroyed  []string
-	cloneErr   error
+	caps        storage.Capabilities
+	cloned      []string
+	snapshots   []string
+	rollbacks   []string
+	destroyed   []string
+	cloneErr    error
 	rollbackErr error
 }
 
@@ -79,8 +79,8 @@ func (m *mockStorage) UsedBytes(ctx context.Context, vol storage.Volume) (int64,
 func (m *mockStorage) CurrentBaseline() storage.SnapshotRef { return "pool/base@baseline" }
 
 type mockEngine struct {
-	started []string
-	stopped []string
+	started  []string
+	stopped  []string
 	startErr error
 }
 
