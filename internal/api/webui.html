@@ -1,0 +1,54 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>twig</title>
+<style>
+  :root { color-scheme: light dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  body { margin: 2rem auto; max-width: 720px; padding: 0 1rem; }
+  h1 { font-size: 1.2rem; } h1 span { opacity: .5; font-weight: normal; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: .4rem .8rem; border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent); }
+  th { opacity: .6; font-weight: normal; }
+  .running { color: #2da44e; } .sleeping { color: #bf8700; } .error { color: #cf222e; }
+  .meta { opacity: .6; margin-top: 1rem; font-size: .85rem; }
+</style>
+<h1>🌿 twig <span id="baseline"></span></h1>
+<table>
+  <thead><tr><th>NAME</th><th>STATE</th><th>PORT</th><th>LAST_CONN</th><th>USED</th></tr></thead>
+  <tbody id="rows"><tr><td colspan="5">loading…</td></tr></tbody>
+</table>
+<p class="meta">auto-refresh 5s · <a href="/v1/branches">API</a></p>
+<script>
+function human(n) {
+  if (n < 1024) return n + "B";
+  const u = ["K","M","G","T"]; let i = -1;
+  do { n /= 1024; i++; } while (n >= 1024 && i < u.length - 1);
+  return n.toFixed(1) + u[i];
+}
+function ago(iso) {
+  if (!iso) return "-";
+  const s = (Date.now() - new Date(iso)) / 1000;
+  if (s < 60) return Math.floor(s) + "s ago";
+  if (s < 3600) return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
+  return Math.floor(s / 86400) + "d ago";
+}
+async function refresh() {
+  try {
+    const [br, bl] = await Promise.all([
+      fetch("/v1/branches").then(r => r.json()),
+      fetch("/v1/baseline").then(r => r.json()),
+    ]);
+    document.getElementById("baseline").textContent =
+      bl.current.split("@")[1] + (bl.refreshing ? " (refreshing…)" : "");
+    const rows = br.branches.map(b =>
+      `<tr><td>${b.name}</td><td class="${b.state}">${b.state}</td>` +
+      `<td>${b.port}</td><td>${ago(b.last_conn_at)}</td><td>${human(b.used_bytes)}</td></tr>`
+    ).join("");
+    document.getElementById("rows").innerHTML =
+      rows || '<tr><td colspan="5">no branches — mysql -udev@&lt;name&gt; で生やせます</td></tr>';
+  } catch (e) { /* twigd 再起動中など。次のタイマーで再試行 */ }
+}
+refresh();
+setInterval(refresh, 5000);
+</script>

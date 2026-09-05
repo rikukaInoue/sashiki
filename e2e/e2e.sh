@@ -130,6 +130,11 @@ if mysql -udev -pdev -h127.0.0.1 -P3306 -e "SELECT 1" 2>/dev/null; then
   fail "proxy: user without @branch should be rejected"
 fi
 
+log "metrics & Web UI"
+curl -sf http://127.0.0.1:9100/metrics | grep -q 'twig_branches{state="running"} 2' \
+  || { curl -s http://127.0.0.1:9100/metrics | head -5; fail "metrics should report 2 running"; }
+curl -sf http://127.0.0.1:8080/ | grep -q "twig" || fail "web ui should serve"
+
 log "proxy: lazy create (未知ブランチ名で接続すると生える)"
 val=$(mysql -udev@pr-lazy -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.items" 2>/dev/null) \
   || fail "lazy create: connect should auto-create branch"

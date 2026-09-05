@@ -5,9 +5,11 @@ import (
 	"context"
 	"flag"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/rikukaInoue/twig/internal/api"
 	"github.com/rikukaInoue/twig/internal/branch"
@@ -79,6 +81,18 @@ func main() {
 	defer stop()
 
 	go mgr.RunReaper(ctx, cfg.Branches.ReaperInterval)
+
+	if cfg.Listen.Metrics != "" {
+		go func() {
+			mux := http.NewServeMux()
+			mux.Handle("GET /metrics", api.MetricsHandler(mgr))
+			srv := &http.Server{Addr: cfg.Listen.Metrics, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+			log.Printf("twigd: metrics listening on %s", cfg.Listen.Metrics)
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("metrics: %v", err)
+			}
+		}()
+	}
 
 	if cfg.Listen.Proxy != "" {
 		px, err := proxy.New(proxy.Config{
