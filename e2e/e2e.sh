@@ -222,6 +222,25 @@ SASHIKI_EVENT=closed bash "$AE" || fail "action: closed should delete"
 SASHIKI_EVENT=closed bash "$AE" || fail "action: closed should be idempotent (404 OK)"
 unset SASHIKI_API_URL SASHIKI_BRANCH
 
+log "error model + retry (hook失敗→修正→retry)"
+# 失敗する on-create フックを置く
+cat > /etc/sashiki/hooks/on-create.sh <<'HOOK'
+#!/bin/sh
+[ -f /tmp/sashiki-hook-fixed ] && exit 0
+exit 1
+HOOK
+chmod +x /etc/sashiki/hooks/on-create.sh
+sashiki create err-test 2>/dev/null && fail "create should fail on hook error"
+# error 状態で診断が付く
+sashiki show err-test --json | grep -q '"error_code":"hook_failed"' || fail "should record hook_failed"
+sashiki show err-test --json | grep -q '"recoverable":true' || fail "hook_failed should be recoverable"
+# フックを直して retry
+touch /tmp/sashiki-hook-fixed
+sashiki retry err-test > /dev/null || fail "retry should succeed after fixing hook"
+sashiki show err-test | grep -q "state: running" || fail "err-test should be running after retry"
+sashiki delete err-test > /dev/null
+rm -f /etc/sashiki/hooks/on-create.sh /tmp/sashiki-hook-fixed
+
 log "operations 記録 (async ops API)"
 # operation id で決定的に検証(op list の grep はタイミングに脆い)
 opid=$(curl -sf -D - -o /dev/null -X POST http://127.0.0.1:8080/v1/branches \

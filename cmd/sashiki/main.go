@@ -35,6 +35,8 @@ func usage() int {
   sashiki delete <name>
   sashiki reset  <name> [--json]
   sashiki recreate <name> [--json]
+  sashiki retry <name> [--json]
+  sashiki hooks run <name> <event>
   sashiki list   [--json]
   sashiki show   <name> [--json]
   sashiki connect <name>
@@ -61,6 +63,10 @@ func run(args []string) int {
 		return cmdSimpleBranch(rest, "reset")
 	case "recreate":
 		return cmdSimpleBranch(rest, "recreate")
+	case "retry":
+		return cmdSimpleBranch(rest, "retry")
+	case "hooks":
+		return cmdHooks(rest)
 	case "list":
 		return cmdList(rest)
 	case "show":
@@ -159,15 +165,19 @@ func statusToExit(code int) int {
 }
 
 type branchView struct {
-	Name       string  `json:"name"`
-	State      string  `json:"state"`
-	Port       int     `json:"port"`
-	Host       string  `json:"host"`
-	User       string  `json:"user"`
-	CreatedAt  string  `json:"created_at"`
-	LastConnAt *string `json:"last_conn_at"`
-	UsedBytes  int64   `json:"used_bytes"`
-	Error      string  `json:"error"`
+	Name        string   `json:"name"`
+	State       string   `json:"state"`
+	Port        int      `json:"port"`
+	Host        string   `json:"host"`
+	User        string   `json:"user"`
+	CreatedAt   string   `json:"created_at"`
+	LastConnAt  *string  `json:"last_conn_at"`
+	UsedBytes   int64    `json:"used_bytes"`
+	Error       string   `json:"error"`
+	FailedOp    string   `json:"failed_operation"`
+	ErrorCode   string   `json:"error_code"`
+	Recoverable bool     `json:"recoverable"`
+	Suggestions []string `json:"suggested_actions"`
 }
 
 // --- commands ---
@@ -315,6 +325,12 @@ func cmdShow(args []string) int {
 		b.Name, b.State, b.Port, b.User, humanBytes(b.UsedBytes))
 	if b.Error != "" {
 		fmt.Printf("error: %s\n", b.Error)
+		if b.ErrorCode != "" {
+			fmt.Printf("code:  %s (recoverable=%v)\n", b.ErrorCode, b.Recoverable)
+		}
+		for _, sug := range b.Suggestions {
+			fmt.Printf("  → %s\n", sug)
+		}
 	}
 	return exitOK
 }
