@@ -160,8 +160,10 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	}
 
 	fmt.Printf("→ 接続ユーザー %s 作成\n", cfg.Engine.Mysql.ProxyUser)
+	// mysql_native_password で作る: プロキシの AuthSwitch 中継を決定的にするため
+	// (caching_sha2 の full-auth は RSA 鍵交換が挟まり中継が複雑化する)。ADR-006。
 	createUser := fmt.Sprintf(
-		"CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED BY '%s'; GRANT ALL PRIVILEGES ON *.* TO '%s'@'%%'; FLUSH PRIVILEGES;",
+		"CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED WITH mysql_native_password BY '%s'; GRANT ALL PRIVILEGES ON *.* TO '%s'@'%%'; FLUSH PRIVILEGES;",
 		cfg.Engine.Mysql.ProxyUser, cfg.Engine.Mysql.ProxyPass, cfg.Engine.Mysql.ProxyUser)
 	userCmd := exec.Command("mysql", "-uroot", "-S", sock, "-e", createUser)
 	if out, err := userCmd.CombinedOutput(); err != nil {

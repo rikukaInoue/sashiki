@@ -112,6 +112,24 @@ fi
 log "list"
 twig list
 
+log "proxy: dev@<branch> ルーティング"
+# 固定ポート 3306 経由で pr-1 に接続できること
+val=$(mysql -udev@pr-1 -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.items" 2>/dev/null) \
+  || fail "proxy: connect via dev@pr-1 should work"
+[ "$val" = "3" ] || fail "proxy: query result = $val, want 3"
+# 存在しないブランチは Unknown branch
+if mysql -udev@no-such -pdev -h127.0.0.1 -P3306 -e "SELECT 1" 2>/dev/null; then
+  fail "proxy: unknown branch should be rejected"
+fi
+# パスワード誤りはバックエンドが拒否
+if mysql -udev@pr-1 -pWRONG -h127.0.0.1 -P3306 -e "SELECT 1" 2>/dev/null; then
+  fail "proxy: wrong password should be rejected"
+fi
+# ブランチ名なしユーザーは拒否
+if mysql -udev -pdev -h127.0.0.1 -P3306 -e "SELECT 1" 2>/dev/null; then
+  fail "proxy: user without @branch should be rejected"
+fi
+
 log "github action entrypoint (create/idempotent/delete)"
 AE="$SCRIPT_DIR/../action/entrypoint.sh"
 [ -f "$AE" ] || AE="$SCRIPT_DIR/action-entrypoint.sh"   # Lima はフラットコピー
