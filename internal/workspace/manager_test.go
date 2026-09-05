@@ -20,6 +20,7 @@ import (
 
 type mockStorage struct {
 	caps        storage.Capabilities
+	renamed     []string
 	cloned      []string
 	snapshots   []string
 	rollbacks   []string
@@ -56,6 +57,11 @@ func (m *mockStorage) Rollback(ctx context.Context, vol storage.Volume, snap sto
 	return nil
 }
 
+func (m *mockStorage) Rename(ctx context.Context, vol storage.Volume, newName string) (storage.Volume, error) {
+	m.renamed = append(m.renamed, vol.Name+"->"+newName)
+	return storage.Volume{Name: newName, Dataset: "pool/branches/" + newName, Path: "/pool/branches/" + newName}, nil
+}
+
 func (m *mockStorage) DeleteAsync(ctx context.Context, vol storage.Volume) (storage.JobID, error) {
 	m.destroyed = append(m.destroyed, vol.Dataset)
 	return "done", nil
@@ -82,6 +88,7 @@ func (m *mockStorage) CurrentBaseline() storage.SnapshotRef { return "pool/base@
 type mockEngine struct {
 	started  []string
 	stopped  []string
+	killed   []string
 	startErr error
 }
 
@@ -94,6 +101,10 @@ func (m *mockEngine) Start(ctx context.Context, ins engine.Instance) error {
 }
 func (m *mockEngine) Stop(ctx context.Context, ins engine.Instance) error {
 	m.stopped = append(m.stopped, ins.Branch)
+	return nil
+}
+func (m *mockEngine) Kill(ctx context.Context, ins engine.Instance) error {
+	m.killed = append(m.killed, ins.Branch)
 	return nil
 }
 func (m *mockEngine) WaitReady(ctx context.Context, ins engine.Instance) error { return nil }
@@ -342,9 +353,9 @@ func TestResetRecreateOnSlowBackend(t *testing.T) {
 	if len(st.destroyed) != 1 {
 		t.Errorf("old volume should be destroyed: %v", st.destroyed)
 	}
-	// エンジンは旧 stop → 新 start
-	if len(eng.stopped) < 1 || len(eng.started) < 2 {
-		t.Errorf("engine stop/start: stopped=%d started=%d", len(eng.stopped), len(eng.started))
+	// エンジンは旧 Kill(dirty state 破棄)→ 新 start
+	if len(eng.killed) < 1 || len(eng.started) < 2 {
+		t.Errorf("engine kill/start: killed=%d started=%d", len(eng.killed), len(eng.started))
 	}
 }
 
@@ -596,5 +607,96 @@ func TestResetRecreateRerunsOnCreateHook(t *testing.T) {
 	// create で1回 + reset(作り直し)で1回 = 2回(zfs の @init 契約と等価)
 	if got := len(strings.Split(strings.TrimSpace(string(data)), "\n")); got != 2 {
 		t.Errorf("on-create ran %d times, want 2", got)
+	}
+}
+
+func TestRecreateFromCurrentBaseline(t *testing.T) {
+	st := &mockStorage{caps: storage.Capabilities{FastRollback: true, AsyncDelete: true}}
+	eng := &mockEngine{}
+	m := newTestManager(t, st, eng, "")
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	// current baseline を切り替える(baseline refresh 相当)
+	if err := m.db.SetCurrentBaseline("pool/base@baseline-new"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := m.Recreate(context.Background(), "pr-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.State != state.StateRunning {
+		t.Errorf("state = %s", info.State)
+	}
+	// origin が current baseline に更新される
+	b, _ := m.db.GetBranch("pr-1")
+	if b.OriginSnapshot != "pool/base@baseline-new" {
+		t.Errorf("origin = %q, want current baseline", b.OriginSnapshot)
+	}
+	// 作り直し: clone 2回(create + recreate)、旧 volume は destroy
+	if len(st.cloned) != 2 {
+		t.Errorf("cloned %d times, want 2", len(st.cloned))
+	}
+	if len(st.destroyed) != 1 {
+		t.Errorf("old volume should be destroyed: %v", st.destroyed)
+	}
+}
+
+func TestResetUsesKillNotGraceful(t *testing.T) {
+	st := &mockStorage{caps: storage.Capabilities{FastRollback: true}}
+	eng := &mockEngine{}
+	m := newTestManager(t, st, eng, "")
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Reset(context.Background(), "pr-1"); err != nil {
+		t.Fatal(err)
+	}
+	// rollback 前は Kill(graceful Stop ではない)
+	if len(eng.killed) != 1 {
+		t.Errorf("reset should Kill (fast), killed=%v", eng.killed)
+	}
+}
+
+func TestRecreatePrefersOnRecreateHook(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "which")
+	if err := os.WriteFile(filepath.Join(dir, "on-recreate.sh"),
+		[]byte("#!/bin/sh\necho recreate > "+marker+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "on-create.sh"),
+		[]byte("#!/bin/sh\necho create > "+marker+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st := &mockStorage{caps: storage.Capabilities{FastRollback: true, AsyncDelete: true}}
+	m := newTestManager(t, st, &mockEngine{}, dir)
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Recreate(context.Background(), "pr-1"); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(marker)
+	if strings.TrimSpace(string(data)) != "recreate" {
+		t.Errorf("recreate should prefer on-recreate hook, got %q", data)
+	}
+}
+
+func TestRecreateFixedNameUsesRenameSwap(t *testing.T) {
+	// ClonesAreDistinct=false(ebs-zfs 相当)では旧を退避してから clone する
+	st := &mockStorage{caps: storage.Capabilities{FastRollback: true, ClonesAreDistinct: false}}
+	m := newTestManager(t, st, &mockEngine{}, "")
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.db.SetCurrentBaseline("pool/base@baseline-new"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Recreate(context.Background(), "pr-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.renamed) == 0 {
+		t.Error("fixed-name backend recreate should rename-swap the old volume")
 	}
 }

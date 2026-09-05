@@ -64,6 +64,7 @@ func New(mgr *workspace.Manager, domain, engineType, proxyUser, proxyPass, token
 	s.mux.HandleFunc("POST /v1/branches", s.handleCreate)
 	s.mux.HandleFunc("GET /v1/branches/{name}", s.handleGet)
 	s.mux.HandleFunc("POST /v1/branches/{name}/reset", s.handleReset)
+	s.mux.HandleFunc("POST /v1/branches/{name}/recreate", s.handleRecreate)
 	s.mux.HandleFunc("POST /v1/branches/{name}/wake", s.handleWake)
 	s.mux.HandleFunc("GET /v1/branches/{name}/schema", s.handleSchema)
 	s.mux.HandleFunc("POST /v1/branches/{name}/query", s.handleQuery)
@@ -213,6 +214,22 @@ func (s *Server) handleReset(w http.ResponseWriter, r *http.Request) {
 	opID, err := s.track("reset", name, func() error {
 		var e error
 		info, e = s.mgr.Reset(r.Context(), name)
+		return e
+	})
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	setOpID(w, opID)
+	writeJSON(w, http.StatusOK, s.toJSON(info))
+}
+
+func (s *Server) handleRecreate(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var info workspace.Info
+	opID, err := s.track("recreate", name, func() error {
+		var e error
+		info, e = s.mgr.Recreate(r.Context(), name)
 		return e
 	})
 	if err != nil {
