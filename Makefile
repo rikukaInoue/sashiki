@@ -29,6 +29,7 @@ e2e-local:
 	@limactl list --format '{{.Name}}' 2>/dev/null | grep -qx twig-e2e || \
 		limactl start --name=twig-e2e ./e2e/lima.yaml --yes
 	limactl copy bin/linux/twigd bin/linux/twig e2e/e2e.sh twig-e2e:/tmp/
+	limactl copy action/entrypoint.sh twig-e2e:/tmp/action-entrypoint.sh
 	limactl shell twig-e2e sudo bash /tmp/e2e.sh /tmp/twigd /tmp/twig
 
 e2e-local-clean:

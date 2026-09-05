@@ -1,0 +1,79 @@
+name: "twig branch"
+description: "PR の open/close に連動して twig の DB ブランチを作成・削除する"
+branding:
+  icon: git-branch
+  color: green
+
+inputs:
+  api_url:
+    description: "twigd の API URL (例: http://twig.internal:8080)"
+    required: true
+  token:
+    description: "twig API トークン"
+    required: false
+    default: ""
+  branch:
+    description: "ブランチ名 (省略時: pr-<PR番号>)"
+    required: false
+    default: ""
+  comment:
+    description: "PR に接続先をコメントする (true|false)"
+    required: false
+    default: "false"
+  github_token:
+    description: "コメント投稿用の GitHub トークン"
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  host:
+    description: "接続ホスト"
+    value: ${{ steps.branch.outputs.host }}
+  port:
+    description: "接続ポート"
+    value: ${{ steps.branch.outputs.port }}
+  user:
+    description: "接続ユーザー (dev@<branch>)"
+    value: ${{ steps.branch.outputs.user }}
+
+runs:
+  using: composite
+  steps:
+    - id: branch
+      shell: bash
+      env:
+        TWIG_API_URL: ${{ inputs.api_url }}
+        TWIG_API_TOKEN: ${{ inputs.token }}
+        TWIG_BRANCH: ${{ inputs.branch != '' && inputs.branch || format('pr-{0}', github.event.pull_request.number) }}
+        TWIG_EVENT: ${{ github.event.action }}
+      run: |
+        TWIG_OUTPUT="$GITHUB_OUTPUT" "${{ github.action_path }}/entrypoint.sh"
+
+    - name: Comment connection info on PR
+      if: inputs.comment == 'true' && github.event.action != 'closed' && steps.branch.outputs.host != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        HOST: ${{ steps.branch.outputs.host }}
+        PORT: ${{ steps.branch.outputs.port }}
+        DBUSER: ${{ steps.branch.outputs.user }}
+        PR: ${{ github.event.pull_request.number }}
+      run: |
+        marker="<!-- twig-action-comment -->"
+        body="${marker}
+        ## 🌿 twig DB ブランチ
+
+        この PR の DB ブランチが利用できます:
+
+        \`\`\`
+        mysql -u${DBUSER} -h ${HOST} -P ${PORT}
+        \`\`\`
+
+        PR を閉じると自動で削除されます。"
+        existing=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" \
+          --jq "[.[] | select(.body | startswith(\"${marker}\"))][0].id" 2>/dev/null || true)
+        if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+          gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing}" -f body="$body" > /dev/null
+        else
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" -f body="$body" > /dev/null
+        fi

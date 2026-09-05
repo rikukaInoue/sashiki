@@ -4,6 +4,7 @@
 #   usage: sudo ./e2e.sh <twigd-binary> <twig-binary>
 set -euo pipefail
 
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 TWIGD_BIN=${1:?usage: e2e.sh <twigd> <twig>}
 TWIG_BIN=${2:?usage: e2e.sh <twigd> <twig>}
 POOL=tpool
@@ -110,6 +111,21 @@ fi
 
 log "list"
 twig list
+
+log "github action entrypoint (create/idempotent/delete)"
+AE="$SCRIPT_DIR/../action/entrypoint.sh"
+[ -f "$AE" ] || AE="$SCRIPT_DIR/action-entrypoint.sh"   # Lima はフラットコピー
+[ -f "$AE" ] || fail "action entrypoint not found"
+export TWIG_API_URL=http://127.0.0.1:8080 TWIG_BRANCH=pr-77
+: > /tmp/twig-action-out
+TWIG_EVENT=opened TWIG_OUTPUT=/tmp/twig-action-out bash "$AE" || fail "action: opened should create"
+grep -q "created=true" /tmp/twig-action-out || fail "action: created=true expected"
+: > /tmp/twig-action-out
+TWIG_EVENT=synchronize TWIG_OUTPUT=/tmp/twig-action-out bash "$AE" || fail "action: synchronize should succeed on existing branch"
+grep -q "created=false" /tmp/twig-action-out || fail "action: created=false expected for existing"
+TWIG_EVENT=closed bash "$AE" || fail "action: closed should delete"
+TWIG_EVENT=closed bash "$AE" || fail "action: closed should be idempotent (404 OK)"
+unset TWIG_API_URL TWIG_BRANCH
 
 log "delete"
 twig delete pr-1
