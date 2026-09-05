@@ -40,6 +40,7 @@ func usage() int {
   sashiki init   --pool <p> [--device <dev>] [--skip-packages] [--yes]
   sashiki baseline import|list
   sashiki token create|list|revoke
+  sashiki op list | show <id> | wait <id>
   sashiki version
 `)
 	return exitUsage
@@ -69,6 +70,8 @@ func run(args []string) int {
 		return cmdBaseline(rest)
 	case "token":
 		return cmdToken(rest)
+	case "op":
+		return cmdOp(rest)
 	case "version":
 		fmt.Println("sashiki", version)
 		return exitOK

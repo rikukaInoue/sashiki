@@ -17,6 +17,7 @@ import (
 	enginemysql "github.com/rikukaInoue/sashiki/internal/engine/mysql"
 	enginepostgres "github.com/rikukaInoue/sashiki/internal/engine/postgres"
 	"github.com/rikukaInoue/sashiki/internal/hooks"
+	"github.com/rikukaInoue/sashiki/internal/ops"
 	"github.com/rikukaInoue/sashiki/internal/proxy"
 	"github.com/rikukaInoue/sashiki/internal/state"
 	"github.com/rikukaInoue/sashiki/internal/storage"
@@ -123,6 +124,7 @@ func main() {
 
 	token := os.Getenv(cfg.Auth.APITokenEnv)
 	srv := api.New(mgr, cfg.Domain, cfg.Engine.Type, cfg.Engine.Mysql.ProxyUser, cfg.Engine.Mysql.ProxyPass, token, db)
+	srv.SetOps(ops.New(db))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

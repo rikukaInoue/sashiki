@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/rikukaInoue/sashiki/internal/engine"
+	"github.com/rikukaInoue/sashiki/internal/ops"
 	"github.com/rikukaInoue/sashiki/internal/state"
 	"github.com/rikukaInoue/sashiki/internal/storage"
 	"github.com/rikukaInoue/sashiki/internal/workspace"
@@ -74,6 +75,28 @@ func newTestServer(t *testing.T, token string) *httptest.Server {
 	srv := httptest.NewServer(New(mgr, "sashiki.internal", "mysql", "dev", "dev", token, nil))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+func newTestServerWithDB(t *testing.T) (*httptest.Server, *state.DB) {
+	t.Helper()
+	db, err := state.Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	fs := fakeStorage{}
+	mgr, err := workspace.New(workspace.Config{
+		NamePattern: `^[a-z0-9-]{1,32}$`, MaxBranches: 10,
+		PortLow: 3401, PortHigh: 3410, EngineType: "mysql", StateDir: t.TempDir(),
+	}, fs, fs, fakeEngine{}, nil, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(mgr, "sashiki.internal", "mysql", "dev", "dev", "", nil)
+	s.SetOps(ops.New(db))
+	srv := httptest.NewServer(s)
+	t.Cleanup(srv.Close)
+	return srv, db
 }
 
 func TestAPILifecycle(t *testing.T) {
@@ -265,4 +288,42 @@ func TestMetricsHandler(t *testing.T) {
 	if !strings.Contains(out, `sashiki_branch_used_bytes{branch="pr-1"} 42`) {
 		t.Errorf("metrics missing used bytes:\n%s", out)
 	}
+}
+
+func TestAPIOperationsTracking(t *testing.T) {
+	srv, db := newTestServerWithDB(t)
+	// create すると operation が記録され、ヘッダに id が付く
+	resp, err := http.Post(srv.URL+"/v1/branches", "application/json", strings.NewReader(`{"name":"pr-1"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	opID := resp.Header.Get("Sashiki-Operation-Id")
+	_ = resp.Body.Close()
+	if opID == "" {
+		t.Fatal("create should return operation id header")
+	}
+	// GET /v1/operations/{id}
+	resp, _ = http.Get(srv.URL + "/v1/operations/" + opID)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get op status = %d", resp.StatusCode)
+	}
+	var o struct {
+		Type, State, Target string
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&o)
+	if o.Type != "create" || o.State != "completed" || o.Target != "pr-1" {
+		t.Errorf("op = %+v", o)
+	}
+	// GET /v1/operations 一覧
+	r2, _ := http.Get(srv.URL + "/v1/operations")
+	defer func() { _ = r2.Body.Close() }()
+	var list struct {
+		Operations []map[string]any `json:"operations"`
+	}
+	_ = json.NewDecoder(r2.Body).Decode(&list)
+	if len(list.Operations) == 0 {
+		t.Error("operations list should not be empty")
+	}
+	_ = db
 }

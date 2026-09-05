@@ -95,6 +95,16 @@ CREATE TABLE IF NOT EXISTS baselines (
   created_at  TEXT NOT NULL,
   is_current  INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS operations (
+  id          TEXT PRIMARY KEY,
+  type        TEXT NOT NULL,          -- create|reset|recreate|delete|wake|baseline-refresh
+  target      TEXT NOT NULL,          -- branch 名 or baseline tag
+  state       TEXT NOT NULL,          -- running|completed|failed
+  started_at  TEXT NOT NULL,
+  finished_at TEXT,
+  error_json  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_operations_target ON operations(target);
 `
 
 // Close は DB を閉じる。
@@ -347,4 +357,97 @@ func (d *DB) CurrentBaselineOverride() (string, bool) {
 		return "", false
 	}
 	return snap, true
+}
+
+// Operation は operations テーブルの 1 行。
+type Operation struct {
+	ID         string
+	Type       string
+	Target     string
+	State      string // running|completed|failed
+	StartedAt  time.Time
+	FinishedAt *time.Time
+	Error      string
+}
+
+// Operation の state 値。
+const (
+	OpRunning   = "running"
+	OpCompleted = "completed"
+	OpFailed    = "failed"
+)
+
+// CreateOperation は running 状態の operation を挿入する。
+func (d *DB) CreateOperation(id, typ, target string) error {
+	_, err := d.sql.Exec(
+		`INSERT INTO operations (id, type, target, state, started_at) VALUES (?, ?, ?, ?, ?)`,
+		id, typ, target, OpRunning, time.Now().UTC().Format(timeFmt))
+	return err
+}
+
+// FinishOperation は operation を completed/failed にする。errMsg が空なら completed。
+func (d *DB) FinishOperation(id, errMsg string) error {
+	st := OpCompleted
+	var e any
+	if errMsg != "" {
+		st = OpFailed
+		e = errMsg
+	}
+	_, err := d.sql.Exec(
+		`UPDATE operations SET state = ?, finished_at = ?, error_json = ? WHERE id = ?`,
+		st, time.Now().UTC().Format(timeFmt), e, id)
+	return err
+}
+
+// GetOperation は 1 件取得。
+func (d *DB) GetOperation(id string) (Operation, error) {
+	row := d.sql.QueryRow(
+		`SELECT id, type, target, state, started_at, finished_at, COALESCE(error_json,'')
+		 FROM operations WHERE id = ?`, id)
+	return scanOperation(row)
+}
+
+// ListOperations は新しい順に最大 limit 件返す。
+func (d *DB) ListOperations(limit int) ([]Operation, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := d.sql.Query(
+		`SELECT id, type, target, state, started_at, finished_at, COALESCE(error_json,'')
+		 FROM operations ORDER BY started_at DESC, rowid DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Operation
+	for rows.Next() {
+		op, err := scanOperation(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, op)
+	}
+	return out, rows.Err()
+}
+
+func scanOperation(row scannable) (Operation, error) {
+	var o Operation
+	var started string
+	var finished sql.NullString
+	err := row.Scan(&o.ID, &o.Type, &o.Target, &o.State, &started, &finished, &o.Error)
+	if errors.Is(err, sql.ErrNoRows) {
+		return o, ErrNotFound
+	}
+	if err != nil {
+		return o, err
+	}
+	if t, err := time.Parse(timeFmt, started); err == nil {
+		o.StartedAt = t
+	}
+	if finished.Valid {
+		if t, err := time.Parse(timeFmt, finished.String); err == nil {
+			o.FinishedAt = &t
+		}
+	}
+	return o, nil
 }

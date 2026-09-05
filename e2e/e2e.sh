@@ -214,6 +214,12 @@ SASHIKI_EVENT=closed bash "$AE" || fail "action: closed should delete"
 SASHIKI_EVENT=closed bash "$AE" || fail "action: closed should be idempotent (404 OK)"
 unset SASHIKI_API_URL SASHIKI_BRANCH
 
+log "operations 記録 (async ops API)"
+sashiki create op-test > /dev/null
+curl -sf http://127.0.0.1:8080/v1/operations | grep -q '"type":"create"' || fail "operation should be recorded"
+sashiki op list | grep -q op-test || fail "op list should show target"
+sashiki delete op-test > /dev/null
+
 log "delete"
 sashiki delete pr-1
 sashiki delete pr-2
