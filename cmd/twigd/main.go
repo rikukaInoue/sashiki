@@ -14,6 +14,7 @@ import (
 	"github.com/rikukaInoue/twig/internal/config"
 	enginemysql "github.com/rikukaInoue/twig/internal/engine/mysql"
 	"github.com/rikukaInoue/twig/internal/hooks"
+	"github.com/rikukaInoue/twig/internal/proxy"
 	"github.com/rikukaInoue/twig/internal/state"
 	storagezfs "github.com/rikukaInoue/twig/internal/storage/zfs"
 )
@@ -70,6 +71,23 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if cfg.Listen.Proxy != "" {
+		px, err := proxy.New(proxy.Config{
+			Listen:           cfg.Listen.Proxy,
+			NamePattern:      cfg.Branches.NamePattern,
+			MaxConnPerBranch: cfg.Proxy.MaxConnPerBranch,
+		}, mgr)
+		if err != nil {
+			log.Fatalf("proxy: %v", err)
+		}
+		go func() {
+			if err := px.Listen(ctx); err != nil {
+				log.Fatalf("proxy: %v", err)
+			}
+		}()
+		log.Printf("twigd: proxy listening on %s", cfg.Listen.Proxy)
+	}
 
 	log.Printf("twigd: listening on %s (backend=%s engine=%s)",
 		cfg.Listen.API, cfg.Storage.Backend, cfg.Engine.Type)

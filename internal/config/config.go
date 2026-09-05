@@ -18,6 +18,7 @@ type Config struct {
 	StateDB  string   `yaml:"state_db"`
 	Storage  Storage  `yaml:"storage"`
 	Engine   Engine   `yaml:"engine"`
+	Proxy    Proxy    `yaml:"proxy"`
 	Branches Branches `yaml:"branches"`
 	Hooks    Hooks    `yaml:"hooks"`
 	Auth     Auth     `yaml:"auth"`
@@ -26,6 +27,7 @@ type Config struct {
 // Listen は各リスナーのアドレス。
 type Listen struct {
 	API     string `yaml:"api"`
+	Proxy   string `yaml:"proxy"`
 	Metrics string `yaml:"metrics"`
 }
 
@@ -60,6 +62,11 @@ type MysqlEngine struct {
 	Sudo           bool   `yaml:"sudo"`
 }
 
+// Proxy はプロトコルプロキシの設定。
+type Proxy struct {
+	MaxConnPerBranch int `yaml:"max_conn_per_branch"`
+}
+
 // Branches はブランチのポリシー。
 type Branches struct {
 	NamePattern string `yaml:"name_pattern"`
@@ -81,7 +88,7 @@ type Auth struct {
 // Default は既定値。
 func Default() Config {
 	return Config{
-		Listen:  Listen{API: "127.0.0.1:8080", Metrics: "127.0.0.1:9100"},
+		Listen:  Listen{API: "127.0.0.1:8080", Proxy: "0.0.0.0:3306", Metrics: "127.0.0.1:9100"},
 		Domain:  "twig.internal",
 		StateDB: "/var/lib/twig/state.db",
 		Storage: Storage{
@@ -105,6 +112,7 @@ func Default() Config {
 				Sudo:           true,
 			},
 		},
+		Proxy: Proxy{MaxConnPerBranch: 50},
 		Branches: Branches{
 			NamePattern: `^[a-z0-9-]{1,32}$`,
 			MaxBranches: 50,

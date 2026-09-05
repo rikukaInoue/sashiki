@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"regexp"
 	"sync"
+	"time"
 
 	"github.com/rikukaInoue/twig/internal/engine"
 	"github.com/rikukaInoue/twig/internal/hooks"
@@ -52,6 +53,10 @@ type Manager struct {
 	// ブランチ名ごとの直列化(同名の同時 create/delete を防ぐ)
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
+
+	// TouchConn のスロットリング
+	touchMu   sync.Mutex
+	lastTouch map[string]time.Time
 }
 
 // New は Manager を作る。
@@ -63,6 +68,7 @@ func New(cfg Config, st storage.Storage, bp BaselineProvider, eng engine.Engine,
 	return &Manager{
 		cfg: cfg, st: st, baseline: bp, eng: eng, hooks: hr, db: db,
 		nameRe: re, locks: map[string]*sync.Mutex{},
+		lastTouch: map[string]time.Time{},
 	}, nil
 }
 
@@ -279,6 +285,33 @@ func (m *Manager) Delete(ctx context.Context, name string) error {
 	}
 	// 非同期バックエンドでは deleting のまま残し、回収ループが Poll する(v1.0)。
 	return nil
+}
+
+// RouteBranch はプロキシ用: running なブランチのポートを返す。
+func (m *Manager) RouteBranch(ctx context.Context, name string) (int, error) {
+	b, err := m.db.GetBranch(name)
+	if err != nil {
+		return 0, err
+	}
+	if b.State != state.StateRunning {
+		return 0, fmt.Errorf("branch %s is %s", name, b.State)
+	}
+	return b.Port, nil
+}
+
+// TouchConn は最終接続時刻を記録する。SQLite への書き込みを抑えるため
+// ブランチごとに 1 分に 1 回まで。
+func (m *Manager) TouchConn(name string) {
+	m.touchMu.Lock()
+	last, ok := m.lastTouch[name]
+	now := time.Now()
+	if ok && now.Sub(last) < time.Minute {
+		m.touchMu.Unlock()
+		return
+	}
+	m.lastTouch[name] = now
+	m.touchMu.Unlock()
+	_ = m.db.TouchLastConn(name)
 }
 
 // BaselineInfo は現在のベースラインと base の snapshot 一覧。
