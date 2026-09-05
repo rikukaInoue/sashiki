@@ -27,6 +27,8 @@ engine:
 branches:
   name_pattern: "^[a-z0-9-]{1,32}$"
   max_branches: 50
+  lazy_create: true
+  lazy_create_max_wait: 20s
 
 hooks:
   dir: /etc/twig/hooks

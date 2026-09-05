@@ -69,8 +69,10 @@ type Proxy struct {
 
 // Branches はブランチのポリシー。
 type Branches struct {
-	NamePattern string `yaml:"name_pattern"`
-	MaxBranches int    `yaml:"max_branches"`
+	NamePattern       string        `yaml:"name_pattern"`
+	MaxBranches       int           `yaml:"max_branches"`
+	LazyCreate        bool          `yaml:"lazy_create"`
+	LazyCreateMaxWait time.Duration `yaml:"lazy_create_max_wait"`
 }
 
 // Hooks はフック設定。
@@ -114,8 +116,10 @@ func Default() Config {
 		},
 		Proxy: Proxy{MaxConnPerBranch: 50},
 		Branches: Branches{
-			NamePattern: `^[a-z0-9-]{1,32}$`,
-			MaxBranches: 50,
+			NamePattern:       `^[a-z0-9-]{1,32}$`,
+			MaxBranches:       50,
+			LazyCreate:        true,
+			LazyCreateMaxWait: 20 * time.Second,
 		},
 		Hooks: Hooks{
 			Dir:    "/etc/twig/hooks",

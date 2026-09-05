@@ -61,6 +61,8 @@ func main() {
 		PortHigh:    cfg.Engine.Mysql.PortRange[1],
 		EngineType:  cfg.Engine.Type,
 		StateDir:    "/var/lib/twig/branches",
+		LazyCreate:  cfg.Branches.LazyCreate,
+		LazyMaxWait: cfg.Branches.LazyCreateMaxWait,
 	}, zbe, zbe, eng, hr, db)
 	if err != nil {
 		log.Fatalf("manager: %v", err)
