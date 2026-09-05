@@ -204,9 +204,41 @@ func (b *Backend) Clone(ctx context.Context, baseline storage.SnapshotRef, name 
 	}
 	target := filepath.Join(b.cfg.MountRoot, fsxName)
 	if err := b.mount(ctx, b.cfg.DNSName+":"+volPath, target); err != nil {
+		// マウント失敗でボリュームをリークさせない(best-effort で削除)
+		_, _ = b.api.DeleteVolume(ctx, &awsfsx.DeleteVolumeInput{
+			VolumeId: &volID,
+			OpenZFSConfiguration: &types.DeleteVolumeOpenZFSConfiguration{
+				Options: []types.DeleteOpenZFSVolumeOption{
+					types.DeleteOpenZFSVolumeOptionDeleteChildVolumesAndSnapshots,
+				},
+			},
+		})
 		return storage.Volume{}, err
 	}
 	return storage.Volume{Name: name, Dataset: volID, Path: target}, nil
+}
+
+// listAllVolumes はファイルシステム内の全ボリューム(ページネーション対応)。
+func (b *Backend) listAllVolumes(ctx context.Context) ([]types.Volume, error) {
+	var all []types.Volume
+	var token *string
+	for {
+		out, err := b.api.DescribeVolumes(ctx, &awsfsx.DescribeVolumesInput{
+			Filters: []types.VolumeFilter{{
+				Name:   types.VolumeFilterNameFileSystemId,
+				Values: []string{b.cfg.FileSystemID},
+			}},
+			NextToken: token,
+		})
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, out.Volumes...)
+		if out.NextToken == nil {
+			return all, nil
+		}
+		token = out.NextToken
+	}
 }
 
 // genSuffix は世代サフィックス(-g + 6 hex)。
@@ -217,17 +249,12 @@ var genSuffix = regexp.MustCompile(`-g[0-9a-f]{6}$`)
 // 付けるだけで、解決には使わない。)
 // reset の付け替え中は複数世代が共存し得るため、作成が最新の AVAILABLE を採用する。
 func (b *Backend) ResolveVolume(ctx context.Context, name string) (storage.Volume, error) {
-	out, err := b.api.DescribeVolumes(ctx, &awsfsx.DescribeVolumesInput{
-		Filters: []types.VolumeFilter{{
-			Name:   types.VolumeFilterNameFileSystemId,
-			Values: []string{b.cfg.FileSystemID},
-		}},
-	})
+	vols, err := b.listAllVolumes(ctx)
 	if err != nil {
 		return storage.Volume{}, err
 	}
 	var candidates []types.Volume
-	for _, v := range out.Volumes {
+	for _, v := range vols {
 		if v.Lifecycle != types.VolumeLifecycleAvailable || v.Name == nil {
 			continue
 		}

@@ -301,6 +301,12 @@ func (m *Manager) resetRecreate(ctx context.Context, b state.Branch) (Info, erro
 		_ = m.db.SetState(b.Name, state.StateError, err.Error())
 		return Info{}, err
 	}
+	// zfs の reset は @init(= on-create フック適用後)に戻る。契約を揃えるため、
+	// 作り直し経路でも on-create フックを再実行してから on-reset を呼ぶ。
+	if err := m.runHook(ctx, hooks.OnCreate, b, newVol); err != nil {
+		_ = m.db.SetState(b.Name, state.StateError, err.Error())
+		return Info{}, err
+	}
 	// 旧ボリュームは裏で削除(fsx は約6分かかるがユーザーは待たない)
 	if job, err := m.st.DeleteAsync(ctx, oldVol); err == nil {
 		go m.pollDeletion(job)

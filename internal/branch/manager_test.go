@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -573,5 +574,27 @@ func TestReapSkipsBranchesWithActiveConnections(t *testing.T) {
 	}
 	if _, err := m.Get(context.Background(), "pr-1"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("should be reaped after disconnect: %v", err)
+	}
+}
+
+func TestResetRecreateRerunsOnCreateHook(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "count")
+	script := "#!/bin/sh\necho x >> " + marker + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "on-create.sh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st := &mockStorage{caps: storage.Capabilities{FastRollback: false, AsyncDelete: true}}
+	m := newTestManager(t, st, &mockEngine{}, dir)
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Reset(context.Background(), "pr-1"); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(marker)
+	// create で1回 + reset(作り直し)で1回 = 2回(zfs の @init 契約と等価)
+	if got := len(strings.Split(strings.TrimSpace(string(data)), "\n")); got != 2 {
+		t.Errorf("on-create ran %d times, want 2", got)
 	}
 }

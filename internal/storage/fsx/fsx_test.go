@@ -2,6 +2,7 @@ package fsx
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ type mockAPI struct {
 	volumes       map[string]*types.Volume // by id
 	createCalls   int
 	describeCalls int
+	pageSize      int
 	// waitVolumeReady が最初の N 回 IN_PROGRESS を返すシミュレーション
 	pendingUntil int
 }
@@ -49,6 +51,27 @@ func (m *mockAPI) DeleteVolume(ctx context.Context, in *awsfsx.DeleteVolumeInput
 
 func (m *mockAPI) DescribeVolumes(ctx context.Context, in *awsfsx.DescribeVolumesInput, _ ...func(*awsfsx.Options)) (*awsfsx.DescribeVolumesOutput, error) {
 	m.describeCalls++
+	// pageSize > 0 ならフィルタ検索を 1 件ずつページングする(ページネーション検証用)
+	if m.pageSize > 0 && len(in.VolumeIds) == 0 {
+		var all []types.Volume
+		for _, v := range m.volumes {
+			all = append(all, *v)
+		}
+		start := 0
+		if in.NextToken != nil {
+			fmt.Sscanf(*in.NextToken, "%d", &start)
+		}
+		end := start + m.pageSize
+		if end > len(all) {
+			end = len(all)
+		}
+		out := &awsfsx.DescribeVolumesOutput{Volumes: all[start:end]}
+		if end < len(all) {
+			tok := fmt.Sprintf("%d", end)
+			out.NextToken = &tok
+		}
+		return out, nil
+	}
 	var out []types.Volume
 	if len(in.VolumeIds) > 0 {
 		for _, id := range in.VolumeIds {
@@ -180,5 +203,38 @@ func TestCapabilitiesDeclareSlowControlPlane(t *testing.T) {
 	}
 	if !c.AsyncDelete {
 		t.Error("AsyncDelete should be true")
+	}
+}
+
+func TestResolveVolumePaginates(t *testing.T) {
+	m := newMockAPI()
+	m.pageSize = 1
+	b := newTestBackend(m)
+	// 3 ブランチ分作って、ページを跨いでも解決できること
+	for _, n := range []string{"pr-a", "pr-b", "pr-c"} {
+		if _, err := b.Clone(context.Background(), "arn:snap", n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := b.ResolveVolume(context.Background(), "pr-c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "pr-c" {
+		t.Errorf("resolved %q", got.Name)
+	}
+}
+
+func TestCloneMountFailureCleansUpVolume(t *testing.T) {
+	m := newMockAPI()
+	b := newTestBackend(m)
+	b.mount = func(ctx context.Context, source, target string) error {
+		return fmt.Errorf("mount failed")
+	}
+	if _, err := b.Clone(context.Background(), "arn:snap", "pr-1"); err == nil {
+		t.Fatal("want error")
+	}
+	if len(m.volumes) != 0 {
+		t.Errorf("volume should be cleaned up on mount failure: %d left", len(m.volumes))
 	}
 }
