@@ -25,3 +25,25 @@ jobs:
       - uses: golangci/golangci-lint-action@v6
         with:
           version: latest
+
+  # 実 ZFS + mysqld での E2E。GitHub の ubuntu ランナーは sudo と
+  # ZFS カーネルモジュールが使えるため、loopback zpool で完結する。
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build binaries
+        run: |
+          go build -o bin/twigd ./cmd/twigd
+          go build -o bin/twig ./cmd/twig
+      - name: Load ZFS kernel module
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q zfsutils-linux
+          sudo modprobe zfs
+          zfs version
+      - name: Run E2E
+        run: sudo ./e2e/e2e.sh bin/twigd bin/twig
