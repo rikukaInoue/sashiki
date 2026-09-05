@@ -1,30 +1,46 @@
 // ブランチ DB への問い合わせ API(Web UI のデータブラウザ用)。
 //
 //	GET  /v1/branches/{name}/schema  スキーマ(DB → テーブル → カラム)
-//	POST /v1/branches/{name}/query   任意 SQL の実行(行数・時間に上限)
+//	POST /v1/branches/{name}/query   任意 SQL の実行(行数・時間・セルサイズに上限)
 //
 // ブランチは使い捨ての開発 DB であり、接続ユーザーも開発用(proxy_user)なので
 // 書き込みも許可する(壊したら reset すればよい)。MySQL エンジンのみ対応。
+//
+// 任意 SQL 実行は loopback 無認証(仕様 13-3)の配下に入るため、SSH トンネルで
+// UI を使う開発者のブラウザ経由の攻撃を browserSafe で遮断する(CSRF / DNS
+// リバインディング。詳細は関数コメント)。
 package api
 
 import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"mime"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql" // driver
+	"github.com/go-sql-driver/mysql"
 	"github.com/rikukaInoue/twig/internal/state"
 )
 
 const (
 	queryTimeout = 10 * time.Second
 	maxRows      = 200
+	maxCellBytes = 64 << 10 // 1 セルの上限。LONGBLOB 等で応答が肥大するのを防ぐ
 )
 
+// ErrUnsupportedEngine はデータブラウザ未対応エンジン(mysql 以外)への要求。
+var ErrUnsupportedEngine = errors.New("data browser supports the mysql engine only")
+
 func (s *Server) branchDB(ctx context.Context, name string) (*sql.DB, error) {
+	if s.engine != "" && s.engine != "mysql" {
+		return nil, ErrUnsupportedEngine
+	}
 	info, err := s.mgr.Get(ctx, name)
 	if err != nil {
 		return nil, err
@@ -32,14 +48,60 @@ func (s *Server) branchDB(ctx context.Context, name string) (*sql.DB, error) {
 	if info.State != state.StateRunning {
 		return nil, fmt.Errorf("branch %s is %s (not running)", name, info.State)
 	}
-	dsn := fmt.Sprintf("%s:%s@tcp(127.0.0.1:%d)/?multiStatements=false&readTimeout=10s",
-		s.user, s.pass, info.Port)
-	db, err := sql.Open("mysql", dsn)
+	// 資格情報に記号が入っても壊れないよう FormatDSN で組む
+	mcfg := mysql.NewConfig()
+	mcfg.User = s.user
+	mcfg.Passwd = s.pass
+	mcfg.Net = "tcp"
+	mcfg.Addr = fmt.Sprintf("127.0.0.1:%d", info.Port)
+	mcfg.ReadTimeout = queryTimeout
+	mcfg.MultiStatements = false
+	db, err := sql.Open("mysql", mcfg.FormatDSN())
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(2)
 	return db, nil
+}
+
+// loopbackHost は Host / Origin のホスト部が localhost 系かどうか。
+func loopbackHost(hostport string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
+}
+
+// browserSafe はデータブラウザ系エンドポイントのブラウザ経由攻撃対策。
+// SSH トンネル運用(localhost で UI を開く)では loopback 無認証で任意 SQL が
+// 実行できてしまうため、
+//   - Origin ヘッダ付き(=ブラウザの cross-site 要求)は localhost 系のみ許可(CSRF)
+//   - loopback からの要求は Host も localhost 系のみ許可(DNS リバインディング。
+//     トークン認証で来る非 loopback の API クライアントには影響しない)
+//
+// を強制する。ダメなら 403 を書いて false を返す。
+func (s *Server) browserSafe(w http.ResponseWriter, r *http.Request) bool {
+	if o := r.Header.Get("Origin"); o != "" {
+		u, err := url.Parse(o)
+		if err != nil || !loopbackHost(u.Host) {
+			writeErr(w, http.StatusForbidden, "cross_origin_denied",
+				"cross-site browser requests are not allowed for the data browser")
+			return false
+		}
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() && !loopbackHost(r.Host) {
+			writeErr(w, http.StatusForbidden, "host_mismatch",
+				fmt.Sprintf("unexpected Host %q on a loopback request (DNS rebinding?)", r.Host))
+			return false
+		}
+	}
+	return true
 }
 
 type schemaColumn struct {
@@ -61,8 +123,11 @@ type schemaDB struct {
 }
 
 func (s *Server) handleSchema(w http.ResponseWriter, r *http.Request) {
+	if !s.browserSafe(w, r) {
+		return
+	}
 	name := r.PathValue("name")
-	db, err := s.branchDB(r.Context(), name)
+	db, err := s.openDB(r.Context(), name)
 	if err != nil {
 		s.writeError(w, err)
 		return
@@ -105,6 +170,10 @@ func (s *Server) handleSchema(w http.ResponseWriter, r *http.Request) {
 			Name: col, Type: ctype, Nullable: nullable == "YES", Key: key,
 		})
 	}
+	if err := rows.Err(); err != nil {
+		s.writeError(w, err)
+		return
+	}
 	if dbs == nil {
 		dbs = []schemaDB{}
 	}
@@ -116,13 +185,23 @@ type queryReq struct {
 }
 
 func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
+	if !s.browserSafe(w, r) {
+		return
+	}
+	// Content-Type を必須化する。これだけでブラウザの cross-site "simple request"
+	// (text/plain 等で preflight なしに飛ぶ POST)は遮断される。
+	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt != "application/json" {
+		writeErr(w, http.StatusUnsupportedMediaType, "invalid_content_type",
+			"Content-Type must be application/json")
+		return
+	}
 	name := r.PathValue("name")
 	var req queryReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SQL == "" {
-		writeErr(w, http.StatusBadRequest, "invalid_name", "body must be {\"sql\": \"...\"}")
+		writeErr(w, http.StatusBadRequest, "invalid_request", "body must be {\"sql\": \"...\"}")
 		return
 	}
-	db, err := s.branchDB(r.Context(), name)
+	db, err := s.openDB(r.Context(), name)
 	if err != nil {
 		s.writeError(w, err)
 		return
@@ -162,7 +241,12 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		row := make([]any, len(cols))
 		for i, v := range vals {
 			if b, ok := v.([]byte); ok {
-				row[i] = string(b)
+				// 巨大セル(LONGBLOB/LONGTEXT)で応答とメモリが肥大しないよう切り詰める
+				if len(b) > maxCellBytes {
+					row[i] = string(b[:maxCellBytes]) + "…(truncated)"
+				} else {
+					row[i] = string(b)
+				}
 			} else {
 				row[i] = v
 			}

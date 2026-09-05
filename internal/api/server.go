@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -28,16 +29,19 @@ type TokenChecker interface {
 type Server struct {
 	mgr    *branch.Manager
 	domain string
+	engine string // mysql | postgres。データブラウザは mysql のみ対応
 	user   string
 	pass   string
 	token  string // 環境変数トークン(後方互換)。空なら無効
 	tokens TokenChecker
+	openDB func(ctx context.Context, name string) (*sql.DB, error) // テストで差し替え可
 	mux    *http.ServeMux
 }
 
 // New は Server を作る。tokens は nil 可(env トークンのみ)。
-func New(mgr *branch.Manager, domain, proxyUser, proxyPass, token string, tokens TokenChecker) *Server {
-	s := &Server{mgr: mgr, domain: domain, user: proxyUser, pass: proxyPass, token: token, tokens: tokens, mux: http.NewServeMux()}
+func New(mgr *branch.Manager, domain, engineType, proxyUser, proxyPass, token string, tokens TokenChecker) *Server {
+	s := &Server{mgr: mgr, domain: domain, engine: engineType, user: proxyUser, pass: proxyPass, token: token, tokens: tokens, mux: http.NewServeMux()}
+	s.openDB = s.branchDB
 	s.mux.HandleFunc("GET /v1/branches", s.handleList)
 	s.mux.HandleFunc("POST /v1/branches", s.handleCreate)
 	s.mux.HandleFunc("GET /v1/branches/{name}", s.handleGet)
@@ -243,6 +247,8 @@ func (s *Server) toJSON(i branch.Info) branchJSON {
 
 func (s *Server) writeError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, ErrUnsupportedEngine):
+		writeErr(w, http.StatusNotImplemented, "unsupported_engine", err.Error())
 	case errors.Is(err, branch.ErrInvalidName):
 		writeErr(w, http.StatusBadRequest, "invalid_name", err.Error())
 	case errors.Is(err, branch.ErrExists):

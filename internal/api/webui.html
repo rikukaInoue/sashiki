@@ -79,6 +79,10 @@ function ago(iso) {
 function esc(s) {
   return String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 }
+// MySQL 識別子のクォート(予約語・ハイフン入りテーブル名対策)
+function qi(s) {
+  return "`" + String(s).replace(/`/g, "``") + "`";
+}
 
 // snapshot 名の短縮表示(zfs: pool/base@NAME / fsx: ...snapshot/NAME)
 function shortSnap(s) {
@@ -104,7 +108,7 @@ async function refresh() {
         ? `<span class="stale" title="current(${esc(shortSnap(bl.current))})より古い baseline から作成。reset でも古い方に戻ります">⚠ ${esc(origin)}</span>`
         : esc(origin);
       return `<tr data-name="${esc(b.name)}" class="${b.name === selected ? "selected" : ""}">` +
-        `<td>${esc(b.name)}</td><td class="${b.state}">${b.state}</td>` +
+        `<td>${esc(b.name)}</td><td class="${esc(b.state)}">${esc(b.state)}</td>` +
         `<td>${b.port}</td><td class="baseline-cell">${cell}</td>` +
         `<td>${ago(b.last_conn_at)}</td><td>${human(b.used_bytes)}</td></tr>`;
     }).join("");
@@ -123,7 +127,7 @@ async function openBranch(name) {
   el.textContent = "loading schema…";
   refresh();
   try {
-    const res = await fetch(`/v1/branches/${name}/schema`);
+    const res = await fetch(`/v1/branches/${encodeURIComponent(name)}/schema`);
     if (!res.ok) throw new Error((await res.json()).error?.message || res.status);
     const { databases } = await res.json();
     if (!databases.length) { el.textContent = "(ユーザーDBなし)"; return; }
@@ -142,12 +146,12 @@ async function openBranch(name) {
     el.querySelectorAll(".tbl").forEach(t => t.addEventListener("click", e => {
       if (e.target.classList.contains("ddl")) return;
       t.parentElement.classList.toggle("open");
-      const q = `SELECT * FROM ${t.dataset.db}.${t.dataset.tbl} LIMIT 50`;
+      const q = `SELECT * FROM ${qi(t.dataset.db)}.${qi(t.dataset.tbl)} LIMIT 50`;
       document.getElementById("sql").value = q;
       runQuery();
     }));
     el.querySelectorAll(".ddl").forEach(d => d.addEventListener("click", () => {
-      document.getElementById("sql").value = `SHOW CREATE TABLE ${d.dataset.db}.${d.dataset.tbl}`;
+      document.getElementById("sql").value = `SHOW CREATE TABLE ${qi(d.dataset.db)}.${qi(d.dataset.tbl)}`;
       runQuery();
     }));
   } catch (e) { el.textContent = "schema error: " + e.message; }
@@ -161,7 +165,7 @@ async function runQuery() {
   err.textContent = ""; table.innerHTML = "<tr><td>running…</td></tr>";
   table.classList.toggle("raw", /^\s*show\s+create/i.test(sql));
   try {
-    const res = await fetch(`/v1/branches/${selected}/query`, {
+    const res = await fetch(`/v1/branches/${encodeURIComponent(selected)}/query`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sql }),
     });

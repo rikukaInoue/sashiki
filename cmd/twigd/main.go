@@ -122,7 +122,7 @@ func main() {
 	}
 
 	token := os.Getenv(cfg.Auth.APITokenEnv)
-	srv := api.New(mgr, cfg.Domain, cfg.Engine.Mysql.ProxyUser, cfg.Engine.Mysql.ProxyPass, token, db)
+	srv := api.New(mgr, cfg.Domain, cfg.Engine.Type, cfg.Engine.Mysql.ProxyUser, cfg.Engine.Mysql.ProxyPass, token, db)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
