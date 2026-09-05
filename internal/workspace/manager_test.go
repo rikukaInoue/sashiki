@@ -825,3 +825,55 @@ func TestSetBaselineRequiresRegistered(t *testing.T) {
 		t.Errorf("set to registered baseline should work: %v", err)
 	}
 }
+
+func TestMaxRunningLimitsConcurrentEngines(t *testing.T) {
+	m := newTestManagerCfg(t, &mockStorage{}, &mockEngine{}, "", func(c *Config) {
+		c.MaxRunning = 2
+		c.MaxBranches = 10
+	})
+	for i := 1; i <= 2; i++ {
+		if _, err := m.Create(context.Background(), fmt.Sprintf("pr-%d", i), 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 3本目は max_running で拒否(volume 数 MaxBranches とは別)
+	_, err := m.Create(context.Background(), "pr-3", 0)
+	if !errors.Is(err, ErrLimitReached) {
+		t.Errorf("err = %v, want ErrLimitReached (max_running)", err)
+	}
+	if err != nil && !strings.Contains(err.Error(), "max_running") {
+		t.Errorf("error should mention max_running: %v", err)
+	}
+}
+
+func TestExpectedRSSAdmission(t *testing.T) {
+	m := newTestManagerCfg(t, &mockStorage{}, &mockEngine{}, "", func(c *Config) {
+		c.ExpectedRSSBytes = 400 * 1024 * 1024                                   // 400MB/本
+		c.AvailableMem = func() (int64, error) { return 500 * 1024 * 1024, nil } // 500MB
+	})
+	// 必要 = 400(rss) + 400(headroom=rss) = 800MB > 500 → 拒否
+	if _, err := m.Create(context.Background(), "pr-1", 0); !errors.Is(err, ErrLimitReached) {
+		t.Errorf("err = %v, want ErrLimitReached (memory)", err)
+	}
+	// 空きを増やせば通る
+	m.cfg.AvailableMem = func() (int64, error) { return 2 << 30, nil }
+	if _, err := m.Create(context.Background(), "pr-2", 0); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWakeChecksAdmission(t *testing.T) {
+	m := newTestManagerCfg(t, &mockStorage{}, &mockEngine{}, "", func(c *Config) {
+		c.ExpectedRSSBytes = 400 * 1024 * 1024
+		c.AvailableMem = func() (int64, error) { return 10 << 30, nil } // 潤沢
+	})
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	_ = m.db.SetState("pr-1", state.StateSleeping, "")
+	// メモリ枯渇に切り替え
+	m.cfg.AvailableMem = func() (int64, error) { return 100 * 1024 * 1024, nil }
+	if _, err := m.Wake(context.Background(), "pr-1"); !errors.Is(err, ErrLimitReached) {
+		t.Errorf("wake should check admission: %v", err)
+	}
+}

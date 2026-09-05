@@ -53,11 +53,14 @@ type Config struct {
 	// 使用中のブランチをリーパーが停止・削除しないための判定に使う。
 	ActiveConns func(name string) int
 
-	// メモリガード: create 時に空きメモリを確認する。AvailableMem が nil なら無効。
+	// メモリ admission(仕様 14-1): create/wake/recreate/lazy に適用。
 	// OOM killer は新しいブランチではなく既存の無関係な mysqld を殺す(PoC 実測)ため、
-	// 事後の監視ではなく事前の拒否で守る。
-	AvailableMem    func() (int64, error)
-	BufferPoolBytes int64
+	// 事後の監視ではなく事前の拒否で守る。AvailableMem が nil なら無効(best-effort)。
+	AvailableMem        func() (int64, error)
+	ExpectedRSSBytes    int64 // mysqld 1 本の想定 RSS。0 なら BufferPoolBytes+300MB
+	MemoryHeadroomBytes int64 // 0 なら ExpectedRSS を headroom に使う
+	BufferPoolBytes     int64
+	MaxRunning          int // 同時稼働 mysqld 数の上限(volume 数の MaxBranches とは別)
 }
 
 // Manager はブランチライフサイクルの実装。
@@ -191,7 +194,7 @@ func (m *Manager) CreateWithMeta(ctx context.Context, name string, port int, met
 	if err != nil {
 		return Info{}, err
 	}
-	if err := m.checkMemory(); err != nil {
+	if err := m.admitMemory("create"); err != nil {
 		return Info{}, err
 	}
 
@@ -318,6 +321,11 @@ func (m *Manager) Recreate(ctx context.Context, name string) (Info, error) {
 // 旧ボリュームを非同期削除する共通経路(reset の fsx 版 / recreate が共有)。
 // 切替(state.db の origin 更新・付け替え)はここに一度だけ書く(仕様 13章)。
 func (m *Manager) recreateFrom(ctx context.Context, b state.Branch, origin storage.SnapshotRef, hookEv hooks.Event) (Info, error) {
+	// recreate は新 mysqld を起動する。旧は Kill されるので純増ではないが、
+	// 一時的に新旧が並ぶため admission を確認する。
+	if err := m.admitMemory("recreate"); err != nil {
+		return Info{}, err
+	}
 	if err := m.db.SetState(b.Name, state.StateResetting, ""); err != nil {
 		return Info{}, err
 	}
@@ -522,19 +530,56 @@ func (m *Manager) waitRunning(ctx context.Context, name string) (int, error) {
 	return 0, fmt.Errorf("timeout waiting for branch %s to become running", name)
 }
 
-// checkMemory は空きメモリ < buffer pool + 300MB なら作成を拒否する。
-func (m *Manager) checkMemory() error {
-	if m.cfg.AvailableMem == nil || m.cfg.BufferPoolBytes <= 0 {
+// expectedRSS は mysqld 1 本の想定 RSS。
+func (m *Manager) expectedRSS() int64 {
+	if m.cfg.ExpectedRSSBytes > 0 {
+		return m.cfg.ExpectedRSSBytes
+	}
+	if m.cfg.BufferPoolBytes > 0 {
+		return m.cfg.BufferPoolBytes + 300*1024*1024
+	}
+	return 0
+}
+
+// admitMemory は mysqld を 1 本増やす操作(create/wake/recreate/lazy)の前に
+// 空きメモリと max_running を確認する。不足なら理由付きで拒否する(仕様 14-1)。
+func (m *Manager) admitMemory(op string) error {
+	// max_running: 現在 running な mysqld 数
+	if m.cfg.MaxRunning > 0 {
+		branches, err := m.db.ListBranches()
+		if err != nil {
+			return err
+		}
+		running := 0
+		for _, b := range branches {
+			if b.State == state.StateRunning {
+				running++
+			}
+		}
+		if running >= m.cfg.MaxRunning {
+			return fmt.Errorf("%w: max_running reached (%d running, op=%s)", ErrLimitReached, running, op)
+		}
+	}
+	// メモリ: MemAvailable > expected_rss + headroom
+	if m.cfg.AvailableMem == nil {
+		return nil
+	}
+	rss := m.expectedRSS()
+	if rss <= 0 {
 		return nil
 	}
 	avail, err := m.cfg.AvailableMem()
 	if err != nil {
-		return nil // 判定不能なら通す(ガードは best-effort)
+		return nil // 判定不能なら通す(best-effort)
 	}
-	need := m.cfg.BufferPoolBytes + 300*1024*1024
+	headroom := m.cfg.MemoryHeadroomBytes
+	if headroom <= 0 {
+		headroom = rss
+	}
+	need := rss + headroom
 	if avail < need {
-		return fmt.Errorf("%w: available memory %dMB < required %dMB",
-			ErrLimitReached, avail/1024/1024, need/1024/1024)
+		return fmt.Errorf("%w: memory (available %dMB < required %dMB, op=%s)",
+			ErrLimitReached, avail/1024/1024, need/1024/1024, op)
 	}
 	return nil
 }
@@ -562,6 +607,11 @@ func (m *Manager) Wake(ctx context.Context, name string) (Info, error) {
 	}
 	if b.State != state.StateSleeping && b.State != state.StateRunning {
 		return Info{}, fmt.Errorf("branch %s is %s (cannot wake)", name, b.State)
+	}
+	if b.State == state.StateSleeping {
+		if err := m.admitMemory("wake"); err != nil {
+			return Info{}, err
+		}
 	}
 	vol, err := m.resolveVolume(ctx, b)
 	if err != nil {
