@@ -1,0 +1,22 @@
+[Unit]
+Description=twig MySQL instance %i
+After=network.target zfs-mount.service
+
+[Service]
+Type=simple
+User=mysql
+Group=mysql
+EnvironmentFile=/etc/twig/%i.env
+ExecStart=/usr/sbin/mysqld \
+  --datadir=${DATADIR} \
+  --port=${PORT} \
+  --socket=/tmp/mysql-%i.sock \
+  --pid-file=/tmp/mysql-%i.pid \
+  --log-error=/var/log/twig/%i.err \
+  --innodb-buffer-pool-size=256M \
+  --skip-mysqlx
+Restart=no
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

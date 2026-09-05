@@ -21,6 +21,18 @@ $ twig delete pr-123    # PR を閉じたら消す
 **v0.1 開発中**(private)。zfs バックエンド + MySQL + REST API + CLI。
 ロードマップ: v0.2 でプロキシ + lazy create(`mysql -udev@pr-123` で存在しないブランチが生える)、v0.3 で hooks / アイドル停止 / ベースライン自動更新、v1.0 で FSx バックエンド。
 
+## Quick Start (Ubuntu 24.04)
+
+```bash
+sudo twig init --pool dbpool --device /dev/nvme1n1   # デバイス名は lsblk で確認
+# ベースデータを投入して baseline の snapshot を取得する(init 完了時のガイダンス参照)
+sudo systemctl enable --now twigd
+twig create pr-1
+```
+
+`twig init` は パッケージ導入・AppArmor 無効化・zpool/データセット作成・
+systemd ユニット・config 生成までを冪等に行う(構成済みステップはスキップ)。
+
 ## アーキテクチャ
 
 ```

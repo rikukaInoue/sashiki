@@ -38,13 +38,19 @@ rm -f "$POOL_IMG"
 rm -rf /var/lib/twig /var/log/twig /etc/twig
 mkdir -p /var/lib/twig/branches /var/log/twig/hooks /etc/twig/hooks
 
-# --- 2. loopback zpool ---
-log "zpool (loopback)"
+# --- 2. twig init (zpool/データセット/unit/config を作る) ---
+log "twig install + init"
+install -m 755 "$TWIGD_BIN" /usr/local/bin/twigd
+install -m 755 "$TWIG_BIN" /usr/local/bin/twig
 truncate -s 3G "$POOL_IMG"
-zpool create -o ashift=12 $POOL "$POOL_IMG"
-zfs set compression=lz4 atime=off $POOL
-zfs create -o recordsize=16k -o logbias=throughput $POOL/base
-zfs create $POOL/branches
+twig init --pool $POOL --device "$POOL_IMG" --skip-packages --yes
+zfs list $POOL/base $POOL/branches > /dev/null || fail "init should create datasets"
+# 再実行安全であること(主要ステップがスキップされ成功する)
+init2=$(twig init --pool $POOL --skip-packages --yes) || fail "init re-run should succeed"
+echo "$init2" | grep -q "スキップ" || fail "init should be idempotent"
+# E2E 用にポートレンジと上限を絞る
+sed -i 's/port_range: \[3401, 3600\]/port_range: [3401, 3410]/' /etc/twig/config.yaml
+sed -i 's/max_branches: 50/max_branches: 5/' /etc/twig/config.yaml
 
 # --- 3. ベース MySQL + 小さなサンプルデータ ---
 log "base mysql"
@@ -79,59 +85,7 @@ mysqladmin -uroot -S /tmp/mysql-e2e-base.sock shutdown
 sleep 2
 zfs snapshot $POOL/base@baseline
 
-# --- 4. twig インストール ---
-log "install twig"
-install -m 755 "$TWIGD_BIN" /usr/local/bin/twigd
-install -m 755 "$TWIG_BIN" /usr/local/bin/twig
-SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-if [ -f "$SCRIPT_DIR/../deploy/systemd/mysqld@.service" ]; then
-  cp "$SCRIPT_DIR/../deploy/systemd/mysqld@.service" /etc/systemd/system/
-else
-  # バイナリだけ持ち込むケース(EC2 等)向けに埋め込みで書く
-  cat > /etc/systemd/system/mysqld@.service <<'UNIT'
-[Unit]
-Description=twig MySQL instance %i
-After=network.target zfs-mount.service
-[Service]
-Type=simple
-User=mysql
-Group=mysql
-EnvironmentFile=/etc/twig/%i.env
-ExecStart=/usr/sbin/mysqld --datadir=${DATADIR} --port=${PORT} --socket=/tmp/mysql-%i.sock --pid-file=/tmp/mysql-%i.pid --log-error=/var/log/twig/%i.err --innodb-buffer-pool-size=128M --skip-mysqlx
-Restart=no
-LimitNOFILE=65535
-[Install]
-WantedBy=multi-user.target
-UNIT
-fi
-systemctl daemon-reload
-
-cat > /etc/twig/config.yaml <<YAML
-listen:
-  api: "127.0.0.1:8080"
-state_db: /var/lib/twig/state.db
-storage:
-  backend: zfs
-  zfs:
-    pool: $POOL
-    base_dataset: $POOL/base
-    branch_parent: $POOL/branches
-    baseline_snapshot: baseline
-    sudo: false
-engine:
-  type: mysql
-  mysql:
-    port_range: [3401, 3410]
-    env_dir: /etc/twig
-    sudo: false
-branches:
-  name_pattern: "^[a-z0-9-]{1,32}$"
-  max_branches: 5
-hooks:
-  dir: /etc/twig/hooks
-  log_dir: /var/log/twig/hooks
-YAML
-
+# --- 4. twigd 起動 ---
 log "start twigd"
 /usr/local/bin/twigd --config /etc/twig/config.yaml > /var/log/twig/twigd.log 2>&1 &
 TWIGD_PID=$!
