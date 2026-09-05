@@ -19,7 +19,15 @@ apt-get update -q > /dev/null
 apt-get install -y -q zfsutils-linux mysql-server-8.0 mysql-client-8.0 apparmor-utils > /dev/null
 systemctl stop mysql 2>/dev/null || true
 systemctl disable mysql 2>/dev/null || true
-aa-complain /usr/sbin/mysqld > /dev/null 2>&1 || true
+# AppArmor: aa-complain が環境によって効かないことがあるため、
+# mysqld プロファイルを disable 登録 + カーネルからアンロードする(両方やる)。
+if [ -f /etc/apparmor.d/usr.sbin.mysqld ]; then
+  mkdir -p /etc/apparmor.d/disable
+  ln -sf /etc/apparmor.d/usr.sbin.mysqld /etc/apparmor.d/disable/ || true
+  apparmor_parser -R /etc/apparmor.d/usr.sbin.mysqld 2>&1 || true
+fi
+aa-complain /usr/sbin/mysqld 2>&1 || true
+aa-status 2>/dev/null | grep -i mysqld || echo "apparmor: mysqld profile not loaded (OK)"
 
 # --- 1. クリーンアップ(再実行安全) ---
 log "cleanup previous run"
