@@ -165,6 +165,15 @@ twig delete pr-1
 twig delete pr-2
 zfs list -r $POOL/branches | grep -q pr- && fail "datasets should be destroyed"
 
+log "token 管理"
+out=$(twig token create --name e2e-test) || fail "token create"
+tok=$(echo "$out" | grep -o "twig_[0-9a-f]*")
+[ -n "$tok" ] || fail "token: 平文が表示されるべき"
+twig token list | grep -q e2e-test || fail "token list"
+# 非 loopback からの検証は環境上できないため、DB トークンの受理はユニットテストで担保
+twig token revoke e2e-test || fail "token revoke"
+twig token list | grep -q e2e-test && fail "token should be revoked"
+
 log "idle stop & TTL (リーパー)"
 # 短い閾値で twigd を再起動
 kill $TWIGD_PID 2>/dev/null || true
