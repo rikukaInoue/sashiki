@@ -43,7 +43,7 @@ twig CLI ──HTTP──▶ twigd ──┬─▶ storage (zfs | fsx)   クロ�
 ```
 
 - **storage** と **engine** はインターフェース。バックエンドは `Capabilities` で性格(FastRollback / TypicalCreate / AsyncDelete)を宣言し、コアが挙動を切り替える(zfs の rollback は 6 秒、FSx の restore は 10 分——同じ「reset」でも実装が変わる)
-- **@init スナップショットは必ず mysqld の正常終了状態で撮る**。これを破るとブランチ起動のたびに InnoDB クラッシュリカバリが走る(設計全体で最も重要な不変条件)
+- **@init スナップショットは必ず mysqld の正常終了状態でのみ取得する**。これを破るとブランチ起動のたびに InnoDB クラッシュリカバリが走る(設計全体で最も重要な不変条件)
 - 自社固有の処理(マイグレーション適用・データマスク)はコアに入れず **hooks** に追い出す
 
 ## 開発

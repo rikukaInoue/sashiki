@@ -56,7 +56,7 @@ type Storage interface {
 	DeleteAsync(ctx context.Context, vol Volume) (JobID, error)
 	Poll(ctx context.Context, job JobID) (JobStatus, error)
 
-	// SnapshotBase はベースライン更新用。現在の base から新スナップショットを撮る。
+	// SnapshotBase はベースライン更新用。現在の base から新スナップショットを取得する。
 	SnapshotBase(ctx context.Context, tag string) (SnapshotRef, error)
 	ListSnapshots(ctx context.Context) ([]SnapshotRef, error)
 
