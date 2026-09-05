@@ -1,0 +1,16 @@
+[Unit]
+Description=twig PostgreSQL instance %i
+After=network.target zfs-mount.service
+
+[Service]
+Type=simple
+User=postgres
+Group=postgres
+EnvironmentFile=/etc/twig/%i.env
+ExecStart=/bin/sh -c 'exec ${PGBIN}/postgres -D ${DATADIR} -p ${PORT} -c listen_addresses=127.0.0.1 -c unix_socket_directories=/tmp'
+ExecStop=/bin/sh -c '${PGBIN}/pg_ctl stop -D ${DATADIR} -m fast'
+Restart=no
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
