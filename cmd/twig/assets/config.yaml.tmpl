@@ -29,6 +29,8 @@ branches:
   max_branches: 50
   lazy_create: true
   lazy_create_max_wait: 20s
+  idle_stop_after: 30m      # 接続なしで mysqld を停止(データは残る、再接続で起床)
+  delete_after_idle: 168h   # 7日間接続なしで削除。PR close 取りこぼしの保険
 
 hooks:
   dir: /etc/twig/hooks

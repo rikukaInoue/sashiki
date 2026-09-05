@@ -43,6 +43,21 @@ type Config struct {
 	// バックエンドの TypicalCreate が LazyMaxWait を超える場合は無効(仕様 15-3)。
 	LazyCreate  bool
 	LazyMaxWait time.Duration
+
+	// リーパー(reaper.go)
+	IdleStopAfter   time.Duration // 0 = アイドル停止しない
+	DeleteAfterIdle time.Duration // 0 = 自動削除しない
+
+	// ActiveConns はブランチの現在の接続数(プロキシが提供)。nil なら常に 0 扱い。
+	// last_conn_at は接続開始時刻しか進まないため、長寿命接続を張ったまま
+	// 使用中のブランチをリーパーが停止・削除しないための判定に使う。
+	ActiveConns func(name string) int
+
+	// メモリガード: create 時に空きメモリを確認する。AvailableMem が nil なら無効。
+	// OOM killer は新しいブランチではなく既存の無関係な mysqld を殺す(PoC 実測)ため、
+	// 事後の監視ではなく事前の拒否で守る。
+	AvailableMem    func() (int64, error)
+	BufferPoolBytes int64
 }
 
 // Manager はブランチライフサイクルの実装。
@@ -160,6 +175,9 @@ func (m *Manager) Create(ctx context.Context, name string, port int) (Info, erro
 	}
 	p, err := m.allocPort(port)
 	if err != nil {
+		return Info{}, err
+	}
+	if err := m.checkMemory(); err != nil {
 		return Info{}, err
 	}
 
@@ -292,6 +310,19 @@ func (m *Manager) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
+// SetActiveConns は接続数の参照先を設定する(プロキシは Manager に依存する
+// ため、twigd がプロキシ起動後に配線する)。
+func (m *Manager) SetActiveConns(fn func(name string) int) {
+	m.cfg.ActiveConns = fn
+}
+
+func (m *Manager) activeConns(name string) int {
+	if m.cfg.ActiveConns == nil {
+		return 0
+	}
+	return m.cfg.ActiveConns(name)
+}
+
 // RouteBranch はプロキシ用: ブランチのポートを返す。
 // 未知の名前は lazy create(有効時)、sleeping は wake する。
 // 接続を保持したまま待たせる前提なので、作成完了までブロックする。
@@ -364,6 +395,23 @@ func (m *Manager) waitRunning(ctx context.Context, name string) (int, error) {
 		}
 	}
 	return 0, fmt.Errorf("timeout waiting for branch %s to become running", name)
+}
+
+// checkMemory は空きメモリ < buffer pool + 300MB なら作成を拒否する。
+func (m *Manager) checkMemory() error {
+	if m.cfg.AvailableMem == nil || m.cfg.BufferPoolBytes <= 0 {
+		return nil
+	}
+	avail, err := m.cfg.AvailableMem()
+	if err != nil {
+		return nil // 判定不能なら通す(ガードは best-effort)
+	}
+	need := m.cfg.BufferPoolBytes + 300*1024*1024
+	if avail < need {
+		return fmt.Errorf("%w: available memory %dMB < required %dMB",
+			ErrLimitReached, avail/1024/1024, need/1024/1024)
+	}
+	return nil
 }
 
 func (m *Manager) lazyEnabled() bool {
