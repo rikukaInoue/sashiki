@@ -222,6 +222,13 @@ SASHIKI_EVENT=closed bash "$AE" || fail "action: closed should delete"
 SASHIKI_EVENT=closed bash "$AE" || fail "action: closed should be idempotent (404 OK)"
 unset SASHIKI_API_URL SASHIKI_BRANCH
 
+log "provenance / metadata (#35)"
+sashiki create prov-test --owner alice --purpose review --source '{"type":"github_pr","ref":"42"}' > /dev/null || fail "create with provenance"
+sashiki show prov-test --json | grep -q '"owner":"alice"' || fail "owner should be stored"
+sashiki show prov-test --json | grep -q '"purpose":"review"' || fail "purpose should be stored"
+sashiki show prov-test --json | grep -q 'github_pr' || fail "source (opaque) should round-trip"
+sashiki delete prov-test > /dev/null
+
 log "error model + retry (hook失敗→修正→retry)"
 # 失敗する on-create フックを置く
 cat > /etc/sashiki/hooks/on-create.sh <<'HOOK'

@@ -171,8 +171,12 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 }
 
 type createReq struct {
-	Name string `json:"name"`
-	Port int    `json:"port,omitempty"`
+	Name    string          `json:"name"`
+	Port    int             `json:"port,omitempty"`
+	Profile string          `json:"profile,omitempty"`
+	Owner   string          `json:"owner,omitempty"`
+	Purpose string          `json:"purpose,omitempty"`
+	Source  json.RawMessage `json:"source,omitempty"`
 }
 
 func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -183,9 +187,10 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	existOK := r.URL.Query().Get("exist_ok") == "true"
 	var info workspace.Info
+	meta := state.Meta{Profile: req.Profile, Owner: req.Owner, Purpose: req.Purpose, Source: string(req.Source)}
 	opID, err := s.track("create", req.Name, func() error {
 		var e error
-		info, e = s.mgr.Create(r.Context(), req.Name, req.Port)
+		info, e = s.mgr.CreateWithMeta(r.Context(), req.Name, req.Port, meta)
 		return e
 	})
 	if errors.Is(err, workspace.ErrExists) && existOK {
@@ -366,6 +371,11 @@ type branchJSON struct {
 	ErrorCode      string            `json:"error_code,omitempty"`
 	Recoverable    bool              `json:"recoverable,omitempty"`
 	Suggestions    []string          `json:"suggested_actions,omitempty"`
+	Profile        string            `json:"profile,omitempty"`
+	Owner          string            `json:"owner,omitempty"`
+	Purpose        string            `json:"purpose,omitempty"`
+	Source         json.RawMessage   `json:"source,omitempty"`
+	ExpiresAt      *string           `json:"expires_at,omitempty"`
 }
 
 func (s *Server) toJSON(i workspace.Info) branchJSON {
@@ -384,6 +394,16 @@ func (s *Server) toJSON(i workspace.Info) branchJSON {
 		ErrorCode:      i.ErrorCode,
 		Recoverable:    i.Recoverable,
 		Suggestions:    i.SuggestedActions,
+		Profile:        i.Profile,
+		Owner:          i.Owner,
+		Purpose:        i.Purpose,
+	}
+	if i.Source != "" {
+		b.Source = json.RawMessage(i.Source)
+	}
+	if i.ExpiresAt != nil {
+		e := i.ExpiresAt.UTC().Format(time.RFC3339)
+		b.ExpiresAt = &e
 	}
 	if i.LastConnAt != nil {
 		t := i.LastConnAt.UTC().Format(time.RFC3339)

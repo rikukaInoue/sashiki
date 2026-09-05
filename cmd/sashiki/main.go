@@ -31,7 +31,7 @@ func main() {
 
 func usage() int {
 	fmt.Fprint(os.Stderr, `Usage:
-  sashiki create <name> [--port N] [--json]
+  sashiki create <name> [--port N] [--owner O] [--purpose P] [--source JSON] [--json]
   sashiki delete <name>
   sashiki reset  <name> [--json]
   sashiki recreate <name> [--json]
@@ -183,32 +183,55 @@ type branchView struct {
 // --- commands ---
 
 func parseFlags(args []string) (pos []string, port int, jsonOut bool, err error) {
+	pos, port, jsonOut, _, err = parseFlagsKV(args)
+	return
+}
+
+// parseFlagsKV は --json / --port に加え、--owner/--purpose/--source/--profile を拾う。
+func parseFlagsKV(args []string) (pos []string, port int, jsonOut bool, kv map[string]string, err error) {
+	kv = map[string]string{}
 	for i := 0; i < len(args); i++ {
-		switch args[i] {
+		a := args[i]
+		switch a {
 		case "--json":
 			jsonOut = true
 		case "--port":
 			if i+1 >= len(args) {
-				return nil, 0, false, fmt.Errorf("--port requires a value")
+				return nil, 0, false, nil, fmt.Errorf("--port requires a value")
 			}
 			i++
 			port, err = strconv.Atoi(args[i])
 			if err != nil {
-				return nil, 0, false, fmt.Errorf("--port: %w", err)
+				return nil, 0, false, nil, fmt.Errorf("--port: %w", err)
 			}
+		case "--owner", "--purpose", "--source", "--profile":
+			if i+1 >= len(args) {
+				return nil, 0, false, nil, fmt.Errorf("%s requires a value", a)
+			}
+			i++
+			kv[a[2:]] = args[i]
 		default:
-			pos = append(pos, args[i])
+			pos = append(pos, a)
 		}
 	}
-	return pos, port, jsonOut, nil
+	return pos, port, jsonOut, kv, nil
 }
 
 func cmdCreate(args []string) int {
-	pos, port, jsonOut, err := parseFlags(args)
+	pos, port, jsonOut, kv, err := parseFlagsKV(args)
 	if err != nil || len(pos) != 1 {
 		return usage()
 	}
-	code, data, err := call("POST", "/v1/branches", map[string]any{"name": pos[0], "port": port})
+	body := map[string]any{"name": pos[0], "port": port}
+	for _, k := range []string{"owner", "purpose", "profile"} {
+		if v := kv[k]; v != "" {
+			body[k] = v
+		}
+	}
+	if src := kv["source"]; src != "" {
+		body["source"] = json.RawMessage(src)
+	}
+	code, data, err := call("POST", "/v1/branches", body)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sashiki:", err)
 		return exitError

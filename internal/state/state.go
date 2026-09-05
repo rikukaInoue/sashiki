@@ -38,6 +38,12 @@ type Branch struct {
 	ErrorCode        string
 	Recoverable      bool
 	SuggestedActions []string
+	// provenance(仕様 11-2): core は source の中身を解釈しない。
+	Profile   string
+	Owner     string
+	Purpose   string
+	Source    string // opaque JSON
+	ExpiresAt *time.Time
 }
 
 // HookRun は hook 実行記録。
@@ -73,6 +79,11 @@ func Open(path string) (*DB, error) {
 		"ALTER TABLE branches ADD COLUMN error_code TEXT",
 		"ALTER TABLE branches ADD COLUMN recoverable INTEGER",
 		"ALTER TABLE branches ADD COLUMN suggested_actions TEXT",
+		"ALTER TABLE branches ADD COLUMN profile TEXT",
+		"ALTER TABLE branches ADD COLUMN owner TEXT",
+		"ALTER TABLE branches ADD COLUMN purpose TEXT",
+		"ALTER TABLE branches ADD COLUMN source TEXT",
+		"ALTER TABLE branches ADD COLUMN expires_at TEXT",
 	} {
 		_, _ = db.Exec(col)
 	}
@@ -91,7 +102,12 @@ CREATE TABLE IF NOT EXISTS branches (
   failed_operation TEXT,
   error_code       TEXT,
   recoverable      INTEGER,
-  suggested_actions TEXT
+  suggested_actions TEXT,
+  profile          TEXT,
+  owner            TEXT,
+  purpose          TEXT,
+  source           TEXT,
+  expires_at       TEXT
 );
 CREATE TABLE IF NOT EXISTS hook_runs (
   id          INTEGER PRIMARY KEY,
@@ -186,6 +202,36 @@ func (d *DB) TouchLastConn(name string) error {
 	return err
 }
 
+// Meta は create 時に付ける provenance(仕様 11-2)。
+type Meta struct {
+	Profile string
+	Owner   string
+	Purpose string
+	Source  string // opaque JSON。core は解釈しない
+}
+
+// SetMeta は provenance を記録する(create 直後)。
+func (d *DB) SetMeta(name string, m Meta) error {
+	_, err := d.sql.Exec(
+		`UPDATE branches SET profile = ?, owner = ?, purpose = ?, source = ? WHERE name = ?`,
+		nullIfEmpty(m.Profile), nullIfEmpty(m.Owner), nullIfEmpty(m.Purpose), nullIfEmpty(m.Source), name)
+	return err
+}
+
+// SetExpiresAt は lease 期限を設定する(#34)。
+func (d *DB) SetExpiresAt(name string, t time.Time) error {
+	_, err := d.sql.Exec(`UPDATE branches SET expires_at = ? WHERE name = ?`,
+		t.UTC().Format(timeFmt), name)
+	return err
+}
+
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
 // UpdateOrigin は branch の origin_snapshot を更新する(recreate 時)。
 func (d *DB) UpdateOrigin(name, origin string) error {
 	_, err := d.sql.Exec(`UPDATE branches SET origin_snapshot = ? WHERE name = ?`, origin, name)
@@ -202,7 +248,8 @@ func (d *DB) DeleteBranch(name string) error {
 func (d *DB) GetBranch(name string) (Branch, error) {
 	row := d.sql.QueryRow(
 		`SELECT name, state, port, origin_snapshot, created_at, last_conn_at, COALESCE(error_message,''),
-		        failed_operation, error_code, recoverable, suggested_actions
+		        failed_operation, error_code, recoverable, suggested_actions,
+		        profile, owner, purpose, source, expires_at
 		 FROM branches WHERE name = ?`, name)
 	return scanBranch(row)
 }
@@ -211,7 +258,8 @@ func (d *DB) GetBranch(name string) (Branch, error) {
 func (d *DB) ListBranches() ([]Branch, error) {
 	rows, err := d.sql.Query(
 		`SELECT name, state, port, origin_snapshot, created_at, last_conn_at, COALESCE(error_message,''),
-		        failed_operation, error_code, recoverable, suggested_actions
+		        failed_operation, error_code, recoverable, suggested_actions,
+		        profile, owner, purpose, source, expires_at
 		 FROM branches ORDER BY created_at`)
 	if err != nil {
 		return nil, err
@@ -254,8 +302,10 @@ func scanBranch(row scannable) (Branch, error) {
 	var lastConn sql.NullString
 	var failedOp, errCode, sug sql.NullString
 	var rec sql.NullInt64
+	var profile, owner, purpose, source, expires sql.NullString
 	err := row.Scan(&b.Name, &b.State, &b.Port, &b.OriginSnapshot, &created, &lastConn, &b.ErrorMessage,
-		&failedOp, &errCode, &rec, &sug)
+		&failedOp, &errCode, &rec, &sug,
+		&profile, &owner, &purpose, &source, &expires)
 	if errors.Is(err, sql.ErrNoRows) {
 		return b, ErrNotFound
 	}
@@ -267,6 +317,15 @@ func scanBranch(row scannable) (Branch, error) {
 	b.Recoverable = rec.Valid && rec.Int64 != 0
 	if sug.Valid && sug.String != "" {
 		_ = json.Unmarshal([]byte(sug.String), &b.SuggestedActions)
+	}
+	b.Profile = profile.String
+	b.Owner = owner.String
+	b.Purpose = purpose.String
+	b.Source = source.String
+	if expires.Valid {
+		if t, err := time.Parse(timeFmt, expires.String); err == nil {
+			b.ExpiresAt = &t
+		}
 	}
 	if t, err := time.Parse(timeFmt, created); err == nil {
 		b.CreatedAt = t
