@@ -199,6 +199,16 @@ val=$(mysql -udev@pr-1 -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.
 [ "$val" = "3" ] || fail "existing branch should keep old baseline (got $val)"
 sashiki delete pr-new
 
+log "baseline immutable / set / gc (#37)"
+# refresh 済みなので baseline が2つ以上ある
+curl -sf http://127.0.0.1:8080/v1/baselines | grep -q '"is_current":true' || fail "should have a current baseline"
+NB=$(curl -sf http://127.0.0.1:8080/v1/baselines | grep -o '"snapshot"' | wc -l)
+[ "$NB" -ge 2 ] || fail "should have >=2 baselines after refresh (got $NB)"
+# gc: current と参照中は残る(pr-1 が旧baseline参照中)
+sashiki baseline gc > /dev/null || fail "baseline gc"
+# current baseline はまだ存在
+sashiki baseline list | grep -q '\*' || fail "current baseline should remain after gc"
+
 log "recreate (最新baselineから作り直し)"
 # refresh 済みなので current は新baseline(4行)。既存 pr-1 は旧(3行)
 val=$(mysql -udev@pr-1 -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.items" 2>/dev/null)

@@ -84,6 +84,12 @@ func Open(path string) (*DB, error) {
 		"ALTER TABLE branches ADD COLUMN purpose TEXT",
 		"ALTER TABLE branches ADD COLUMN source TEXT",
 		"ALTER TABLE branches ADD COLUMN expires_at TEXT",
+		"ALTER TABLE baselines ADD COLUMN source_revision TEXT",
+		"ALTER TABLE baselines ADD COLUMN schema_revision TEXT",
+		"ALTER TABLE baselines ADD COLUMN data_as_of TEXT",
+		"ALTER TABLE baselines ADD COLUMN masked INTEGER",
+		"ALTER TABLE baselines ADD COLUMN mask_pipeline_version TEXT",
+		"ALTER TABLE baselines ADD COLUMN validated INTEGER",
 	} {
 		_, _ = db.Exec(col)
 	}
@@ -127,7 +133,13 @@ CREATE TABLE IF NOT EXISTS tokens (
 CREATE TABLE IF NOT EXISTS baselines (
   snapshot    TEXT PRIMARY KEY,
   created_at  TEXT NOT NULL,
-  is_current  INTEGER NOT NULL DEFAULT 0
+  is_current  INTEGER NOT NULL DEFAULT 0,
+  source_revision     TEXT,
+  schema_revision     TEXT,
+  data_as_of          TEXT,
+  masked              INTEGER,
+  mask_pipeline_version TEXT,
+  validated           INTEGER
 );
 CREATE TABLE IF NOT EXISTS operations (
   id          TEXT PRIMARY KEY,
@@ -452,7 +464,42 @@ func (d *DB) CheckTokenHash(hash string) (bool, error) {
 	return n > 0, nil
 }
 
-// SetCurrentBaseline は snapshot を登録して current に切り替える。
+// BaselineProvenance は baseline の来歴(仕様 12-1)。schema の鮮度と data の
+// 鮮度は一致しないため分けて持つ。
+type BaselineProvenance struct {
+	SourceRevision      string
+	SchemaRevision      string
+	DataAsOf            string
+	Masked              bool
+	MaskPipelineVersion string
+	Validated           bool
+}
+
+// BaselineRow は baselines テーブルの 1 行。
+type BaselineRow struct {
+	Snapshot  string
+	CreatedAt time.Time
+	IsCurrent bool
+	Prov      BaselineProvenance
+}
+
+// RegisterBaseline は snapshot を provenance 付きで登録する(current は変えない)。
+func (d *DB) RegisterBaseline(snapshot string, p BaselineProvenance) error {
+	_, err := d.sql.Exec(
+		`INSERT INTO baselines (snapshot, created_at, is_current, source_revision, schema_revision,
+		   data_as_of, masked, mask_pipeline_version, validated)
+		 VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(snapshot) DO UPDATE SET source_revision=excluded.source_revision,
+		   schema_revision=excluded.schema_revision, data_as_of=excluded.data_as_of,
+		   masked=excluded.masked, mask_pipeline_version=excluded.mask_pipeline_version,
+		   validated=excluded.validated`,
+		snapshot, time.Now().UTC().Format(timeFmt),
+		nullIfEmpty(p.SourceRevision), nullIfEmpty(p.SchemaRevision), nullIfEmpty(p.DataAsOf),
+		boolToInt(p.Masked), nullIfEmpty(p.MaskPipelineVersion), boolToInt(p.Validated))
+	return err
+}
+
+// SetCurrentBaseline は snapshot を登録して current に切り替える(pointer 更新)。
 func (d *DB) SetCurrentBaseline(snapshot string) error {
 	tx, err := d.sql.Begin()
 	if err != nil {
@@ -469,6 +516,83 @@ func (d *DB) SetCurrentBaseline(snapshot string) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// ListBaselines は登録済み baseline を新しい順に返す。
+func (d *DB) ListBaselines() ([]BaselineRow, error) {
+	rows, err := d.sql.Query(
+		`SELECT snapshot, created_at, is_current, COALESCE(source_revision,''),
+		        COALESCE(schema_revision,''), COALESCE(data_as_of,''), COALESCE(masked,0),
+		        COALESCE(mask_pipeline_version,''), COALESCE(validated,0)
+		 FROM baselines ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []BaselineRow
+	for rows.Next() {
+		var b BaselineRow
+		var created string
+		var cur, masked, validated int
+		if err := rows.Scan(&b.Snapshot, &created, &cur, &b.Prov.SourceRevision,
+			&b.Prov.SchemaRevision, &b.Prov.DataAsOf, &masked, &b.Prov.MaskPipelineVersion, &validated); err != nil {
+			return nil, err
+		}
+		if t, err := time.Parse(timeFmt, created); err == nil {
+			b.CreatedAt = t
+		}
+		b.IsCurrent = cur != 0
+		b.Prov.Masked = masked != 0
+		b.Prov.Validated = validated != 0
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// GetBaseline は 1 件取得。
+func (d *DB) GetBaseline(snapshot string) (BaselineRow, error) {
+	list, err := d.ListBaselines()
+	if err != nil {
+		return BaselineRow{}, err
+	}
+	for _, b := range list {
+		if b.Snapshot == snapshot {
+			return b, nil
+		}
+	}
+	return BaselineRow{}, ErrNotFound
+}
+
+// BaselineRefCounts は各 baseline を origin にしている branch 数を返す。
+func (d *DB) BaselineRefCounts() (map[string]int, error) {
+	rows, err := d.sql.Query(`SELECT origin_snapshot, COUNT(*) FROM branches GROUP BY origin_snapshot`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]int{}
+	for rows.Next() {
+		var snap string
+		var n int
+		if err := rows.Scan(&snap, &n); err != nil {
+			return nil, err
+		}
+		out[snap] = n
+	}
+	return out, rows.Err()
+}
+
+// DeleteBaseline は baselines 行を削除する(GC 用。current/参照中は呼び出し側で除外)。
+func (d *DB) DeleteBaseline(snapshot string) error {
+	_, err := d.sql.Exec(`DELETE FROM baselines WHERE snapshot = ?`, snapshot)
+	return err
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // CurrentBaselineOverride は DB に記録された current baseline を返す(無ければ false)。
