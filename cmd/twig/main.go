@@ -37,6 +37,7 @@ func usage() int {
   twig list   [--json]
   twig show   <name> [--json]
   twig connect <name>
+  twig init   --pool <p> [--device <dev>] [--skip-packages] [--yes]
   twig version
 `)
 	return exitUsage
@@ -60,6 +61,8 @@ func run(args []string) int {
 		return cmdShow(rest)
 	case "connect":
 		return cmdConnect(rest)
+	case "init":
+		return cmdInit(rest)
 	case "version":
 		fmt.Println("twig", version)
 		return exitOK
