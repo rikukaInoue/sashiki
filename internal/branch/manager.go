@@ -338,7 +338,8 @@ func (m *Manager) Delete(ctx context.Context, name string) error {
 	}
 	vol, err := m.resolveVolume(ctx, b)
 	if err != nil {
-		return err
+		// 実体が見つからない(手動削除・不整合)場合は行だけ片付ける
+		return m.db.DeleteBranch(name)
 	}
 	ins := m.instance(b, vol)
 	_ = m.eng.Stop(ctx, ins) // 動いていなくてもよい

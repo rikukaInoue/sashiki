@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -208,8 +209,13 @@ func (b *Backend) Clone(ctx context.Context, baseline storage.SnapshotRef, name 
 	return storage.Volume{Name: name, Dataset: volID, Path: target}, nil
 }
 
-// ResolveVolume は twig-branch タグでボリュームを引く。reset の付け替え中は
-// 複数世代が共存し得るため、作成が最新の AVAILABLE を採用する。
+// genSuffix は世代サフィックス(-g + 6 hex)。
+var genSuffix = regexp.MustCompile(`-g[0-9a-f]{6}$`)
+
+// ResolveVolume はボリューム名の世代サフィックスを剥がしてブランチ名と照合する。
+// (DescribeVolumes は Tags を返さない — 実機検証で判明。タグは課金属性用に
+// 付けるだけで、解決には使わない。)
+// reset の付け替え中は複数世代が共存し得るため、作成が最新の AVAILABLE を採用する。
 func (b *Backend) ResolveVolume(ctx context.Context, name string) (storage.Volume, error) {
 	out, err := b.api.DescribeVolumes(ctx, &awsfsx.DescribeVolumesInput{
 		Filters: []types.VolumeFilter{{
@@ -222,13 +228,11 @@ func (b *Backend) ResolveVolume(ctx context.Context, name string) (storage.Volum
 	}
 	var candidates []types.Volume
 	for _, v := range out.Volumes {
-		if v.Lifecycle != types.VolumeLifecycleAvailable {
+		if v.Lifecycle != types.VolumeLifecycleAvailable || v.Name == nil {
 			continue
 		}
-		for _, t := range v.Tags {
-			if t.Key != nil && *t.Key == "twig-branch" && t.Value != nil && *t.Value == name {
-				candidates = append(candidates, v)
-			}
+		if genSuffix.ReplaceAllString(*v.Name, "") == name {
+			candidates = append(candidates, v)
 		}
 	}
 	if len(candidates) == 0 {
