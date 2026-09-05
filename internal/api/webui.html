@@ -32,6 +32,9 @@
   #result-wrap { overflow-x: auto; margin-top: .8rem; }
   #result td, #result th { white-space: nowrap; max-width: 24rem; overflow: hidden; text-overflow: ellipsis; }
   #qerr { color: #cf222e; white-space: pre-wrap; }
+  #result.raw td { white-space: pre-wrap; max-width: none; overflow: visible; }
+  #schema .ddl { opacity: .5; cursor: pointer; font-size: .8em; margin-left: .4rem; }
+  #schema .ddl:hover { opacity: 1; text-decoration: underline; }
   .null { opacity: .4; font-style: italic; }
 </style>
 <h1>🌿 twig <span id="baseline"></span></h1>
@@ -111,17 +114,23 @@ async function openBranch(name) {
       `<div class="db">${esc(d.name)}</div>` +
       d.tables.map(t =>
         `<div class="tblwrap"><div class="tbl" data-db="${esc(d.name)}" data-tbl="${esc(t.name)}">` +
-        `▸ ${esc(t.name)} <span style="opacity:.5">~${t.approx_rows}行</span></div>` +
+        `▸ ${esc(t.name)} <span style="opacity:.5">~${t.approx_rows}行</span>` +
+        `<span class="ddl" data-db="${esc(d.name)}" data-tbl="${esc(t.name)}">DDL</span></div>` +
         t.columns.map(c =>
           `<div class="col">${c.key === "PRI" ? '<span class="key">🔑</span>' : ""}` +
           `${esc(c.name)} <span>${esc(c.type)}${c.nullable ? "?" : ""}</span></div>`
         ).join("") + `</div>`
       ).join("")
     ).join("");
-    el.querySelectorAll(".tbl").forEach(t => t.addEventListener("click", () => {
+    el.querySelectorAll(".tbl").forEach(t => t.addEventListener("click", e => {
+      if (e.target.classList.contains("ddl")) return;
       t.parentElement.classList.toggle("open");
       const q = `SELECT * FROM ${t.dataset.db}.${t.dataset.tbl} LIMIT 50`;
       document.getElementById("sql").value = q;
+      runQuery();
+    }));
+    el.querySelectorAll(".ddl").forEach(d => d.addEventListener("click", () => {
+      document.getElementById("sql").value = `SHOW CREATE TABLE ${d.dataset.db}.${d.dataset.tbl}`;
       runQuery();
     }));
   } catch (e) { el.textContent = "schema error: " + e.message; }
@@ -133,6 +142,7 @@ async function runQuery() {
   const err = document.getElementById("qerr");
   const table = document.getElementById("result");
   err.textContent = ""; table.innerHTML = "<tr><td>running…</td></tr>";
+  table.classList.toggle("raw", /^\s*show\s+create/i.test(sql));
   try {
     const res = await fetch(`/v1/branches/${selected}/query`, {
       method: "POST", headers: { "Content-Type": "application/json" },
