@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -77,7 +78,12 @@ func (s *Server) authorized(r *http.Request) bool {
 	}
 	if s.tokens != nil {
 		ok, err := s.tokens.CheckTokenHash(hex.EncodeToString(gh[:]))
-		if err == nil && ok {
+		if err != nil {
+			// DB 障害を無言の 401 にしない(認証失敗とは区別してログに残す)
+			log.Printf("api: token check failed: %v", err)
+			return false
+		}
+		if ok {
 			return true
 		}
 	}
