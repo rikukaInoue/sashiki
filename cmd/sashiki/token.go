@@ -1,5 +1,5 @@
-// twig token: API トークン管理(仕様 13-3)。
-// state.db を直接開くため root で実行する(twigd の稼働中でも WAL で共存できる)。
+// sashiki token: API トークン管理(仕様 13-3)。
+// state.db を直接開くため root で実行する(sashikid の稼働中でも WAL で共存できる)。
 // 平文トークンは作成時に 1 回だけ表示し、保存するのは SHA-256 のみ。
 package main
 
@@ -11,8 +11,8 @@ import (
 	"os"
 	"text/tabwriter"
 
-	"github.com/rikukaInoue/twig/internal/config"
-	"github.com/rikukaInoue/twig/internal/state"
+	"github.com/rikukaInoue/sashiki/internal/config"
+	"github.com/rikukaInoue/sashiki/internal/state"
 )
 
 func cmdToken(args []string) int {
@@ -21,17 +21,17 @@ func cmdToken(args []string) int {
 	}
 	sub, rest := args[0], args[1:]
 	if os.Geteuid() != 0 {
-		fmt.Fprintln(os.Stderr, "twig token: root で実行してください")
+		fmt.Fprintln(os.Stderr, "sashiki token: root で実行してください")
 		return exitError
 	}
 	cfg, err := config.Load(tokenConfigPath(rest))
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "twig token: config:", err)
+		fmt.Fprintln(os.Stderr, "sashiki token: config:", err)
 		return exitError
 	}
 	db, err := state.Open(cfg.StateDB)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "twig token: state db:", err)
+		fmt.Fprintln(os.Stderr, "sashiki token: state db:", err)
 		return exitError
 	}
 	defer func() { _ = db.Close() }()
@@ -50,9 +50,9 @@ func cmdToken(args []string) int {
 
 func usageToken() int {
 	fmt.Fprint(os.Stderr, `Usage:
-  twig token create --name <name>   発行 (平文は 1 回だけ表示)
-  twig token list
-  twig token revoke <name>
+  sashiki token create --name <name>   発行 (平文は 1 回だけ表示)
+  sashiki token list
+  sashiki token revoke <name>
 `)
 	return exitUsage
 }
@@ -63,7 +63,7 @@ func tokenConfigPath(args []string) string {
 			return args[i+1]
 		}
 	}
-	return "/etc/twig/config.yaml"
+	return "/etc/sashiki/config.yaml"
 }
 
 func cmdTokenCreate(db *state.DB, args []string) int {
@@ -79,13 +79,13 @@ func cmdTokenCreate(db *state.DB, args []string) int {
 	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
-		fmt.Fprintln(os.Stderr, "twig token:", err)
+		fmt.Fprintln(os.Stderr, "sashiki token:", err)
 		return exitError
 	}
-	tok := "twig_" + hex.EncodeToString(raw)
+	tok := "sashiki_" + hex.EncodeToString(raw)
 	sum := sha256.Sum256([]byte(tok))
 	if err := db.CreateToken(name, hex.EncodeToString(sum[:])); err != nil {
-		fmt.Fprintln(os.Stderr, "twig token:", err)
+		fmt.Fprintln(os.Stderr, "sashiki token:", err)
 		return exitError
 	}
 	fmt.Printf("token '%s' を発行しました。この平文は二度と表示されません:\n\n  %s\n\nGitHub Secrets 等に保存してください。\n", name, tok)
@@ -95,7 +95,7 @@ func cmdTokenCreate(db *state.DB, args []string) int {
 func cmdTokenList(db *state.DB) int {
 	tokens, err := db.ListTokens()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "twig token:", err)
+		fmt.Fprintln(os.Stderr, "sashiki token:", err)
 		return exitError
 	}
 	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
@@ -116,7 +116,7 @@ func cmdTokenRevoke(db *state.DB, args []string) int {
 		return usageToken()
 	}
 	if err := db.RevokeToken(args[0]); err != nil {
-		fmt.Fprintln(os.Stderr, "twig token:", err)
+		fmt.Fprintln(os.Stderr, "sashiki token:", err)
 		return exitNotFound
 	}
 	fmt.Printf("token '%s' を無効化しました\n", args[0])

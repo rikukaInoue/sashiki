@@ -42,8 +42,8 @@ type Result struct {
 
 // Runner はフックを見つけて実行する。
 type Runner struct {
-	Dir     string        // /etc/twig/hooks
-	LogDir  string        // /var/log/twig/hooks
+	Dir     string        // /etc/sashiki/hooks
+	LogDir  string        // /var/log/sashiki/hooks
 	Timeout time.Duration // 既定 10 分
 	// now はテストで固定するための時計。
 	now func() time.Time
@@ -114,15 +114,15 @@ func (r *Runner) Run(ctx context.Context, event Event, env Env) (Result, error) 
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.Env = append(os.Environ(),
-		"TWIG_EVENT="+string(event),
-		"TWIG_BRANCH="+env.Branch,
-		fmt.Sprintf("TWIG_PORT=%d", env.Port),
-		"TWIG_SOCKET="+env.Socket,
-		"TWIG_DATADIR="+env.DataDir,
-		"TWIG_ENGINE="+env.EngineType,
-		"TWIG_ADMIN_USER="+env.AdminUser,
-		"TWIG_ORIGIN_SNAPSHOT="+env.OriginSnapshot,
-		"TWIG_STATE_DIR="+env.StateDir,
+		"SASHIKI_EVENT="+string(event),
+		"SASHIKI_BRANCH="+env.Branch,
+		fmt.Sprintf("SASHIKI_PORT=%d", env.Port),
+		"SASHIKI_SOCKET="+env.Socket,
+		"SASHIKI_DATADIR="+env.DataDir,
+		"SASHIKI_ENGINE="+env.EngineType,
+		"SASHIKI_ADMIN_USER="+env.AdminUser,
+		"SASHIKI_ORIGIN_SNAPSHOT="+env.OriginSnapshot,
+		"SASHIKI_STATE_DIR="+env.StateDir,
 	)
 
 	runErr := cmd.Run()

@@ -1,15 +1,15 @@
-# twigd の設定。twig init が生成した初期値。詳細は README の設定リファレンス。
+# sashikid の設定。sashiki init が生成した初期値。詳細は README の設定リファレンス。
 listen:
   api: "127.0.0.1:8080"     # Web UI もここ (GET /)
   proxy: "0.0.0.0:3306"
   metrics: "127.0.0.1:9100"
 
-state_db: /var/lib/twig/state.db
-domain: twig.internal
+state_db: /var/lib/sashiki/state.db
+domain: sashiki.internal
 
 storage:
-  backend: zfs
-  zfs:
+  backend: ebs-zfs
+  ebs-zfs:
     pool: {{.Pool}}
     base_dataset: {{.Pool}}/base
     branch_parent: {{.Pool}}/branches
@@ -22,16 +22,16 @@ engine:
     port_range: [3401, 3600]
     proxy_user: dev
     proxy_pass: dev
-    env_dir: /etc/twig
+    env_dir: /etc/sashiki
     sudo: false
-  # postgres を使う場合(接続はプロキシでなく直接ポート、twig show <name> で確認):
+  # postgres を使う場合(接続はプロキシでなく直接ポート、sashiki show <name> で確認):
   #   - listen.proxy: "" にする(プロキシは MySQL 専用)
   #   - idle_stop_after / delete_after_idle は接続追跡ができないため自動で無効化される
   #   - リモート接続には listen_addresses を広げ、base の pg_hba.conf に host 行が必要
   # postgres:
   #   port_range: [5433, 5632]
   #   bin_dir: /usr/lib/postgresql/16/bin
-  #   env_dir: /etc/twig
+  #   env_dir: /etc/sashiki
   #   listen_addresses: 127.0.0.1
   #   sudo: false
 
@@ -44,5 +44,5 @@ branches:
   delete_after_idle: 168h   # 7日間接続なしで削除。PR close 取りこぼしの保険
 
 hooks:
-  dir: /etc/twig/hooks
-  log_dir: /var/log/twig/hooks
+  dir: /etc/sashiki/hooks
+  log_dir: /var/log/sashiki/hooks

@@ -11,7 +11,7 @@
 
 - `make test` — ユニット(ZFS 不要、モック)
 - `make e2e-local` — macOS から Lima VM で実 ZFS + mysqld の E2E
-- `sudo ./e2e/e2e.sh bin/twigd bin/twig` — Ubuntu ホスト上で直接
+- `sudo ./e2e/e2e.sh bin/sashikid bin/sashiki` — Ubuntu ホスト上で直接
 
 ## 不変条件(壊さないこと)
 

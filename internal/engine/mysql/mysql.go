@@ -1,6 +1,6 @@
 // Package mysql は systemd テンプレートユニット(mysqld@<branch>)で
 // ブランチごとの mysqld を管理する engine.Engine 実装。
-// ポート等は /etc/twig/<branch>.env に書き、ユニットが EnvironmentFile で読む。
+// ポート等は /etc/sashiki/<branch>.env に書き、ユニットが EnvironmentFile で読む。
 package mysql
 
 import (
@@ -12,12 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rikukaInoue/twig/internal/engine"
+	"github.com/rikukaInoue/sashiki/internal/engine"
 )
 
 // Config は mysql エンジンの設定。
 type Config struct {
-	EnvDir       string // /etc/twig
+	EnvDir       string // /etc/sashiki
 	UnitTemplate string // 既定 "mysqld"→ mysqld@<branch>.service
 	ProxyUser    string // ready 判定に使う接続ユーザー(既定 dev)
 	ProxyPass    string

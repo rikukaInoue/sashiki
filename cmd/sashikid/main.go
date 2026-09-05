@@ -1,4 +1,4 @@
-// twigd: twig デーモン。REST API を提供し、ブランチのライフサイクルを管理する。
+// sashikid: sashiki デーモン。REST API を提供し、ブランチのライフサイクルを管理する。
 package main
 
 import (
@@ -11,18 +11,18 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/rikukaInoue/twig/internal/api"
-	"github.com/rikukaInoue/twig/internal/branch"
-	"github.com/rikukaInoue/twig/internal/config"
-	"github.com/rikukaInoue/twig/internal/engine"
-	enginemysql "github.com/rikukaInoue/twig/internal/engine/mysql"
-	enginepostgres "github.com/rikukaInoue/twig/internal/engine/postgres"
-	"github.com/rikukaInoue/twig/internal/hooks"
-	"github.com/rikukaInoue/twig/internal/proxy"
-	"github.com/rikukaInoue/twig/internal/state"
-	"github.com/rikukaInoue/twig/internal/storage"
-	storagefsx "github.com/rikukaInoue/twig/internal/storage/fsx"
-	storagezfs "github.com/rikukaInoue/twig/internal/storage/zfs"
+	"github.com/rikukaInoue/sashiki/internal/api"
+	"github.com/rikukaInoue/sashiki/internal/config"
+	"github.com/rikukaInoue/sashiki/internal/engine"
+	enginemysql "github.com/rikukaInoue/sashiki/internal/engine/mysql"
+	enginepostgres "github.com/rikukaInoue/sashiki/internal/engine/postgres"
+	"github.com/rikukaInoue/sashiki/internal/hooks"
+	"github.com/rikukaInoue/sashiki/internal/proxy"
+	"github.com/rikukaInoue/sashiki/internal/state"
+	"github.com/rikukaInoue/sashiki/internal/storage"
+	storageebszfs "github.com/rikukaInoue/sashiki/internal/storage/ebszfs"
+	storagefsxzfs "github.com/rikukaInoue/sashiki/internal/storage/fsxzfs"
+	"github.com/rikukaInoue/sashiki/internal/workspace"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	awsfsxsdk "github.com/aws/aws-sdk-go-v2/service/fsx"
@@ -31,9 +31,9 @@ import (
 var version = "dev" // -ldflags で埋め込む
 
 func main() {
-	configPath := flag.String("config", "/etc/twig/config.yaml", "path to config.yaml")
+	configPath := flag.String("config", "/etc/sashiki/config.yaml", "path to config.yaml")
 	flag.Parse()
-	log.Printf("twigd %s", version)
+	log.Printf("sashikid %s", version)
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -47,15 +47,15 @@ func main() {
 	defer func() { _ = db.Close() }()
 
 	var st storage.Storage
-	var bp branch.BaselineProvider
+	var bp workspace.BaselineProvider
 	switch cfg.Storage.Backend {
-	case "fsx":
+	case "fsx-zfs":
 		awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(),
 			awsconfig.WithRegion(cfg.Storage.Fsx.Region))
 		if err != nil {
 			log.Fatalf("aws config: %v", err)
 		}
-		fbe := storagefsx.New(storagefsx.Config{
+		fbe := storagefsxzfs.New(storagefsxzfs.Config{
 			FileSystemID:     cfg.Storage.Fsx.FilesystemID,
 			BaseVolumeID:     cfg.Storage.Fsx.BaseVolumeID,
 			ParentVolumeID:   cfg.Storage.Fsx.ParentVolumeID,
@@ -65,7 +65,7 @@ func main() {
 		}, awsfsxsdk.NewFromConfig(awsCfg))
 		st, bp = fbe, fbe
 	default:
-		zbe := storagezfs.New(storagezfs.Config{
+		zbe := storageebszfs.New(storageebszfs.Config{
 			Pool:             cfg.Storage.Zfs.Pool,
 			BaseDataset:      cfg.Storage.Zfs.BaseDataset,
 			BranchParent:     cfg.Storage.Zfs.BranchParent,
@@ -88,7 +88,7 @@ func main() {
 		// リーパーが使用中ブランチを「アイドル」と誤判定して停止・削除してしまう。
 		// 接続追跡ができるようになるまでアイドル回収は無効化する。
 		if cfg.Branches.IdleStopAfter > 0 || cfg.Branches.DeleteAfterIdle > 0 {
-			log.Printf("twigd: engine=postgres では接続追跡ができないため idle_stop_after / delete_after_idle を無効化します")
+			log.Printf("sashikid: engine=postgres では接続追跡ができないため idle_stop_after / delete_after_idle を無効化します")
 			cfg.Branches.IdleStopAfter = 0
 			cfg.Branches.DeleteAfterIdle = 0
 		}
@@ -103,13 +103,13 @@ func main() {
 
 	hr := hooks.NewRunner(cfg.Hooks.Dir, cfg.Hooks.LogDir, cfg.Hooks.Timeout)
 
-	mgr, err := branch.New(branch.Config{
+	mgr, err := workspace.New(workspace.Config{
 		NamePattern:     cfg.Branches.NamePattern,
 		MaxBranches:     cfg.Branches.MaxBranches,
 		PortLow:         cfg.PortRange()[0],
 		PortHigh:        cfg.PortRange()[1],
 		EngineType:      cfg.Engine.Type,
-		StateDir:        "/var/lib/twig/branches",
+		StateDir:        "/var/lib/sashiki/branches",
 		LazyCreate:      cfg.Branches.LazyCreate,
 		LazyMaxWait:     cfg.Branches.LazyCreateMaxWait,
 		IdleStopAfter:   cfg.Branches.IdleStopAfter,
@@ -134,7 +134,7 @@ func main() {
 			mux := http.NewServeMux()
 			mux.Handle("GET /metrics", api.MetricsHandler(mgr))
 			srv := &http.Server{Addr: cfg.Listen.Metrics, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-			log.Printf("twigd: metrics listening on %s", cfg.Listen.Metrics)
+			log.Printf("sashikid: metrics listening on %s", cfg.Listen.Metrics)
 			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				log.Printf("metrics: %v", err)
 			}
@@ -142,7 +142,7 @@ func main() {
 	}
 
 	if cfg.Listen.Proxy != "" && cfg.Engine.Type != "mysql" {
-		log.Printf("twigd: プロキシは MySQL 専用のため engine=%s では起動しません(警告を消すには listen.proxy: \"\")", cfg.Engine.Type)
+		log.Printf("sashikid: プロキシは MySQL 専用のため engine=%s では起動しません(警告を消すには listen.proxy: \"\")", cfg.Engine.Type)
 	}
 	if cfg.Listen.Proxy != "" && cfg.Engine.Type == "mysql" {
 		px, err := proxy.New(proxy.Config{
@@ -160,10 +160,10 @@ func main() {
 				log.Fatalf("proxy: %v", err)
 			}
 		}()
-		log.Printf("twigd: proxy listening on %s", cfg.Listen.Proxy)
+		log.Printf("sashikid: proxy listening on %s", cfg.Listen.Proxy)
 	}
 
-	log.Printf("twigd: listening on %s (backend=%s engine=%s)",
+	log.Printf("sashikid: listening on %s (backend=%s engine=%s)",
 		cfg.Listen.API, cfg.Storage.Backend, cfg.Engine.Type)
 	if err := srv.Listen(ctx, cfg.Listen.API); err != nil {
 		log.Fatal(err)

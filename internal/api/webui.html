@@ -1,7 +1,7 @@
 <!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>twig</title>
+<title>sashiki</title>
 <style>
   :root { color-scheme: light dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   body { margin: 2rem auto; max-width: 960px; padding: 0 1rem; }
@@ -39,7 +39,7 @@
   .stale { color: #bf8700; }
   .baseline-cell { opacity: .75; }
 </style>
-<h1>🌿 twig <span id="baseline"></span></h1>
+<h1>🌿 sashiki <span id="baseline"></span></h1>
 <table id="branches">
   <thead><tr><th>NAME</th><th>STATE</th><th>PORT</th><th>BASELINE</th><th>LAST_CONN</th><th>USED</th></tr></thead>
   <tbody id="rows"><tr><td colspan="6">loading…</td></tr></tbody>
@@ -114,7 +114,7 @@ async function refresh() {
     }).join("");
     document.getElementById("rows").innerHTML =
       rows || '<tr><td colspan="6">no branches — mysql -udev@&lt;name&gt; で生やせます</td></tr>';
-  } catch (e) { /* twigd 再起動中など */ }
+  } catch (e) { /* sashikid 再起動中など */ }
 }
 
 async function openBranch(name) {

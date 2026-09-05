@@ -1,7 +1,7 @@
 // Package postgres は PostgreSQL の engine.Engine 実装。
-// systemd テンプレートユニット(postgres-twig@<branch>)でブランチごとの
+// systemd テンプレートユニット(postgres-sashiki@<branch>)でブランチごとの
 // postgres を起動する。MySQL プロトコルプロキシは使えないため、接続は
-// 直接ポート(twig show <name> で確認)になる(既知の制限)。
+// 直接ポート(sashiki show <name> で確認)になる(既知の制限)。
 //
 // リモート接続する場合は engine.postgres.listen_addresses を "*" 等に広げ、
 // かつ base の pg_hba.conf にクライアント側ネットワークの host 行が必要
@@ -21,13 +21,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rikukaInoue/twig/internal/engine"
+	"github.com/rikukaInoue/sashiki/internal/engine"
 )
 
 // Config は postgres エンジンの設定。
 type Config struct {
-	EnvDir          string // /etc/twig
-	UnitTemplate    string // 既定 "postgres-twig" → postgres-twig@<branch>.service
+	EnvDir          string // /etc/sashiki
+	UnitTemplate    string // 既定 "postgres-sashiki" → postgres-sashiki@<branch>.service
 	BinDir          string // 既定 /usr/lib/postgresql/16/bin
 	ListenAddresses string // 既定 127.0.0.1。リモート接続を許すなら "*" 等
 	ReadyTimeout    time.Duration
@@ -43,7 +43,7 @@ type Engine struct {
 // New は PostgreSQL エンジンを作る。
 func New(cfg Config) *Engine {
 	if cfg.UnitTemplate == "" {
-		cfg.UnitTemplate = "postgres-twig"
+		cfg.UnitTemplate = "postgres-sashiki"
 	}
 	if cfg.BinDir == "" {
 		cfg.BinDir = "/usr/lib/postgresql/16/bin"

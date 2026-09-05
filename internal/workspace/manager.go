@@ -1,6 +1,6 @@
 // Package branch はブランチのライフサイクル(create / reset / delete / list)を
 // 司るコア。storage と engine はインターフェースで受け、速度の仮定を持たない。
-package branch
+package workspace
 
 import (
 	"context"
@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rikukaInoue/twig/internal/engine"
-	"github.com/rikukaInoue/twig/internal/hooks"
-	"github.com/rikukaInoue/twig/internal/state"
-	"github.com/rikukaInoue/twig/internal/storage"
+	"github.com/rikukaInoue/sashiki/internal/engine"
+	"github.com/rikukaInoue/sashiki/internal/hooks"
+	"github.com/rikukaInoue/sashiki/internal/state"
+	"github.com/rikukaInoue/sashiki/internal/storage"
 )
 
 // エラー種別(API 層で HTTP ステータスに写像する)。
@@ -37,7 +37,7 @@ type Config struct {
 	PortLow     int
 	PortHigh    int
 	EngineType  string
-	StateDir    string // hook 用の作業ディレクトリの親(/var/lib/twig/branches)
+	StateDir    string // hook 用の作業ディレクトリの親(/var/lib/sashiki/branches)
 
 	// LazyCreate: プロキシに未知のブランチ名で接続が来たとき自動作成する。
 	// バックエンドの TypicalCreate が LazyMaxWait を超える場合は無効(仕様 15-3)。
@@ -371,7 +371,7 @@ func (m *Manager) Delete(ctx context.Context, name string) error {
 }
 
 // SetActiveConns は接続数の参照先を設定する(プロキシは Manager に依存する
-// ため、twigd がプロキシ起動後に配線する)。
+// ため、sashikid がプロキシ起動後に配線する)。
 func (m *Manager) SetActiveConns(fn func(name string) int) {
 	m.cfg.ActiveConns = fn
 }

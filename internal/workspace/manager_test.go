@@ -1,4 +1,4 @@
-package branch
+package workspace
 
 import (
 	"context"
@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rikukaInoue/twig/internal/engine"
-	"github.com/rikukaInoue/twig/internal/hooks"
-	"github.com/rikukaInoue/twig/internal/state"
-	"github.com/rikukaInoue/twig/internal/storage"
+	"github.com/rikukaInoue/sashiki/internal/engine"
+	"github.com/rikukaInoue/sashiki/internal/hooks"
+	"github.com/rikukaInoue/sashiki/internal/state"
+	"github.com/rikukaInoue/sashiki/internal/storage"
 )
 
 // --- mocks ---

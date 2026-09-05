@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rikukaInoue/twig/internal/engine"
+	"github.com/rikukaInoue/sashiki/internal/engine"
 )
 
 // mockRun は実行されたコマンドを記録し、固定の応答を返す。
@@ -64,7 +64,7 @@ func TestStartWritesEnvAndStartsUnit(t *testing.T) {
 		t.Fatalf("expected 1 command, got %v", m.calls)
 	}
 	got := strings.Join(m.calls[0], " ")
-	if got != "systemctl start postgres-twig@pg-1" {
+	if got != "systemctl start postgres-sashiki@pg-1" {
 		t.Errorf("unexpected command: %s", got)
 	}
 }
@@ -94,7 +94,7 @@ func TestStopStopsUnitAndRemovesEnv(t *testing.T) {
 		t.Fatalf("Stop: %v", err)
 	}
 	got := strings.Join(m.calls[0], " ")
-	if got != "systemctl stop postgres-twig@pg-1" {
+	if got != "systemctl stop postgres-sashiki@pg-1" {
 		t.Errorf("unexpected command: %s", got)
 	}
 	if _, err := os.Stat(envPath); !os.IsNotExist(err) {

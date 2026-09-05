@@ -1,4 +1,4 @@
-package fsx
+package fsxzfs
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 
 	awsfsx "github.com/aws/aws-sdk-go-v2/service/fsx"
 	"github.com/aws/aws-sdk-go-v2/service/fsx/types"
-	"github.com/rikukaInoue/twig/internal/storage"
+	"github.com/rikukaInoue/sashiki/internal/storage"
 )
 
 type mockAPI struct {
@@ -128,6 +128,13 @@ func (m *mockAPI) DescribeSnapshots(ctx context.Context, in *awsfsx.DescribeSnap
 	}}}, nil
 }
 
+func (m *mockAPI) DescribeFileSystems(ctx context.Context, in *awsfsx.DescribeFileSystemsInput, _ ...func(*awsfsx.Options)) (*awsfsx.DescribeFileSystemsOutput, error) {
+	root := "fsvol-root-discovered"
+	return &awsfsx.DescribeFileSystemsOutput{FileSystems: []types.FileSystem{{
+		OpenZFSConfiguration: &types.OpenZFSFileSystemConfiguration{RootVolumeId: &root},
+	}}}, nil
+}
+
 func newTestBackend(m *mockAPI) *Backend {
 	b := New(Config{
 		FileSystemID:     "fs-1",
@@ -135,7 +142,7 @@ func newTestBackend(m *mockAPI) *Backend {
 		ParentVolumeID:   "fsvol-root",
 		BaselineSnapshot: "baseline",
 		DNSName:          "fs-1.fsx.test",
-		MountRoot:        "/mnt/twig",
+		MountRoot:        "/mnt/sashiki",
 		PollInterval:     time.Millisecond,
 	}, m)
 	b.mount = func(ctx context.Context, source, target string) error { return nil }
@@ -159,7 +166,7 @@ func TestCloneWaitsForAdminActions(t *testing.T) {
 		t.Errorf("should poll until admin actions complete: %d describes", m.describeCalls)
 	}
 	// 世代サフィックス付きの FSx 名でマウントパスが決まる
-	if vol.Path == "/mnt/twig/pr-1" {
+	if vol.Path == "/mnt/sashiki/pr-1" {
 		t.Errorf("path should include generation suffix: %s", vol.Path)
 	}
 }

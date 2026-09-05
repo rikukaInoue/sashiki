@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
 # ベースライン更新テンプレート(仕様 10-5)。自社向けに書き換えて
-# /etc/twig/refresh.sh に置く。twigd の POST /v1/baseline/refresh から呼ばれる。
+# /etc/sashiki/refresh.sh に置く。sashikid の POST /v1/baseline/refresh から呼ばれる。
 #
 # 責務: base の mysqld を起動 → 最新データ投入(PII はここでマスク) →
 #       main の最新マイグレーション適用 → mysqld を正常終了。
-# snapshot の取得と current の切り替えは twigd 側が行う(スクリプトはやらない)。
-# twigd は snapshot 取得前に base の datadir を掴むプロセスが残っていないことを
+# snapshot の取得と current の切り替えは sashikid 側が行う(スクリプトはやらない)。
+# sashikid は snapshot 取得前に base の datadir を掴むプロセスが残っていないことを
 # 検証し、残っていれば SIGTERM で回収してから進む(exit 0 は信用しない)。
 #
-# 環境変数: TWIG_BASELINE_TAG (例: baseline-20260905T120000Z)
+# 環境変数: SASHIKI_BASELINE_TAG (例: baseline-20260905T120000Z)
 set -euo pipefail
 
 POOL=dbpool
 DATADIR=/$POOL/base/data
-SOCK=/tmp/twig-refresh.sock
+SOCK=/tmp/sashiki-refresh.sock
 
 sudo -u mysql mysqld --datadir="$DATADIR" --skip-networking \
-  --socket="$SOCK" --pid-file=/tmp/twig-refresh.pid \
-  --log-error=/var/log/twig/refresh.err --daemonize
+  --socket="$SOCK" --pid-file=/tmp/sashiki-refresh.pid \
+  --log-error=/var/log/sashiki/refresh.err --daemonize
 for _ in $(seq 1 60); do
   mysqladmin -uroot -S "$SOCK" ping > /dev/null 2>&1 && break
   sleep 1

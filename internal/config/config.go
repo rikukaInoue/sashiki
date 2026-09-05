@@ -1,4 +1,4 @@
-// Package config は /etc/twig/config.yaml の読み込み(仕様 12-1 の v0.1 サブセット)。
+// Package config は /etc/sashiki/config.yaml の読み込み(仕様 12-1 の v0.1 サブセット)。
 // シークレットは設定ファイルに書かない。API トークンは環境変数から読む。
 package config
 
@@ -11,7 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config は twigd 全体の設定。
+// Config は sashikid 全体の設定。
 type Config struct {
 	Listen   Listen   `yaml:"listen"`
 	Domain   string   `yaml:"domain"`
@@ -33,9 +33,13 @@ type Listen struct {
 
 // Storage はバックエンド設定。
 type Storage struct {
-	Backend string     `yaml:"backend"` // zfs | fsx
-	Zfs     ZfsStorage `yaml:"zfs"`
-	Fsx     FsxStorage `yaml:"fsx"`
+	Backend string     `yaml:"backend"` // ebs-zfs | fsx-zfs
+	Zfs     ZfsStorage `yaml:"ebs-zfs"`
+	Fsx     FsxStorage `yaml:"fsx-zfs"`
+
+	// 旧キー(v0.1 互換)。Load で新フィールドへ移す。
+	LegacyZfs *ZfsStorage `yaml:"zfs"`
+	LegacyFsx *FsxStorage `yaml:"fsx"`
 }
 
 // FsxStorage は fsx バックエンドの設定。
@@ -67,7 +71,7 @@ type Engine struct {
 
 // PostgresEngine は postgres エンジンの設定。
 // 注意: プロトコルプロキシは MySQL 専用のため、postgres ブランチへの接続は
-// 直接ポート(twig show <name>)になる。リモート接続する場合は
+// 直接ポート(sashiki show <name>)になる。リモート接続する場合は
 // listen_addresses を広げ、base の pg_hba.conf に host 行を入れておくこと。
 type PostgresEngine struct {
 	PortRange       [2]int `yaml:"port_range"` // 既定 [5433, 5632]
@@ -119,10 +123,10 @@ type Auth struct {
 func Default() Config {
 	return Config{
 		Listen:  Listen{API: "127.0.0.1:8080", Proxy: "0.0.0.0:3306", Metrics: "127.0.0.1:9100"},
-		Domain:  "twig.internal",
-		StateDB: "/var/lib/twig/state.db",
+		Domain:  "sashiki.internal",
+		StateDB: "/var/lib/sashiki/state.db",
 		Storage: Storage{
-			Backend: "zfs",
+			Backend: "ebs-zfs",
 			Zfs: ZfsStorage{
 				Pool:             "dbpool",
 				BaseDataset:      "dbpool/base",
@@ -138,12 +142,12 @@ func Default() Config {
 				BufferPoolSize: "256M",
 				ProxyUser:      "dev",
 				ProxyPass:      "dev",
-				EnvDir:         "/etc/twig",
+				EnvDir:         "/etc/sashiki",
 				Sudo:           true,
 			},
 			Postgres: PostgresEngine{
 				PortRange:       [2]int{5433, 5632},
-				EnvDir:          "/etc/twig",
+				EnvDir:          "/etc/sashiki",
 				ListenAddresses: "127.0.0.1",
 				Sudo:            true,
 			},
@@ -159,10 +163,10 @@ func Default() Config {
 			ReaperInterval:    time.Minute,
 		},
 		Hooks: Hooks{
-			Dir:    "/etc/twig/hooks",
-			LogDir: "/var/log/twig/hooks",
+			Dir:    "/etc/sashiki/hooks",
+			LogDir: "/var/log/sashiki/hooks",
 		},
-		Auth: Auth{APITokenEnv: "TWIG_API_TOKEN"},
+		Auth: Auth{APITokenEnv: "SASHIKI_API_TOKEN"},
 	}
 }
 
@@ -176,21 +180,41 @@ func Load(path string) (Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return cfg, fmt.Errorf("parse %s: %w", path, err)
 	}
+	cfg.normalize()
 	if err := cfg.Validate(); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
 }
 
+// normalize は旧名(zfs / fsx)を新名(ebs-zfs / fsx-zfs)へ移す。
+func (c *Config) normalize() {
+	switch c.Storage.Backend {
+	case "zfs":
+		c.Storage.Backend = "ebs-zfs"
+	case "fsx":
+		c.Storage.Backend = "fsx-zfs"
+	}
+	if c.Storage.LegacyZfs != nil {
+		c.Storage.Zfs = *c.Storage.LegacyZfs
+		c.Storage.LegacyZfs = nil
+	}
+	if c.Storage.LegacyFsx != nil {
+		c.Storage.Fsx = *c.Storage.LegacyFsx
+		c.Storage.LegacyFsx = nil
+	}
+}
+
 // Validate は設定の整合性チェック。
 func (c Config) Validate() error {
-	if c.Storage.Backend != "zfs" && c.Storage.Backend != "fsx" {
-		return fmt.Errorf("storage.backend %q is not supported (zfs | fsx)", c.Storage.Backend)
+	if c.Storage.Backend != "ebs-zfs" && c.Storage.Backend != "fsx-zfs" {
+		return fmt.Errorf("storage.backend %q is not supported (ebs-zfs | fsx-zfs)", c.Storage.Backend)
 	}
-	if c.Storage.Backend == "fsx" {
+	if c.Storage.Backend == "fsx-zfs" {
 		f := c.Storage.Fsx
-		if f.Region == "" || f.FilesystemID == "" || f.BaseVolumeID == "" || f.ParentVolumeID == "" || f.DNSName == "" {
-			return fmt.Errorf("storage.fsx requires region, filesystem_id, base_volume_id, parent_volume_id, dns_name")
+		// parent_volume_id は省略可(filesystem のルートボリュームを自動発見)
+		if f.Region == "" || f.FilesystemID == "" || f.BaseVolumeID == "" || f.DNSName == "" {
+			return fmt.Errorf("storage.fsx-zfs requires region, filesystem_id, base_volume_id, dns_name")
 		}
 	}
 	if c.Engine.Type != "mysql" && c.Engine.Type != "postgres" {

@@ -1,4 +1,4 @@
-// twig init: ホストのセットアップを自動化する(仕様 12-5)。
+// sashiki init: ホストのセットアップを自動化する(仕様 12-5)。
 // apt・AppArmor・zpool・データセット・systemd ユニット・config 生成を行う。
 // 各ステップは冪等。
 package main
@@ -58,12 +58,12 @@ func cmdInit(args []string) int {
 		}
 	}
 	if os.Geteuid() != 0 {
-		fmt.Fprintln(os.Stderr, "twig init: root で実行してください (sudo twig init ...)")
+		fmt.Fprintln(os.Stderr, "sashiki init: root で実行してください (sudo sashiki init ...)")
 		return exitError
 	}
 
 	steps := initSteps(opts)
-	fmt.Printf("twig init: pool=%s device=%s\n", opts.pool, orDash(opts.device))
+	fmt.Printf("sashiki init: pool=%s device=%s\n", opts.pool, orDash(opts.device))
 	if !opts.yes {
 		fmt.Print("続行する? [y/N]: ")
 		var ans string
@@ -80,7 +80,7 @@ func cmdInit(args []string) int {
 		}
 		fmt.Printf("  → %s\n", s.name)
 		if err := s.run(); err != nil {
-			fmt.Fprintf(os.Stderr, "twig init: %s: %v\n", s.name, err)
+			fmt.Fprintf(os.Stderr, "sashiki init: %s: %v\n", s.name, err)
 			return exitError
 		}
 	}
@@ -90,8 +90,8 @@ init 完了。次のステップ:
        mysqld を ` + "`/" + opts.pool + "/base/data`" + ` で初期化・起動 → データ投入 → 正常終了 →
        zfs snapshot ` + opts.pool + `/base@baseline
      (examples/ の baseline スクリプト参照)
-  2. twigd を起動: systemctl enable --now twigd
-  3. ブランチを作る: twig create pr-1`)
+  2. sashikid を起動: systemctl enable --now sashikid
+  3. ブランチを作る: sashiki create pr-1`)
 	return exitOK
 }
 
@@ -160,15 +160,15 @@ func initSteps(opts initOpts) []initStep {
 			run:  func() error { return runCmd(nil, "zfs", "create", opts.pool+"/branches") },
 		},
 		initStep{
-			name: "ディレクトリ作成 (/etc/twig, /var/lib/twig, /var/log/twig)",
+			name: "ディレクトリ作成 (/etc/sashiki, /var/lib/sashiki, /var/log/sashiki)",
 			run: func() error {
-				for _, d := range []string{"/etc/twig/hooks", "/var/lib/twig/branches", "/var/log/twig/hooks"} {
+				for _, d := range []string{"/etc/sashiki/hooks", "/var/lib/sashiki/branches", "/var/log/sashiki/hooks"} {
 					if err := os.MkdirAll(d, 0o755); err != nil {
 						return err
 					}
 				}
 				// mysqld がエラーログを書けるように
-				return runCmd(nil, "chown", "-R", "mysql:mysql", "/var/log/twig")
+				return runCmd(nil, "chown", "-R", "mysql:mysql", "/var/log/sashiki")
 			},
 		},
 		initStep{
@@ -182,14 +182,14 @@ func initSteps(opts initOpts) []initStep {
 			},
 		},
 		initStep{
-			name: "/etc/twig/config.yaml 生成",
-			done: func() bool { _, err := os.Stat("/etc/twig/config.yaml"); return err == nil },
+			name: "/etc/sashiki/config.yaml 生成",
+			done: func() bool { _, err := os.Stat("/etc/sashiki/config.yaml"); return err == nil },
 			run: func() error {
 				cfg, err := renderConfig(opts.pool)
 				if err != nil {
 					return err
 				}
-				return os.WriteFile("/etc/twig/config.yaml", cfg, 0o644)
+				return os.WriteFile("/etc/sashiki/config.yaml", cfg, 0o644)
 			},
 		},
 	)

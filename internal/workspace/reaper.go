@@ -2,14 +2,14 @@
 // ブランチを削除する。メモリを消費するのは「動いている mysqld」であって
 // ブランチのデータではない(PoC 実測: 1 本 ≈ 400MB)ため、停止だけで
 // メモリ上限は「同時アクティブ数」にのみ比例するようになる。
-package branch
+package workspace
 
 import (
 	"context"
 	"log"
 	"time"
 
-	"github.com/rikukaInoue/twig/internal/state"
+	"github.com/rikukaInoue/sashiki/internal/state"
 )
 
 // RunReaper は interval ごとに Reap を回す。ctx キャンセルで止まる。
