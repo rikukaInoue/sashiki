@@ -74,6 +74,9 @@ func New(mgr *workspace.Manager, domain, engineType, proxyUser, proxyPass, token
 	s.mux.HandleFunc("DELETE /v1/branches/{name}", s.handleDelete)
 	s.mux.HandleFunc("GET /v1/baseline", s.handleBaseline)
 	s.mux.HandleFunc("POST /v1/baseline/refresh", s.handleBaselineRefresh)
+	s.mux.HandleFunc("GET /v1/baselines", s.handleListBaselines)
+	s.mux.HandleFunc("POST /v1/baseline/set", s.handleSetBaseline)
+	s.mux.HandleFunc("POST /v1/baseline/gc", s.handleGCBaselines)
 	s.mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /", s.handleWebUI)
 	return s
@@ -151,6 +154,55 @@ func (s *Server) handleBaselineRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "started", "tag": tag})
+}
+
+func (s *Server) handleListBaselines(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.mgr.ListBaselineRows()
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	out := make([]map[string]any, 0, len(rows))
+	for _, b := range rows {
+		out = append(out, map[string]any{
+			"snapshot":        b.Snapshot,
+			"created_at":      b.CreatedAt.UTC().Format(time.RFC3339),
+			"is_current":      b.IsCurrent,
+			"schema_revision": b.Prov.SchemaRevision,
+			"data_as_of":      b.Prov.DataAsOf,
+			"masked":          b.Prov.Masked,
+			"validated":       b.Prov.Validated,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"baselines": out})
+}
+
+func (s *Server) handleSetBaseline(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Snapshot string `json:"snapshot"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Snapshot == "" {
+		writeErr(w, http.StatusBadRequest, "invalid_name", "body must be {\"snapshot\": \"...\"}")
+		return
+	}
+	if err := s.mgr.SetBaseline(r.Context(), req.Snapshot); err != nil {
+		s.writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"current": req.Snapshot})
+}
+
+func (s *Server) handleGCBaselines(w http.ResponseWriter, r *http.Request) {
+	keepLast := 3
+	if v := r.URL.Query().Get("keep_last"); v != "" {
+		_, _ = fmt.Sscanf(v, "%d", &keepLast)
+	}
+	res, err := s.mgr.GCBaselines(r.Context(), workspace.GCConfig{KeepLast: keepLast})
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": res.Deleted, "kept": res.Kept})
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {

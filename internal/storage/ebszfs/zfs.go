@@ -145,6 +145,13 @@ func (b *Backend) Poll(ctx context.Context, job storage.JobID) (storage.JobStatu
 	return storage.JobCompleted, nil
 }
 
+// DeleteBaselineSnapshot は base の snapshot を破棄する(baseline GC 用)。
+// 派生 clone が残っていれば zfs が拒否するため、GC は参照カウントで守る。
+func (b *Backend) DeleteBaselineSnapshot(ctx context.Context, snap storage.SnapshotRef) error {
+	_, err := b.run(ctx, "destroy", string(snap))
+	return err
+}
+
 // SnapshotBase は base から新しいベースライン snapshot を取得する。
 func (b *Backend) SnapshotBase(ctx context.Context, tag string) (storage.SnapshotRef, error) {
 	snap := b.cfg.BaseDataset + "@" + tag

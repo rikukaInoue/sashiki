@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/rikukaInoue/sashiki/internal/config"
+	"github.com/rikukaInoue/sashiki/internal/state"
 )
 
 func cmdBaseline(args []string) int {
@@ -29,6 +30,12 @@ func cmdBaseline(args []string) int {
 		return cmdBaselineImport(args[1:])
 	case "list":
 		return cmdBaselineList(args[1:])
+	case "set":
+		return cmdBaselineSet(args[1:])
+	case "gc":
+		return cmdBaselineGC(args[1:])
+	case "refresh":
+		return cmdBaselineRefresh(args[1:])
 	default:
 		return usageBaseline()
 	}
@@ -183,6 +190,12 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	if out, err := exec.Command("zfs", "snapshot", snap).CombinedOutput(); err != nil {
 		return fmt.Errorf("snapshot: %w: %s", err, strings.TrimSpace(string(out)))
 	}
+	// baseline を state.db に current として登録(仕様 12-1)。
+	if db, err := state.Open(cfg.StateDB); err == nil {
+		_ = db.RegisterBaseline(snap, state.BaselineProvenance{DataAsOf: cfg.Storage.Zfs.BaselineSnapshot})
+		_ = db.SetCurrentBaseline(snap)
+		_ = db.Close()
+	}
 	fmt.Println("baseline import 完了。sashiki create <name> でブランチを作れます")
 	return nil
 }
@@ -271,5 +284,51 @@ func cmdBaselineList(args []string) int {
 		}
 		fmt.Println(marker + s)
 	}
+	return exitOK
+}
+
+func cmdBaselineSet(args []string) int {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "Usage: sashiki baseline set <snapshot>")
+		return exitUsage
+	}
+	code, data, err := call("POST", "/v1/baseline/set", map[string]any{"snapshot": args[0]})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sashiki:", err)
+		return exitError
+	}
+	if code != http.StatusOK {
+		fmt.Fprintln(os.Stderr, "sashiki:", apiError(data))
+		return statusToExit(code)
+	}
+	fmt.Printf("current baseline set to %s\n", args[0])
+	return exitOK
+}
+
+func cmdBaselineGC(args []string) int {
+	code, data, err := call("POST", "/v1/baseline/gc", nil)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sashiki:", err)
+		return exitError
+	}
+	if code != http.StatusOK {
+		fmt.Fprintln(os.Stderr, "sashiki:", apiError(data))
+		return statusToExit(code)
+	}
+	fmt.Println(string(data))
+	return exitOK
+}
+
+func cmdBaselineRefresh(args []string) int {
+	code, data, err := call("POST", "/v1/baseline/refresh", nil)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sashiki:", err)
+		return exitError
+	}
+	if code != http.StatusAccepted {
+		fmt.Fprintln(os.Stderr, "sashiki:", apiError(data))
+		return statusToExit(code)
+	}
+	fmt.Println(string(data))
 	return exitOK
 }

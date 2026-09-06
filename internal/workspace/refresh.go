@@ -18,6 +18,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/rikukaInoue/sashiki/internal/state"
 )
 
 // ErrRefreshRunning は refresh の多重実行。
@@ -110,6 +112,9 @@ func (m *Manager) runRefresh(ctx context.Context, rc RefreshConfig, tag string) 
 	if err != nil {
 		return fmt.Errorf("snapshot: %w", err)
 	}
+	// baseline を provenance 付きで登録してから current pointer を切り替える
+	// (仕様 12-1。build/validate/publish の詳細は #38)。
+	_ = m.db.RegisterBaseline(string(snap), state.BaselineProvenance{DataAsOf: tag})
 	if err := m.db.SetCurrentBaseline(string(snap)); err != nil {
 		return fmt.Errorf("set current: %w", err)
 	}

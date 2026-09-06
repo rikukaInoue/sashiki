@@ -19,14 +19,15 @@ import (
 // --- mocks ---
 
 type mockStorage struct {
-	caps        storage.Capabilities
-	renamed     []string
-	cloned      []string
-	snapshots   []string
-	rollbacks   []string
-	destroyed   []string
-	cloneErr    error
-	rollbackErr error
+	caps             storage.Capabilities
+	renamed          []string
+	baselinesDeleted []string
+	cloned           []string
+	snapshots        []string
+	rollbacks        []string
+	destroyed        []string
+	cloneErr         error
+	rollbackErr      error
 }
 
 func (m *mockStorage) Capabilities() storage.Capabilities { return m.caps }
@@ -84,6 +85,11 @@ func (m *mockStorage) UsedBytes(ctx context.Context, vol storage.Volume) (int64,
 }
 
 func (m *mockStorage) CurrentBaseline() storage.SnapshotRef { return "pool/base@baseline" }
+
+func (m *mockStorage) DeleteBaselineSnapshot(ctx context.Context, snap storage.SnapshotRef) error {
+	m.baselinesDeleted = append(m.baselinesDeleted, string(snap))
+	return nil
+}
 
 type mockEngine struct {
 	started  []string
@@ -779,5 +785,43 @@ func TestCreateWithMetaStoresProvenance(t *testing.T) {
 	// core は source を解釈しない(そのまま保持)
 	if b.Source != meta.Source {
 		t.Errorf("source = %q, want opaque passthrough", b.Source)
+	}
+}
+
+func TestBaselineGCRespectsRefsAndCurrent(t *testing.T) {
+	m := newTestManager(t, &mockStorage{}, &mockEngine{}, "")
+	// 3 世代の baseline を登録
+	for _, tag := range []string{"pool/base@b1", "pool/base@b2", "pool/base@b3"} {
+		if err := m.db.RegisterBaseline(tag, state.BaselineProvenance{}); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	// b3 を current に
+	if err := m.db.SetCurrentBaseline("pool/base@b3"); err != nil {
+		t.Fatal(err)
+	}
+	// b1 を参照する branch を作る(手動で origin を設定)
+	if err := m.db.CreateBranch("pr-1", 3401, "pool/base@b1"); err != nil {
+		t.Fatal(err)
+	}
+	// keep_last=1 で GC: b3(current)と b1(参照中)は残る、b2 は消える
+	res, err := m.GCBaselines(context.Background(), GCConfig{KeepLast: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Deleted) != 1 || res.Deleted[0] != "pool/base@b2" {
+		t.Errorf("deleted = %v, want [b2]", res.Deleted)
+	}
+}
+
+func TestSetBaselineRequiresRegistered(t *testing.T) {
+	m := newTestManager(t, &mockStorage{}, &mockEngine{}, "")
+	if err := m.SetBaseline(context.Background(), "pool/base@unknown"); err == nil {
+		t.Error("set to unregistered baseline should fail")
+	}
+	_ = m.db.RegisterBaseline("pool/base@known", state.BaselineProvenance{})
+	if err := m.SetBaseline(context.Background(), "pool/base@known"); err != nil {
+		t.Errorf("set to registered baseline should work: %v", err)
 	}
 }
