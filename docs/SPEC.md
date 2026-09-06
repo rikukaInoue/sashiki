@@ -462,8 +462,9 @@ hook 側がやること: Git clone、PR checkout、依存インストール、mi
 |`SASHIKI_ENGINE`                               |`mysql`                                                          |
 |`SASHIKI_ADMIN_USER`                           |`root`(socket 経由)                                                |
 |`SASHIKI_ORIGIN_SNAPSHOT`                      |`dbpool/base@baseline-20260905-abc123`                           |
-|`SASHIKI_BASELINE_SCHEMA_REVISION`(未実装 #81) |`20260905_042`                                                   |
-|`SASHIKI_SOURCE_JSON`(未実装 #81)              |`{"type":"github_pr","repository":"shop","ref":"123"}`           |
+|`SASHIKI_BASELINE_SCHEMA_REVISION`             |`20260905_042`(baselines に登録があるときのみ設定)                          |
+|`SASHIKI_SOURCE_JSON`                          |`{"type":"github_pr","repository":"shop","ref":"123"}`(source があるときのみ設定)|
+|`SASHIKI_OWNER` / `SASHIKI_PURPOSE` / `SASHIKI_PROFILE`|`alice` / `review` / `preview`(branch の provenance。core は解釈しない)|
 |`SASHIKI_STATE_DIR`                            |`/var/lib/sashiki/branches/pr-123`(hook の作業領域)                   |
 
 - 非 0 終了: `on-create` は branch を `error`(recoverable)で残す。`on-reset` / `on-delete` は記録して続行。`on-baseline-validate` の失敗は publish を阻止

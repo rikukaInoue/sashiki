@@ -140,7 +140,14 @@ func (m *mockEngine) ConnCount(ctx context.Context, ins engine.Instance) (int, e
 
 // --- helpers ---
 
-func newTestManager(t *testing.T, st *mockStorage, eng *mockEngine, hooksDir string) *Manager {
+// testStorage は newTestManager に渡せる storage。BasePath 付きの
+// mock(mockStorageWithBase)も差し込めるようインターフェースで受ける。
+type testStorage interface {
+	storage.Storage
+	BaselineProvider
+}
+
+func newTestManager(t *testing.T, st testStorage, eng *mockEngine, hooksDir string) *Manager {
 	t.Helper()
 	db, err := state.Open(filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
@@ -165,7 +172,7 @@ func newTestManager(t *testing.T, st *mockStorage, eng *mockEngine, hooksDir str
 	return m
 }
 
-func newTestManagerCfg(t *testing.T, st *mockStorage, eng *mockEngine, hooksDir string, mod func(*Config)) *Manager {
+func newTestManagerCfg(t *testing.T, st testStorage, eng *mockEngine, hooksDir string, mod func(*Config)) *Manager {
 	t.Helper()
 	db, err := state.Open(filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
@@ -312,6 +319,44 @@ func TestCreateWithHookTakesCleanInitSnapshot(t *testing.T) {
 	}
 	if len(st.snapshots) != 1 {
 		t.Errorf("snapshots = %v", st.snapshots)
+	}
+}
+
+// provenance(#81)が on-create hook の環境変数へ素通しされること。
+func TestCreateWithMetaPassesProvenanceToHook(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(t.TempDir(), "env.out")
+	script := "#!/bin/sh\necho \"owner=$SASHIKI_OWNER purpose=$SASHIKI_PURPOSE profile=$SASHIKI_PROFILE source=$SASHIKI_SOURCE_JSON rev=${SASHIKI_BASELINE_SCHEMA_REVISION-unset}\" > " + out + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "on-create.sh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := newTestManager(t, &mockStorage{}, &mockEngine{}, dir)
+	// origin baseline に schema_revision を登録しておく(素通し検証用)
+	if err := m.db.RegisterBaseline("pool/base@baseline",
+		state.BaselineProvenance{SchemaRevision: "20260905_042"}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := m.CreateWithMeta(context.Background(), "pr-1", 0, state.Meta{
+		Owner:   "alice",
+		Purpose: "review",
+		Source:  `{"type":"github_pr","ref":"42"}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := strings.TrimSpace(string(got))
+	for _, want := range []string{
+		"owner=alice", "purpose=review",
+		`source={"type":"github_pr","ref":"42"}`, "rev=20260905_042",
+	} {
+		if !strings.Contains(env, want) {
+			t.Errorf("hook env = %q, want contains %q", env, want)
+		}
 	}
 }
 

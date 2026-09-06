@@ -166,6 +166,12 @@ func (m *Manager) instance(b state.Branch, vol storage.Volume) engine.Instance {
 }
 
 func (m *Manager) hookEnv(b state.Branch, vol storage.Volume) hooks.Env {
+	// origin baseline の schema_revision(baselines テーブルに登録があれば)。
+	// on-create で migration リポジトリの ref 決定などに使う(#81)。
+	schemaRev := ""
+	if row, err := m.db.GetBaseline(b.OriginSnapshot); err == nil {
+		schemaRev = row.Prov.SchemaRevision
+	}
 	return hooks.Env{
 		Branch:         b.Name,
 		Port:           b.Port,
@@ -175,6 +181,12 @@ func (m *Manager) hookEnv(b state.Branch, vol storage.Volume) hooks.Env {
 		AdminUser:      "root",
 		OriginSnapshot: b.OriginSnapshot,
 		StateDir:       m.cfg.StateDir + "/" + b.Name,
+		// provenance(仕様 11-2): core は解釈せず state.db の値を素通しする。
+		SourceJSON:             b.Source,
+		Owner:                  b.Owner,
+		Purpose:                b.Purpose,
+		Profile:                b.Profile,
+		BaselineSchemaRevision: schemaRev,
 	}
 }
 

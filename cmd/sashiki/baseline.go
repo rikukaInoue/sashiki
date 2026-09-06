@@ -186,6 +186,15 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 		return err
 	}
 
+	// server_uuid の重複対策(#80 / 仕様 12-3): datadir をクローンすると
+	// auto.cnf の server_uuid まで複製され、全ブランチが同一 UUID になる。
+	// 正常終了後・snapshot 取得前に削除しておけば、各ブランチの初回起動時に
+	// mysqld が固有の UUID を再生成する。
+	fmt.Println("→ auto.cnf 削除 (server_uuid 重複対策)")
+	if err := os.Remove(filepath.Join(dataDir, "auto.cnf")); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove auto.cnf: %w", err)
+	}
+
 	fmt.Printf("→ snapshot %s 取得\n", snap)
 	if out, err := exec.Command("zfs", "snapshot", snap).CombinedOutput(); err != nil {
 		return fmt.Errorf("snapshot: %w: %s", err, strings.TrimSpace(string(out)))
