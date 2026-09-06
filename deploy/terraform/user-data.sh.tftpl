@@ -41,9 +41,11 @@ sashiki init --yes --pool "$POOL" --device "$DATA_DEVICE"
 # init が生成した config の proxy ユーザー/パスワードを Secrets Manager の値へ差し替える。
 CONFIG=/etc/sashiki/config.yaml
 if [ -f "$CONFIG" ]; then
-  sed -i "s/^\( *proxy_user:\).*/\1 ${proxy_user}/" "$CONFIG"
+  # init は app_user / app_pass を生成する(旧名 proxy_user / proxy_pass も許容)。
+  # どちらのキーでも一致するよう両対応で置換し、app_* に正規化する。
+  sed -i -E "s/^( *)(app_user|proxy_user):.*/\1app_user: ${proxy_user}/" "$CONFIG"
   # パスワードは特殊文字を避けた生成(special=false)なので単純 sed で安全。
-  sed -i "s/^\( *proxy_pass:\).*/\1 $DEV_PASSWORD/" "$CONFIG"
+  sed -i -E "s/^( *)(app_pass|proxy_pass):.*/\1app_pass: $DEV_PASSWORD/" "$CONFIG"
 fi
 
 # --- API トークンを sashikid の環境に渡す ---
