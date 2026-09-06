@@ -331,14 +331,20 @@ func (s *Server) handleDoctor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"pool_healthy":       d.PoolHealthy,
-		"pool_used_ratio":    d.PoolUsedRatio,
-		"current_baseline":   d.CurrentBaseline,
-		"branch_count":       d.BranchCount,
-		"port_conflicts":     d.PortConflicts,
-		"orphans":            d.Orphans,
-		"memory_headroom_ok": d.MemHeadroomOK,
-		"issues":             d.Issues,
+		"pool_healthy":        d.PoolHealthy,
+		"pool_status_healthy": d.PoolStatusHealthy,
+		"pool_status_detail":  d.PoolStatusDetail,
+		"pool_used_ratio":     d.PoolUsedRatio,
+		"current_baseline":    d.CurrentBaseline,
+		"baseline_masked":     d.BaselineMasked,
+		"baseline_validated":  d.BaselineValidated,
+		"state_db_writable":   d.StateDBWritable,
+		"branch_count":        d.BranchCount,
+		"port_conflicts":      d.PortConflicts,
+		"orphans":             d.Orphans,
+		"memory_headroom_ok":  d.MemHeadroomOK,
+		"issues":              d.Issues,
+		"checks":              d.Checks,
 	})
 }
 

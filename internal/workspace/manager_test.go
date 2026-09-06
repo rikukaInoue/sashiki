@@ -1062,6 +1062,30 @@ func TestDoctorReportsIssues(t *testing.T) {
 	if !d.PoolHealthy || d.CurrentBaseline == "" {
 		t.Errorf("doctor = %+v", d)
 	}
+	// #88: state.db writable / checks 整形 / baseline provenance
+	if !d.StateDBWritable {
+		t.Error("state.db should be writable in tests")
+	}
+	if len(d.Checks) == 0 {
+		t.Error("doctor should populate structured checks")
+	}
+	status := map[string]string{}
+	for _, c := range d.Checks {
+		status[c.Name] = c.Status
+	}
+	if status["state.db writable"] != checkOK {
+		t.Errorf("state.db writable check = %q, want ok", status["state.db writable"])
+	}
+	if status["current baseline"] != checkOK {
+		t.Errorf("current baseline check = %q, want ok", status["current baseline"])
+	}
+	// provenance 空なので masked / validated は warn
+	if status["baseline masked"] != checkWarn {
+		t.Errorf("baseline masked check = %q, want warn (empty provenance)", status["baseline masked"])
+	}
+	if status["baseline validated"] != checkWarn {
+		t.Errorf("baseline validated check = %q, want warn (empty provenance)", status["baseline validated"])
+	}
 }
 
 func TestResetWorksAfterRecreate(t *testing.T) {

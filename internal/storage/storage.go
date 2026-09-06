@@ -79,6 +79,12 @@ type CapacityReporter interface {
 	PoolCapacity(ctx context.Context) (used, total int64, err error)
 }
 
+// PoolStatusChecker は pool の健全性(DEGRADED/FAULTED 等)を報告できる
+// バックエンド(`zpool status -x` 相当、doctor 用 #88)。
+type PoolStatusChecker interface {
+	PoolStatus(ctx context.Context) (healthy bool, detail string, err error)
+}
+
 // LogicalSizer は volume の logical(referenced)サイズを報告できるバックエンド。
 // CoW では Logical(482GiB)と Private delta(18MiB)が大きく乖離する(仕様 14-4)。
 type LogicalSizer interface {
