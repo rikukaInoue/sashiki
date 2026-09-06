@@ -16,6 +16,8 @@ type Config struct {
 	Listen    Listen   `yaml:"listen"`
 	Domain    string   `yaml:"domain"`
 	StateDB   string   `yaml:"state_db"`
+	RunDir    string   `yaml:"run_dir"`    // 実行時の一時領域(socket / sentinel)。既定 /run/sashiki(仕様 21章)
+	LogDir    string   `yaml:"log_dir"`    // ログ出力の基点。既定 /var/log/sashiki(仕様 21章)
 	LogFormat string   `yaml:"log_format"` // text | json(構造化ログ)
 	Storage   Storage  `yaml:"storage"`
 	Engine    Engine   `yaml:"engine"`
@@ -93,10 +95,14 @@ type MysqlEngine struct {
 	ExpectedRSS    string `yaml:"expected_rss"`
 	MemoryHeadroom string `yaml:"memory_headroom"`
 	MaxRunning     int    `yaml:"max_running"`
-	ProxyUser      string `yaml:"proxy_user"`
-	ProxyPass      string `yaml:"proxy_pass"`
-	EnvDir         string `yaml:"env_dir"`
-	Sudo           bool   `yaml:"sudo"`
+	// app_user / app_pass は方式A(#51)の app credential(仕様 21章の新名)。
+	// 旧名 proxy_user / proxy_pass は normalize で alias 維持する。
+	AppUser   string `yaml:"app_user"`
+	AppPass   string `yaml:"app_pass"`
+	ProxyUser string `yaml:"proxy_user"`
+	ProxyPass string `yaml:"proxy_pass"`
+	EnvDir    string `yaml:"env_dir"`
+	Sudo      bool   `yaml:"sudo"`
 }
 
 // Proxy はプロトコルプロキシの設定。
@@ -158,6 +164,9 @@ type Hooks struct {
 // Auth は認証設定。
 type Auth struct {
 	APITokenEnv string `yaml:"api_token_env"`
+	// APITokenSSM を設定すると、起動時に SSM Parameter Store(SecureString)から
+	// API トークンを読み、環境変数より優先する(仕様 21章、リモート運用向け)。
+	APITokenSSM string `yaml:"api_token_ssm"`
 }
 
 // Default は既定値。
@@ -166,6 +175,8 @@ func Default() Config {
 		Listen:    Listen{API: "127.0.0.1:8080", Proxy: "0.0.0.0:3306", Metrics: "127.0.0.1:9100"},
 		Domain:    "sashiki.internal",
 		StateDB:   "/var/lib/sashiki/state.db",
+		RunDir:    "/run/sashiki",
+		LogDir:    "/var/log/sashiki",
 		LogFormat: "text",
 		Storage: Storage{
 			Backend: "ebs-zfs",
@@ -212,10 +223,11 @@ func Default() Config {
 			},
 			DefaultProfile: "preview",
 		},
-		Baseline: Baseline{ValidatePort: 3999, MaskedSentinel: "/run/sashiki/baseline-masked", KeepLast: 3},
+		// MaskedSentinel / Hooks.LogDir は空のままにし、normalize で run_dir /
+		// log_dir から派生させる(仕様 21章)。
+		Baseline: Baseline{ValidatePort: 3999, KeepLast: 3},
 		Hooks: Hooks{
-			Dir:    "/etc/sashiki/hooks",
-			LogDir: "/var/log/sashiki/hooks",
+			Dir: "/etc/sashiki/hooks",
 		},
 		Auth: Auth{APITokenEnv: "SASHIKI_API_TOKEN"},
 	}
@@ -253,6 +265,28 @@ func (c *Config) normalize() {
 	if c.Storage.LegacyFsx != nil {
 		c.Storage.Fsx = *c.Storage.LegacyFsx
 		c.Storage.LegacyFsx = nil
+	}
+	// app_user / app_pass(新名)が指定されていれば proxy_user / proxy_pass
+	// (旧名。下流はこちらを読む)へ反映する。両方省略時は Default の proxy_* が残る。
+	if c.Engine.Mysql.AppUser != "" {
+		c.Engine.Mysql.ProxyUser = c.Engine.Mysql.AppUser
+	}
+	if c.Engine.Mysql.AppPass != "" {
+		c.Engine.Mysql.ProxyPass = c.Engine.Mysql.AppPass
+	}
+	// run_dir / log_dir が空なら既定へ戻す(明示的に空指定された場合の保険)。
+	if c.RunDir == "" {
+		c.RunDir = "/run/sashiki"
+	}
+	if c.LogDir == "" {
+		c.LogDir = "/var/log/sashiki"
+	}
+	// hooks.log_dir / baseline.masked_sentinel は未設定なら run_dir / log_dir から派生。
+	if c.Hooks.LogDir == "" {
+		c.Hooks.LogDir = c.LogDir + "/hooks"
+	}
+	if c.Baseline.MaskedSentinel == "" {
+		c.Baseline.MaskedSentinel = c.RunDir + "/baseline-masked"
 	}
 }
 

@@ -30,7 +30,35 @@ import (
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	awsfsxsdk "github.com/aws/aws-sdk-go-v2/service/fsx"
+	awsssm "github.com/aws/aws-sdk-go-v2/service/ssm"
 )
+
+// resolveAPIToken は API Bearer トークンを解決する。auth.api_token_ssm が
+// 設定されていれば SSM Parameter Store(SecureString)から読み、env より
+// 優先する(リモート運用向け、仕様 21章)。SSM 取得に失敗したら致命的に扱う
+// (トークン未設定で無防備に起動するのを防ぐ)。
+func resolveAPIToken(cfg config.Config) string {
+	if name := cfg.Auth.APITokenSSM; name != "" {
+		awsCfg, err := awsconfig.LoadDefaultConfig(context.Background())
+		if err != nil {
+			log.Fatalf("auth: aws config for api_token_ssm: %v", err)
+		}
+		out, err := awsssm.NewFromConfig(awsCfg).GetParameter(context.Background(), &awsssm.GetParameterInput{
+			Name:           &name,
+			WithDecryption: boolPtr(true),
+		})
+		if err != nil {
+			log.Fatalf("auth: get api_token_ssm %q: %v", name, err)
+		}
+		if out.Parameter == nil || out.Parameter.Value == nil || *out.Parameter.Value == "" {
+			log.Fatalf("auth: api_token_ssm %q is empty", name)
+		}
+		return *out.Parameter.Value
+	}
+	return os.Getenv(cfg.Auth.APITokenEnv)
+}
+
+func boolPtr(b bool) *bool { return &b }
 
 var version = "dev" // -ldflags で埋め込む
 
@@ -157,7 +185,7 @@ func main() {
 		log.Fatalf("manager: %v", err)
 	}
 
-	token := os.Getenv(cfg.Auth.APITokenEnv)
+	token := resolveAPIToken(cfg)
 	srv := api.New(mgr, cfg.Domain, cfg.Engine.Type, cfg.Engine.Mysql.ProxyUser, cfg.Engine.Mysql.ProxyPass, token, db)
 	srv.SetOps(ops.New(db))
 	mgr.SetBaselinePolicy(workspace.RefreshConfig{

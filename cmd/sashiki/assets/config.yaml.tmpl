@@ -5,6 +5,8 @@ listen:
   metrics: "127.0.0.1:9100"
 
 state_db: /var/lib/sashiki/state.db
+run_dir: /run/sashiki          # socket / sentinel を置く実行時領域
+log_dir: /var/log/sashiki      # ログの基点(hooks.log_dir 等は未設定ならここから派生)
 log_format: text   # text | json(構造化ログ。operation ログに operation_id / branch が付く)
 domain: sashiki.internal
 
@@ -24,8 +26,8 @@ engine:
   type: mysql
   mysql:
     port_range: [3401, 3600]
-    proxy_user: dev
-    proxy_pass: dev
+    app_user: dev            # 方式A の app credential(旧名 proxy_user も可)
+    app_pass: dev            # 旧名 proxy_pass も可
     env_dir: /etc/sashiki
     sudo: false
   # postgres を使う場合(接続はプロキシでなく直接ポート、sashiki show <name> で確認):
@@ -67,10 +69,14 @@ baseline:
   require_masked: false      # true にすると masked でない baseline の publish を拒否
   require_validated: false   # true にすると validate 未通過の publish を拒否
   validate_port: 3999
-  masked_sentinel: /run/sashiki/baseline-masked
+  # masked_sentinel: 未設定なら run_dir/baseline-masked に派生
   keep_last: 3               # baseline GC で残す直近 N
   retention: 0s              # baseline GC で残す期間(0=無期限)
 
 hooks:
   dir: /etc/sashiki/hooks
-  log_dir: /var/log/sashiki/hooks
+  # log_dir: 未設定なら log_dir/hooks に派生
+
+auth:
+  api_token_env: SASHIKI_API_TOKEN   # このenv変数からBearerトークンを読む
+  # api_token_ssm: /sashiki/api-token # 設定するとSSM(SecureString)から読み、envより優先(リモート運用)
