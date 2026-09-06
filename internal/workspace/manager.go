@@ -185,42 +185,42 @@ func (m *Manager) Create(ctx context.Context, name string, port int) (Info, erro
 	if err := m.db.CreateBranch(name, p, string(origin)); err != nil {
 		return Info{}, err
 	}
-	fail := func(cause error) (Info, error) {
-		// error 状態で残す(ログ確認のため自動削除しない)。仕様 14-2。
-		_ = m.db.SetState(name, state.StateError, cause.Error())
+	failStage := func(stage string, cause error) (Info, error) {
+		// error 状態+診断で残す(ログ確認のため自動削除しない)。仕様 11-1/14-2。
+		_ = m.failOp(name, "create", stage, cause)
 		return Info{}, cause
 	}
 
 	vol, err := m.st.Clone(ctx, origin, name)
 	if err != nil {
-		return fail(fmt.Errorf("clone: %w", err))
+		return failStage("clone", fmt.Errorf("clone: %w", err))
 	}
 	b, _ := m.db.GetBranch(name)
 	ins := m.instance(b, vol)
 
 	if _, hasHook := m.hookExists(hooks.OnCreate); hasHook {
 		if err := m.eng.Start(ctx, ins); err != nil {
-			return fail(fmt.Errorf("engine start: %w", err))
+			return failStage("engine-start", fmt.Errorf("engine start: %w", err))
 		}
 		if err := m.eng.WaitReady(ctx, ins); err != nil {
-			return fail(err)
+			return failStage("engine-ready", err)
 		}
 		if err := m.runHook(ctx, hooks.OnCreate, b, vol); err != nil {
-			return fail(err)
+			return failStage("hook", err)
 		}
 		// @init は必ず正常終了状態でのみ取得する(クラッシュリカバリ防止)。
 		if err := m.eng.Stop(ctx, ins); err != nil {
-			return fail(fmt.Errorf("engine stop before @init: %w", err))
+			return failStage("engine-stop", fmt.Errorf("engine stop before @init: %w", err))
 		}
 	}
 	if _, err := m.st.SnapshotInit(ctx, vol); err != nil {
-		return fail(fmt.Errorf("snapshot @init: %w", err))
+		return failStage("snapshot", fmt.Errorf("snapshot @init: %w", err))
 	}
 	if err := m.eng.Start(ctx, ins); err != nil {
-		return fail(fmt.Errorf("engine start: %w", err))
+		return failStage("engine-start", fmt.Errorf("engine start: %w", err))
 	}
 	if err := m.eng.WaitReady(ctx, ins); err != nil {
-		return fail(err)
+		return failStage("engine-ready", err)
 	}
 	if err := m.db.SetState(name, state.StateRunning, ""); err != nil {
 		return Info{}, err

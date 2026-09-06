@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rikukaInoue/sashiki/internal/hooks"
 	"github.com/rikukaInoue/sashiki/internal/ops"
 	"github.com/rikukaInoue/sashiki/internal/state"
 	"github.com/rikukaInoue/sashiki/internal/workspace"
@@ -66,6 +67,8 @@ func New(mgr *workspace.Manager, domain, engineType, proxyUser, proxyPass, token
 	s.mux.HandleFunc("POST /v1/branches/{name}/reset", s.handleReset)
 	s.mux.HandleFunc("POST /v1/branches/{name}/recreate", s.handleRecreate)
 	s.mux.HandleFunc("POST /v1/branches/{name}/wake", s.handleWake)
+	s.mux.HandleFunc("POST /v1/branches/{name}/retry", s.handleRetry)
+	s.mux.HandleFunc("POST /v1/branches/{name}/hooks/{event}", s.handleRunHook)
 	s.mux.HandleFunc("GET /v1/branches/{name}/schema", s.handleSchema)
 	s.mux.HandleFunc("POST /v1/branches/{name}/query", s.handleQuery)
 	s.mux.HandleFunc("DELETE /v1/branches/{name}", s.handleDelete)
@@ -256,6 +259,32 @@ func (s *Server) handleWake(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.toJSON(info))
 }
 
+func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var info workspace.Info
+	opID, err := s.track("retry", name, func() error {
+		var e error
+		info, e = s.mgr.Retry(r.Context(), name)
+		return e
+	})
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	setOpID(w, opID)
+	writeJSON(w, http.StatusOK, s.toJSON(info))
+}
+
+func (s *Server) handleRunHook(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	event := hooks.Event(r.PathValue("event"))
+	if err := s.mgr.RunHookManually(r.Context(), name, event); err != nil {
+		s.writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ran", "event": string(event)})
+}
+
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	opID, err := s.track("delete", name, func() error {
@@ -333,6 +362,10 @@ type branchJSON struct {
 	UsedBytes      int64             `json:"used_bytes"`
 	HookStatus     map[string]string `json:"hook_status,omitempty"`
 	Error          string            `json:"error,omitempty"`
+	FailedOp       string            `json:"failed_operation,omitempty"`
+	ErrorCode      string            `json:"error_code,omitempty"`
+	Recoverable    bool              `json:"recoverable,omitempty"`
+	Suggestions    []string          `json:"suggested_actions,omitempty"`
 }
 
 func (s *Server) toJSON(i workspace.Info) branchJSON {
@@ -347,6 +380,10 @@ func (s *Server) toJSON(i workspace.Info) branchJSON {
 		UsedBytes:      i.UsedBytes,
 		HookStatus:     i.HookStatus,
 		Error:          i.ErrorMessage,
+		FailedOp:       i.FailedOp,
+		ErrorCode:      i.ErrorCode,
+		Recoverable:    i.Recoverable,
+		Suggestions:    i.SuggestedActions,
 	}
 	if i.LastConnAt != nil {
 		t := i.LastConnAt.UTC().Format(time.RFC3339)

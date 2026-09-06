@@ -4,6 +4,7 @@ package state
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -26,13 +27,17 @@ var ErrNotFound = errors.New("branch not found")
 
 // Branch は state.db の branches 1 行。
 type Branch struct {
-	Name           string
-	State          string
-	Port           int
-	OriginSnapshot string
-	CreatedAt      time.Time
-	LastConnAt     *time.Time
-	ErrorMessage   string
+	Name             string
+	State            string
+	Port             int
+	OriginSnapshot   string
+	CreatedAt        time.Time
+	LastConnAt       *time.Time
+	ErrorMessage     string
+	FailedOp         string
+	ErrorCode        string
+	Recoverable      bool
+	SuggestedActions []string
 }
 
 // HookRun は hook 実行記録。
@@ -62,6 +67,15 @@ func Open(path string) (*DB, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
+	// 既存 DB へのカラム追加(存在すればエラーになるが無視する)。
+	for _, col := range []string{
+		"ALTER TABLE branches ADD COLUMN failed_operation TEXT",
+		"ALTER TABLE branches ADD COLUMN error_code TEXT",
+		"ALTER TABLE branches ADD COLUMN recoverable INTEGER",
+		"ALTER TABLE branches ADD COLUMN suggested_actions TEXT",
+	} {
+		_, _ = db.Exec(col)
+	}
 	return &DB{sql: db}, nil
 }
 
@@ -73,7 +87,11 @@ CREATE TABLE IF NOT EXISTS branches (
   origin_snapshot  TEXT NOT NULL,
   created_at       TEXT NOT NULL,
   last_conn_at     TEXT,
-  error_message    TEXT
+  error_message    TEXT,
+  failed_operation TEXT,
+  error_code       TEXT,
+  recoverable      INTEGER,
+  suggested_actions TEXT
 );
 CREATE TABLE IF NOT EXISTS hook_runs (
   id          INTEGER PRIMARY KEY,
@@ -120,9 +138,37 @@ func (d *DB) CreateBranch(name string, port int, origin string) error {
 	return err
 }
 
-// SetState は状態遷移を記録する。error 状態のときは message も残す。
+// SetState は状態遷移を記録する。error 以外に遷移するとき詳細をクリアする。
 func (d *DB) SetState(name, st, errMsg string) error {
-	res, err := d.sql.Exec(`UPDATE branches SET state = ?, error_message = ? WHERE name = ?`, st, errMsg, name)
+	res, err := d.sql.Exec(
+		`UPDATE branches SET state = ?, error_message = ?,
+		   failed_operation = NULL, error_code = NULL, recoverable = NULL, suggested_actions = NULL
+		 WHERE name = ?`, st, errMsg, name)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetError は error 状態と診断情報を記録する(仕様 11-1)。
+func (d *DB) SetError(name, failedOp, code string, recoverable bool, msg string, suggestions []string) error {
+	rec := 0
+	if recoverable {
+		rec = 1
+	}
+	sug := ""
+	if len(suggestions) > 0 {
+		b, _ := json.Marshal(suggestions)
+		sug = string(b)
+	}
+	res, err := d.sql.Exec(
+		`UPDATE branches SET state = ?, error_message = ?, failed_operation = ?,
+		   error_code = ?, recoverable = ?, suggested_actions = ? WHERE name = ?`,
+		StateError, msg, failedOp, code, rec, sug, name)
 	if err != nil {
 		return err
 	}
@@ -155,7 +201,8 @@ func (d *DB) DeleteBranch(name string) error {
 // GetBranch は 1 件取得。無ければ ErrNotFound。
 func (d *DB) GetBranch(name string) (Branch, error) {
 	row := d.sql.QueryRow(
-		`SELECT name, state, port, origin_snapshot, created_at, last_conn_at, COALESCE(error_message,'')
+		`SELECT name, state, port, origin_snapshot, created_at, last_conn_at, COALESCE(error_message,''),
+		        failed_operation, error_code, recoverable, suggested_actions
 		 FROM branches WHERE name = ?`, name)
 	return scanBranch(row)
 }
@@ -163,7 +210,8 @@ func (d *DB) GetBranch(name string) (Branch, error) {
 // ListBranches は作成順で全件返す。
 func (d *DB) ListBranches() ([]Branch, error) {
 	rows, err := d.sql.Query(
-		`SELECT name, state, port, origin_snapshot, created_at, last_conn_at, COALESCE(error_message,'')
+		`SELECT name, state, port, origin_snapshot, created_at, last_conn_at, COALESCE(error_message,''),
+		        failed_operation, error_code, recoverable, suggested_actions
 		 FROM branches ORDER BY created_at`)
 	if err != nil {
 		return nil, err
@@ -204,12 +252,21 @@ func scanBranch(row scannable) (Branch, error) {
 	var b Branch
 	var created string
 	var lastConn sql.NullString
-	err := row.Scan(&b.Name, &b.State, &b.Port, &b.OriginSnapshot, &created, &lastConn, &b.ErrorMessage)
+	var failedOp, errCode, sug sql.NullString
+	var rec sql.NullInt64
+	err := row.Scan(&b.Name, &b.State, &b.Port, &b.OriginSnapshot, &created, &lastConn, &b.ErrorMessage,
+		&failedOp, &errCode, &rec, &sug)
 	if errors.Is(err, sql.ErrNoRows) {
 		return b, ErrNotFound
 	}
 	if err != nil {
 		return b, err
+	}
+	b.FailedOp = failedOp.String
+	b.ErrorCode = errCode.String
+	b.Recoverable = rec.Valid && rec.Int64 != 0
+	if sug.Valid && sug.String != "" {
+		_ = json.Unmarshal([]byte(sug.String), &b.SuggestedActions)
 	}
 	if t, err := time.Parse(timeFmt, created); err == nil {
 		b.CreatedAt = t

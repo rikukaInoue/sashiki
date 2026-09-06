@@ -700,3 +700,62 @@ func TestRecreateFixedNameUsesRenameSwap(t *testing.T) {
 		t.Error("fixed-name backend recreate should rename-swap the old volume")
 	}
 }
+
+func TestCreateFailureRecordsDiagnostics(t *testing.T) {
+	st := &mockStorage{cloneErr: errors.New("clone boom")}
+	m := newTestManager(t, st, &mockEngine{}, "")
+	if _, err := m.Create(context.Background(), "pr-1", 0); err == nil {
+		t.Fatal("want error")
+	}
+	b, err := m.db.GetBranch("pr-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.State != state.StateError {
+		t.Errorf("state = %s", b.State)
+	}
+	if b.FailedOp != "create" || b.ErrorCode != CodeCloneFailed || !b.Recoverable {
+		t.Errorf("diagnostics: op=%s code=%s recoverable=%v", b.FailedOp, b.ErrorCode, b.Recoverable)
+	}
+	if len(b.SuggestedActions) == 0 {
+		t.Error("suggested_actions should be populated")
+	}
+}
+
+func TestRetryRerunsFailedCreate(t *testing.T) {
+	// clone が最初は失敗、retry 時は成功する mock
+	st := &mockStorage{cloneErr: errors.New("transient")}
+	m := newTestManager(t, st, &mockEngine{}, "")
+	_, _ = m.Create(context.Background(), "pr-1", 0)
+	// 復旧
+	st.cloneErr = nil
+	info, err := m.Retry(context.Background(), "pr-1")
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if info.State != state.StateRunning {
+		t.Errorf("state = %s, want running", info.State)
+	}
+}
+
+func TestRetryRejectsNonRecoverable(t *testing.T) {
+	m := newTestManager(t, &mockStorage{}, &mockEngine{}, "")
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	// 手動で non-recoverable error に
+	_ = m.db.SetError("pr-1", "create", CodeSnapshotError, false, "boom", nil)
+	if _, err := m.Retry(context.Background(), "pr-1"); err == nil {
+		t.Error("retry should reject non-recoverable error")
+	}
+}
+
+func TestRetryRejectsNonErrorState(t *testing.T) {
+	m := newTestManager(t, &mockStorage{}, &mockEngine{}, "")
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Retry(context.Background(), "pr-1"); err == nil {
+		t.Error("retry on running branch should fail")
+	}
+}
