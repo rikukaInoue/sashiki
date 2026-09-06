@@ -132,7 +132,8 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	logErr := filepath.Join(cfg.Hooks.LogDir, "..", "baseline.err")
 
 	fmt.Println("→ mysqld 初期化")
-	if err := runAsUser(mysqlUID, mysqlGID, "/usr/sbin/mysqld", "--initialize-insecure", "--datadir="+dataDir); err != nil {
+	if err := runAsUser(mysqlUID, mysqlGID, "/usr/sbin/mysqld", "--initialize-insecure", "--datadir="+dataDir,
+		"--log-error=/var/log/sashiki/baseline.err"); err != nil {
 		return fmt.Errorf("initialize: %w", err)
 	}
 	fmt.Println("→ mysqld 起動")

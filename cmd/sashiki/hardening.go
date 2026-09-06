@@ -150,6 +150,11 @@ profile sashiki-mysqld /usr/sbin/mysqld flags=(attach_disconnected) {
   # deb 版 mysqld の secure_file_priv 既定ディレクトリ(起動時の存在チェックのみ)
   /var/lib/mysql-files/ r,
 
+  # deb 版 /etc/mysql の既定 log_error(--log-error を渡し忘れた場合の逃げ道。
+  # ユーザーデータは含まれない)
+  /var/log/mysql/ rw,
+  /var/log/mysql/** rw,
+
   # mysqlx プラグインの既定ソケット位置(--skip-mysqlx を渡さない
   # baseline import / refresh の mysqld が触れることがある。ユーザーデータ無し)
   /run/mysqld/ rw,
@@ -182,6 +187,12 @@ profile sashiki-mysqld /usr/sbin/mysqld flags=(attach_disconnected) {
 // ロード失敗は init 全体を止めず、警告を stderr に出して続行する
 // (mysqld を起動不能にして壊すより、閉じ込めを緩める方を選ぶ。ただし無言にしない)。
 func installApparmorProfile(pool string) error {
+	// 旧 e2e / PoC がロードした "/usr/sbin/mysqld" プロファイルがカーネルに残って
+	// いると attach が競合して本プロファイルが効かないため、先にアンロードする
+	if f, err := os.OpenFile("/sys/kernel/security/apparmor/.remove", os.O_WRONLY, 0); err == nil {
+		_, _ = f.WriteString("/usr/sbin/mysqld")
+		_ = f.Close()
+	}
 	// 旧 PoC の disable symlink を掃除(残っていると再起動で無効化される)
 	if fi, err := os.Lstat(apparmorLegacyDisableLink); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 		if err := os.Remove(apparmorLegacyDisableLink); err != nil {
