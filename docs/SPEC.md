@@ -626,7 +626,20 @@ daemon 再起動後、state.db / ZFS dataset / mysqld プロセス / systemd uni
 
 ### 20-4. API トークン
 
-sashiki 自身が発行する Bearer トークン。ホスト外から API を叩く主体(GitHub Action、手元 CLI)にだけ必要。`sashiki init` が最初の 1 本を発行して表示し、SSM `/sashiki/<app>/api-token` にも保存する。ローテーションは新規発行 → 配布先差し替え → 旧 revoke。
+認証は「**loopback は無認証・ホスト外は Bearer トークン**」(ADR-005)。同一ホストの CLI はトークン不要(sashikid が loopback からのリクエストを通す)。ホスト外から API を叩く主体(GitHub Action・リモート CLI)にだけ Bearer トークンが要る。
+
+**発行主体は sashiki 運用者(sashikid ホストに root で入れる人)**。トークンは 2 系統ある:
+
+1. **state.db トークン(`sashiki token`)** — root がホスト上で `sashiki token create --name <n>` で発行。**平文は 1 回だけ表示**し、DB には SHA-256 ハッシュのみ保存(`state.db` の tokens テーブル、last_used_at 記録)。`list` / `revoke` で管理。複数本・失効可。
+2. **env トークン(`SASHIKI_API_TOKEN`)** — sashikid 起動時の環境変数で渡す静的 1 本(後方互換)。Terraform モジュールはこれを `random_password` で生成し、SSM SecureString(出力 `api_token_ssm_path`)に保存する。利用側は SSM から取得する。
+
+`sashiki init` はトークンを発行しない(パッケージ/権限/zpool/config 生成まで)。手動運用では init 後に `token create` を 1 回叩く。
+
+**利用側**は `SASHIKI_API_TOKEN`(優先)または `~/.config/sashiki/token` からトークンを読み、`Authorization: Bearer <token>` で送る。サーバーは env トークンか state.db のハッシュと照合し、DB 照合エラーは認証失敗と区別してログに残す(無言の 401 にしない)。
+
+ローテーションは新規発行 → 配布先差し替え → 旧トークンを `revoke`。
+
+**注意**: 認証免除は接続元が loopback かで判定するため、リバースプロキシ越しに公開すると接続元が 127.0.0.1 に見えて無認証で通る。外部公開時は sashikid を直接 listen させ、トークン必須で運用する。
 
 ### 20-5. Observability
 

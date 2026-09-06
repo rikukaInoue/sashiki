@@ -62,7 +62,7 @@ curl -fsSL https://raw.githubusercontent.com/rikukaInoue/sashiki/main/install.sh
 ### 2. 初期化
 
 ```bash
-# パッケージ導入・AppArmor・sudoers・zpool/データセット・systemd・config・API トークンまで冪等に
+# パッケージ導入・AppArmor・sudoers・zpool/データセット・systemd・config 生成まで冪等に
 sudo sashiki init --pool dbpool --device /dev/nvme1n1   # デバイス名は lsblk で確認
 ```
 
@@ -88,6 +88,39 @@ mysql -udev@pr-1 -pdev -h 127.0.0.1 -P3306   # :3306 固定エンドポイント
 ```
 
 ---
+
+## 認証(トークン)
+
+API(= sashikid)への認証は「**ローカルは素通し、外から叩くときだけトークン**」。
+
+- **同じホストからの CLI** — 不要。sashikid は loopback からのリクエストを無認証で通す。ホスト上で `sashiki create ...` はそのまま動く。
+- **ホスト外(CI / GitHub Action / リモート CLI)** — **Bearer トークンが必要**。
+
+### 誰が発行するか
+
+トークンは **sashiki を運用する人(sashikid ホストに root で入れる人)** が発行する。2 通り:
+
+| 方法 | 発行者 | 保存/配布 |
+|---|---|---|
+| **手動** | ホスト上で root が `sudo sashiki token create --name ci` | **平文は 1 回だけ表示**(DB には SHA-256 ハッシュのみ)。表示された値を利用側へ配る |
+| **Terraform** | モジュールが `random_password` で生成 | SSM SecureString(出力 `api_token_ssm_path`)に保存。利用側は SSM から取得 |
+
+### どう使うか(利用側)
+
+CLI / Action は次のどちらかでトークンを読む(env が優先):
+
+```bash
+export SASHIKI_API_TOKEN=sashiki_xxxxxxxx        # 環境変数、または
+printf '%s' "$SASHIKI_API_TOKEN" > ~/.config/sashiki/token   # ファイル
+
+SASHIKI_API_URL=https://sashiki.example.com sashiki list      # 外から叩く
+```
+
+GitHub Action なら `secrets.SASHIKI_API_TOKEN` を渡すだけ(下の使い方 B)。
+
+- サーバー側は、起動時に `SASHIKI_API_TOKEN` で渡した 1 個(後方互換)か、`sashiki token` で発行した state.db のトークン(ハッシュ照合)を検証する。
+- ローテーションは **新規発行 → 配布先を差し替え → 旧トークンを `sashiki token revoke`**。
+- ⚠️ 認証免除は「接続元が loopback か」で判定する。**リバースプロキシ越しに公開すると接続元が 127.0.0.1 に見えて素通しになる**ため、外部公開時は sashikid を直接 listen させ、トークン必須で運用すること。
 
 ## 3 つの使い方
 
