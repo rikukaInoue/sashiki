@@ -45,6 +45,15 @@ branches:
   lazy_create_max_wait: 20s
   idle_stop_after: 30m      # 接続なしで mysqld を停止(データは残る、再接続で起床)
   delete_after_idle: 168h   # 7日間接続なしで削除。PR close 取りこぼしの保険
+  # profile: 用途ごとに idle lifecycle を変える。branch は create --profile P で
+  # 1つ持ち、reaper はその profile の閾値を使う(未設定フィールドは上の global に戻る)。
+  # lease(絶対期限)は profile ではなく `sashiki create --ttl 7d` /
+  # `sashiki lease renew <name> --for 7d` で明示的に付ける(使用中でも期限で回収)。
+  default_profile: preview
+  profiles:
+    preview: { idle_stop_after: 30m, delete_after_idle: 168h }
+    ci:      { idle_stop_after: 5m,  delete_after_idle: 1h }
+    sandbox: { idle_stop_after: 1h,  delete_after_idle: 720h }
 
 baseline:
   require_masked: false      # true にすると masked でない baseline の publish を拒否

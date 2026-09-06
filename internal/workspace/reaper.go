@@ -42,8 +42,18 @@ func (m *Manager) Reap(ctx context.Context) error {
 	}
 	now := time.Now()
 	for _, b := range branches {
+		// lease 失効(expires_at)は絶対期限。idle と違い「使用中でも」回収する
+		// (仕様 13-6: TTL/lease = correctness の担保)。activeConns の判定より先に見る。
+		if b.ExpiresAt != nil && now.After(*b.ExpiresAt) &&
+			(b.State == state.StateRunning || b.State == state.StateSleeping) {
+			log.Printf("reaper: deleting %s (lease expired %s ago)", b.Name, now.Sub(*b.ExpiresAt).Round(time.Second))
+			if err := m.Delete(ctx, b.Name); err != nil {
+				log.Printf("reaper: delete %s: %v", b.Name, err)
+			}
+			continue
+		}
 		// 長寿命接続を張ったままのブランチは last_conn_at が進まないため、
-		// 現在の接続数を見て使用中なら停止・削除の対象から外す。
+		// 現在の接続数を見て使用中なら idle 停止・削除の対象から外す。
 		if m.activeConns(b.Name) > 0 {
 			continue
 		}
@@ -53,16 +63,18 @@ func (m *Manager) Reap(ctx context.Context) error {
 		}
 		idle := now.Sub(activity)
 
-		if m.cfg.DeleteAfterIdle > 0 && idle >= m.cfg.DeleteAfterIdle &&
+		// idle 閾値は branch の profile 由来(未設定は global へフォールバック)。
+		pol := m.resolveProfile(b.Profile)
+		if pol.DeleteAfterIdle > 0 && idle >= pol.DeleteAfterIdle &&
 			(b.State == state.StateRunning || b.State == state.StateSleeping) {
-			log.Printf("reaper: deleting %s (idle %s)", b.Name, idle.Round(time.Second))
+			log.Printf("reaper: deleting %s (idle %s, profile %q)", b.Name, idle.Round(time.Second), b.Profile)
 			if err := m.Delete(ctx, b.Name); err != nil {
 				log.Printf("reaper: delete %s: %v", b.Name, err)
 			}
 			continue
 		}
-		if m.cfg.IdleStopAfter > 0 && idle >= m.cfg.IdleStopAfter && b.State == state.StateRunning {
-			log.Printf("reaper: stopping %s (idle %s)", b.Name, idle.Round(time.Second))
+		if pol.IdleStopAfter > 0 && idle >= pol.IdleStopAfter && b.State == state.StateRunning {
+			log.Printf("reaper: stopping %s (idle %s, profile %q)", b.Name, idle.Round(time.Second), b.Profile)
 			if err := m.Sleep(ctx, b.Name); err != nil {
 				log.Printf("reaper: stop %s: %v", b.Name, err)
 			}

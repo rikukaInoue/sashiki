@@ -254,6 +254,26 @@ sashiki show prov-test --json | grep -q '"purpose":"review"' || fail "purpose sh
 sashiki show prov-test --json | grep -q 'github_pr' || fail "source (opaque) should round-trip"
 sashiki delete prov-test > /dev/null
 
+log "profile / lease (#34)"
+# 既定 profile(preview)が付く
+sashiki create prof-def > /dev/null || fail "create with default profile"
+sashiki show prof-def --json | grep -q '"profile":"preview"' || fail "default profile should be preview"
+# 明示 profile + 初期 lease(--ttl)
+sashiki create prof-ci --profile ci --ttl 1h > /dev/null || fail "create --profile ci --ttl"
+sashiki show prof-ci --json | grep -q '"profile":"ci"' || fail "profile ci should be stored"
+exp1=$(sashiki show prof-ci --json | grep -o '"expires_at":"[^"]*"')
+[ -n "$exp1" ] || fail "--ttl should set expires_at"
+# lease renew で期限を延長(expires_at が変わる)
+sleep 1
+sashiki lease renew prof-ci --for 48h > /dev/null || fail "lease renew"
+exp2=$(sashiki show prof-ci --json | grep -o '"expires_at":"[^"]*"')
+[ -n "$exp2" ] || fail "lease renew should keep expires_at set"
+[ "$exp1" != "$exp2" ] || fail "lease renew should change expires_at"
+# 未知 profile は拒否
+sashiki create prof-bad --profile nope 2>/dev/null && fail "unknown profile should be rejected"
+sashiki delete prof-def > /dev/null
+sashiki delete prof-ci > /dev/null
+
 log "error model + retry (hook失敗→修正→retry)"
 rm -f /tmp/sashiki-hook-fixed   # VM 使い回しの残骸を排除
 # 失敗する on-create フックを置く
@@ -331,8 +351,13 @@ log "idle stop & TTL (リーパー)"
 kill $SASHIKID_PID 2>/dev/null || true
 sleep 1
 cp /etc/sashiki/config.yaml /tmp/sashiki-config.bak
-sed -i "s/idle_stop_after: 30m.*/idle_stop_after: 3s/; s/delete_after_idle: 168h.*/delete_after_idle: 15s/" /etc/sashiki/config.yaml
-sed -i "/delete_after_idle: 15s/a\\  reaper_interval: 1s" /etc/sashiki/config.yaml
+# 行頭2スペースの global キーだけを書き換える(profiles ブロック内の
+# 「    preview: { idle_stop_after: 30m, ... }」に誤マッチさせない)。
+sed -i "s/^  idle_stop_after: 30m.*/  idle_stop_after: 3s/; s/^  delete_after_idle: 168h.*/  delete_after_idle: 15s/" /etc/sashiki/config.yaml
+sed -i "/^  delete_after_idle: 15s/a\\  reaper_interval: 1s" /etc/sashiki/config.yaml
+# pr-idle は profile 未指定 → 既定 profile(preview)が付くため、reaper は
+# preview の閾値を使う。テスト用に preview も短縮する(profile 経路の検証を兼ねる)。
+sed -i "s/^    preview: .*/    preview: { idle_stop_after: 3s, delete_after_idle: 15s }/" /etc/sashiki/config.yaml
 grep -A1 "delete_after_idle" /etc/sashiki/config.yaml
 /usr/local/bin/sashikid --config /etc/sashiki/config.yaml > /var/log/sashiki/sashikid2.log 2>&1 &
 SASHIKID_PID=$!

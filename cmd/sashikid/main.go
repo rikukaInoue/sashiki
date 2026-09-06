@@ -97,10 +97,11 @@ func main() {
 		// postgres はプロキシを通らないため last_conn_at が更新されず、
 		// リーパーが使用中ブランチを「アイドル」と誤判定して停止・削除してしまう。
 		// 接続追跡ができるようになるまでアイドル回収は無効化する。
-		if cfg.Branches.IdleStopAfter > 0 || cfg.Branches.DeleteAfterIdle > 0 {
-			log.Printf("sashikid: engine=postgres では接続追跡ができないため idle_stop_after / delete_after_idle を無効化します")
+		if cfg.Branches.IdleStopAfter > 0 || cfg.Branches.DeleteAfterIdle > 0 || len(cfg.Branches.Profiles) > 0 {
+			log.Printf("sashikid: engine=postgres では接続追跡ができないため idle_stop_after / delete_after_idle / profile を無効化します")
 			cfg.Branches.IdleStopAfter = 0
 			cfg.Branches.DeleteAfterIdle = 0
+			cfg.Branches.Profiles = nil // profile 由来の idle 閾値も無効化(lease は影響なし)
 		}
 	default:
 		eng = enginemysql.New(enginemysql.Config{
@@ -124,6 +125,8 @@ func main() {
 		LazyMaxWait:         cfg.Branches.LazyCreateMaxWait,
 		IdleStopAfter:       cfg.Branches.IdleStopAfter,
 		DeleteAfterIdle:     cfg.Branches.DeleteAfterIdle,
+		Profiles:            profilePolicies(cfg.Branches.Profiles),
+		DefaultProfile:      cfg.Branches.DefaultProfile,
 		AvailableMem:        availableMem,
 		ExpectedRSSBytes:    parseSize(cfg.Engine.Mysql.ExpectedRSS),
 		MemoryHeadroomBytes: parseSize(cfg.Engine.Mysql.MemoryHeadroom),
@@ -206,4 +209,19 @@ type slogWriter struct{}
 func (slogWriter) Write(p []byte) (int, error) {
 	slog.Info(strings.TrimSuffix(string(p), "\n"))
 	return len(p), nil
+}
+
+// profilePolicies は config の profile 定義を workspace の型へ変換する(#34)。
+func profilePolicies(in map[string]config.ProfilePolicy) map[string]workspace.ProfilePolicy {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]workspace.ProfilePolicy, len(in))
+	for name, p := range in {
+		out[name] = workspace.ProfilePolicy{
+			IdleStopAfter:   p.IdleStopAfter,
+			DeleteAfterIdle: p.DeleteAfterIdle,
+		}
+	}
+	return out
 }

@@ -1060,3 +1060,106 @@ func TestDrainSleepsRunningBranches(t *testing.T) {
 		t.Errorf("pr-1 state = %s, want sleeping", info.State)
 	}
 }
+
+// --- #34 profile / lease ---
+
+func withProfiles(c *Config) {
+	c.DefaultProfile = "preview"
+	c.Profiles = map[string]ProfilePolicy{
+		"preview": {IdleStopAfter: 30 * time.Minute, DeleteAfterIdle: 168 * time.Hour},
+		"ci":      {IdleStopAfter: 10 * time.Millisecond, DeleteAfterIdle: time.Hour},
+	}
+}
+
+func TestCreateResolvesProfile(t *testing.T) {
+	m := newTestManagerCfg(t, &mockStorage{}, &mockEngine{}, "", withProfiles)
+
+	// profile 未指定 → DefaultProfile("preview")が永続化される
+	info, err := m.CreateWithMeta(context.Background(), "pr-1", 0, state.Meta{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Profile != "preview" {
+		t.Errorf("default profile = %q, want preview", info.Profile)
+	}
+
+	// 明示 profile("ci")はそのまま
+	info, err = m.CreateWithMeta(context.Background(), "pr-2", 0, state.Meta{Profile: "ci"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Profile != "ci" {
+		t.Errorf("profile = %q, want ci", info.Profile)
+	}
+
+	// 未知 profile は ErrUnknownProfile
+	if _, err := m.CreateWithMeta(context.Background(), "pr-3", 0, state.Meta{Profile: "nope"}); !errors.Is(err, ErrUnknownProfile) {
+		t.Errorf("err = %v, want ErrUnknownProfile", err)
+	}
+}
+
+func TestReapUsesProfileIdle(t *testing.T) {
+	eng := &mockEngine{}
+	m := newTestManagerCfg(t, &mockStorage{}, eng, "", func(c *Config) {
+		withProfiles(c)
+		// global は長い。ci profile の 10ms が使われることを検証する。
+		c.IdleStopAfter = time.Hour
+		c.DeleteAfterIdle = time.Hour
+	})
+	if _, err := m.CreateWithMeta(context.Background(), "pr-1", 0, state.Meta{Profile: "ci"}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(15 * time.Millisecond)
+	if err := m.Reap(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	info, _ := m.Get(context.Background(), "pr-1")
+	if info.State != state.StateSleeping {
+		t.Errorf("state = %s, want sleeping (ci profile idle_stop=10ms)", info.State)
+	}
+}
+
+func TestLeaseSetsExpiresAt(t *testing.T) {
+	m := newTestManager(t, &mockStorage{}, &mockEngine{}, "")
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	exp, err := m.Lease(context.Background(), "pr-1", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, _ := m.Get(context.Background(), "pr-1")
+	if info.ExpiresAt == nil {
+		t.Fatal("expires_at not set")
+	}
+	if d := info.ExpiresAt.Sub(exp); d > time.Second || d < -time.Second {
+		t.Errorf("expires_at = %v, want ~%v", *info.ExpiresAt, exp)
+	}
+	// 負の期間は拒否
+	if _, err := m.Lease(context.Background(), "pr-1", 0); err == nil {
+		t.Error("Lease(0) should error")
+	}
+}
+
+func TestReapDeletesExpiredLeaseEvenIfActive(t *testing.T) {
+	st := &mockStorage{}
+	m := newTestManagerCfg(t, st, &mockEngine{}, "", func(c *Config) {
+		// アイドル回収は起きない設定。だが lease 失効は使用中でも回収する。
+		c.IdleStopAfter = time.Hour
+		c.DeleteAfterIdle = time.Hour
+		c.ActiveConns = func(string) int { return 1 } // 使用中
+	})
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	// lease を過去に設定 → 失効
+	if err := m.db.SetExpiresAt("pr-1", time.Now().Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Reap(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Get(context.Background(), "pr-1"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("expired lease branch should be deleted even if active, got err=%v", err)
+	}
+}
