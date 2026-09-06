@@ -697,3 +697,42 @@ func scanOperation(row scannable) (Operation, error) {
 	}
 	return o, nil
 }
+
+// OperationStat は operations の type×state ごとの集計(metrics 用)。
+type OperationStat struct {
+	Type        string
+	State       string
+	Count       int
+	DurationSum float64 // 完了済み operation の合計所要秒
+}
+
+// OperationStats は operations を type×state で集計して返す。
+func (d *DB) OperationStats() ([]OperationStat, error) {
+	rows, err := d.sql.Query(
+		`SELECT type, state, COUNT(*),
+		        COALESCE(SUM(CASE WHEN finished_at IS NOT NULL
+		          THEN (julianday(finished_at) - julianday(started_at)) * 86400.0
+		          ELSE 0 END), 0)
+		 FROM operations GROUP BY type, state ORDER BY type, state`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []OperationStat
+	for rows.Next() {
+		var s OperationStat
+		if err := rows.Scan(&s.Type, &s.State, &s.Count, &s.DurationSum); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// HookFailureCount は失敗した hook 実行(exit_code 非 0)の累計を返す。
+func (d *DB) HookFailureCount() (int, error) {
+	var n int
+	err := d.sql.QueryRow(
+		`SELECT COUNT(*) FROM hook_runs WHERE exit_code IS NOT NULL AND exit_code != 0`).Scan(&n)
+	return n, err
+}

@@ -120,3 +120,54 @@ func TestTokens(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+func TestOperationStatsAndHookFailureCount(t *testing.T) {
+	db := openTest(t)
+
+	// operations: create×2(completed/failed)、reset×1(running のまま)
+	if err := db.CreateOperation("op_a", "create", "pr-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishOperation("op_a", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateOperation("op_b", "create", "pr-2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishOperation("op_b", "boom"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateOperation("op_c", "reset", "pr-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := db.OperationStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]OperationStat{}
+	for _, s := range stats {
+		got[s.Type+"/"+s.State] = s
+	}
+	if got["create/"+OpCompleted].Count != 1 || got["create/"+OpFailed].Count != 1 || got["reset/"+OpRunning].Count != 1 {
+		t.Errorf("stats = %+v", got)
+	}
+	if got["create/"+OpCompleted].DurationSum < 0 {
+		t.Errorf("duration should be non-negative: %+v", got["create/"+OpCompleted])
+	}
+
+	// hook_runs: 成功1・失敗1・未完了1 → 失敗のみカウント
+	id1, _ := db.RecordHookStart("pr-1", "on-create", "/tmp/a.log")
+	_ = db.RecordHookFinish(id1, 0)
+	id2, _ := db.RecordHookStart("pr-1", "on-reset", "/tmp/b.log")
+	_ = db.RecordHookFinish(id2, 1)
+	_, _ = db.RecordHookStart("pr-2", "on-create", "/tmp/c.log")
+
+	n, err := db.HookFailureCount()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("hook failures = %d, want 1", n)
+	}
+}

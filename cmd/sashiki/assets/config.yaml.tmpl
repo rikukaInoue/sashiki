@@ -5,6 +5,7 @@ listen:
   metrics: "127.0.0.1:9100"
 
 state_db: /var/lib/sashiki/state.db
+log_format: text   # text | json(構造化ログ。operation ログに operation_id / branch が付く)
 domain: sashiki.internal
 
 storage:
