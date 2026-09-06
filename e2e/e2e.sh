@@ -225,15 +225,21 @@ AE="$SCRIPT_DIR/../action/entrypoint.sh"
 [ -f "$AE" ] || AE="$SCRIPT_DIR/action-entrypoint.sh"   # Lima はフラットコピー
 [ -f "$AE" ] || fail "action entrypoint not found"
 export SASHIKI_API_URL=http://127.0.0.1:8080 SASHIKI_BRANCH=pr-77
+export SASHIKI_PR=77 GITHUB_REPOSITORY=example/app   # source 自動生成の材料 (#46)
 : > /tmp/sashiki-action-out
 SASHIKI_EVENT=opened SASHIKI_OUTPUT=/tmp/sashiki-action-out bash "$AE" || fail "action: opened should create"
 grep -q "created=true" /tmp/sashiki-action-out || fail "action: created=true expected"
+# source が自動生成され provenance として残る (#46)
+grep -q '"type":"github_pr"' <<<"$(sashiki show pr-77 --json)" || fail "action: github_pr source should be recorded"
 : > /tmp/sashiki-action-out
 SASHIKI_EVENT=synchronize SASHIKI_OUTPUT=/tmp/sashiki-action-out bash "$AE" || fail "action: synchronize should succeed on existing branch"
 grep -q "created=false" /tmp/sashiki-action-out || fail "action: created=false expected for existing"
+# on_close=keep は削除しない (#46)
+SASHIKI_EVENT=closed SASHIKI_ON_CLOSE=keep bash "$AE" || fail "action: on_close=keep should succeed"
+sashiki show pr-77 --json > /dev/null || fail "action: on_close=keep should not delete the branch"
 SASHIKI_EVENT=closed bash "$AE" || fail "action: closed should delete"
 SASHIKI_EVENT=closed bash "$AE" || fail "action: closed should be idempotent (404 OK)"
-unset SASHIKI_API_URL SASHIKI_BRANCH
+unset SASHIKI_API_URL SASHIKI_BRANCH SASHIKI_PR GITHUB_REPOSITORY
 
 log "capacity / logical size (#40)"
 curl -sf http://127.0.0.1:8080/v1/capacity | grep -q '"pool_used_ratio"' || fail "capacity should report pool ratio"
