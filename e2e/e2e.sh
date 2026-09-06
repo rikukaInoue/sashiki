@@ -182,6 +182,12 @@ systemctl stop mysqld@pr-wake
 probe http://127.0.0.1:8080/v1/branches/pr-wake/wake "" -X POST || fail "wake should succeed"
 val=$(mysql -udev@pr-wake -pdev -h127.0.0.1 -P3306 -N -e "SELECT 1" 2>/dev/null) || fail "wake: connect after wake"
 [ "$val" = "1" ] || fail "wake: query"
+# CLI の sleep / wake 露出(#87)
+sashiki sleep pr-wake > /dev/null || fail "sashiki sleep should succeed"
+sashiki show pr-wake --json | grep -q '"state":"sleeping"' || fail "sleep should set state=sleeping"
+systemctl is-active --quiet mysqld@pr-wake && fail "sleep should stop mysqld"
+sashiki wake pr-wake > /dev/null || fail "sashiki wake should succeed"
+sashiki show pr-wake --json | grep -q '"state":"running"' || fail "wake should set state=running"
 sashiki delete pr-wake
 
 log "baseline refresh (current 切り替え)"
