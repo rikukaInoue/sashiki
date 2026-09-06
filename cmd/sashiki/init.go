@@ -119,59 +119,30 @@ func initSteps(opts initOpts) []initStep {
 			},
 		},
 		initStep{
-			name: "AppArmor: branch datadir を許可する local override を生成(enforce)",
+			name: "AppArmor: mysqld を datadir に閉じ込める完全プロファイルを生成(enforce)",
 			done: func() bool {
-				b, err := os.ReadFile("/etc/apparmor.d/local/usr.sbin.mysqld")
-				return err == nil && bytes.Contains(b, []byte("sashiki"))
+				// 内容が最新の生成結果と一致する場合のみスキップ(pool 変更や
+				// プロファイル更新時は再生成・再ロードする)
+				return fileEqual(apparmorProfilePath, []byte(apparmorProfile(opts.pool)))
 			},
 			run: func() error {
-				// complain モードや全体無効化(PoC)ではなく、標準プロファイルが
-				// include する local override に branch データセットのパスだけを
-				// 追記して enforce のまま動かす(仕様 20-3)。
-				const prof = "/etc/apparmor.d/usr.sbin.mysqld"
-				if _, err := os.Stat(prof); err != nil {
-					return nil // mysqld プロファイルが無い環境は何もしない
-				}
-				pool := opts.pool
-				override := fmt.Sprintf(`# sashiki: branch datadir と run dir を許可(enforce のまま datadir 外を守る)
-/%s/branches/** rwk,
-/%s/base/** rwk,
-/run/sashiki/** rw,
-/tmp/mysql-*.sock rw,
-/tmp/mysql-*.pid rw,
-`, pool, pool)
-				if err := os.MkdirAll("/etc/apparmor.d/local", 0o755); err != nil {
-					return err
-				}
-				if err := os.WriteFile("/etc/apparmor.d/local/usr.sbin.mysqld", []byte(override), 0o644); err != nil {
-					return err
-				}
-				// enforce で reload。失敗したら complain にフォールバック(壊すより緩める)。
-				if err := runCmd(nil, "apparmor_parser", "-r", prof); err != nil {
-					_ = runCmd(nil, "aa-complain", "/usr/sbin/mysqld")
-					return nil
-				}
-				return nil
+				// Ubuntu 24.04 の /etc/apparmor.d/usr.sbin.mysqld は空の
+				// プレースホルダで local override は no-op のため、sashiki 自前の
+				// 完全プロファイルを配布して enforce でロードする(#79)。
+				return installApparmorProfile(opts.pool)
 			},
 		},
 		initStep{
 			name: "sudoers: sashiki ユーザーを zfs/systemctl の限定操作に制限",
 			done: func() bool {
-				_, err := os.Stat("/etc/sudoers.d/sashiki")
-				return err == nil
+				// 内容が最新の生成結果と一致する場合のみスキップ(旧形式の
+				// 緩い sudoers は上書きして絞り直す #78)
+				return fileEqual(sudoersPath, []byte(sudoersContent(opts.pool)))
 			},
 			run: func() error {
-				// /usr/sbin/zfs 全体は広すぎる。branch データセットへの
-				// zfs 操作と mysqld@ の systemctl だけに制限する(仕様 20-3)。
-				// root-helper への閉じ込めは v0.3(別 issue)。
-				sudoers := fmt.Sprintf(`# sashiki: 限定的な root 操作のみ許可(root-helper 化は将来)
-sashiki ALL=(root) NOPASSWD: /usr/sbin/zfs clone *, /usr/sbin/zfs snapshot *, /usr/sbin/zfs rollback *, /usr/sbin/zfs destroy *, /usr/sbin/zfs rename *, /usr/sbin/zfs set * %s/branches/*, /usr/sbin/zfs get *
-sashiki ALL=(root) NOPASSWD: /usr/bin/systemctl start mysqld@*, /usr/bin/systemctl stop mysqld@*, /usr/bin/systemctl kill *, /usr/bin/systemctl is-active mysqld@*
-`, opts.pool)
-				if err := os.WriteFile("/etc/sudoers.d/sashiki", []byte(sudoers), 0o440); err != nil {
-					return err
-				}
-				return nil
+				// /usr/sbin/zfs 全体は広すぎる。実呼び出し形に合わせてパス制限し、
+				// visudo -cf 検証後に本置きする(#78)。root-helper 化は v0.3。
+				return installSudoers(opts.pool)
 			},
 		},
 		initStep{
