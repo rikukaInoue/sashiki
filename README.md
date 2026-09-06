@@ -240,4 +240,6 @@ Issue / PR 歓迎。設計の背景は [docs/SPEC.md](docs/SPEC.md) と [docs/DE
 
 ## License
 
-Apache-2.0
+Apache-2.0([LICENSE](LICENSE) / [NOTICE](NOTICE))。
+同梱する第三者 OSS の一覧とライセンスは [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md)
+(Apache-2.0 / MIT / BSD-3-Clause / MPL-2.0。強いコピーレフトは含まない)。
