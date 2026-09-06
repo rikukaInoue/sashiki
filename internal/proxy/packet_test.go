@@ -24,9 +24,12 @@ func TestPacketRoundTrip(t *testing.T) {
 func TestInitialHandshakeParsableAsBackend(t *testing.T) {
 	// 自前の合成ハンドシェイクを parseBackendHandshake で読めること
 	// (フォーマットの自己整合性チェック)。
-	hs, err := buildInitialHandshake(42)
+	hs, hsSalt, err := buildInitialHandshake(42, false)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(hsSalt) != 20 {
+		t.Errorf("returned salt len = %d, want 20", len(hsSalt))
 	}
 	salt, caps, err := parseBackendHandshake(hs)
 	if err != nil {
@@ -74,14 +77,49 @@ func TestParseHandshakeResponse(t *testing.T) {
 	}
 }
 
-func TestParseHandshakeResponseRejectsSSLAndOldProtocol(t *testing.T) {
-	body := buildClientResponse(t, capProtocol41|capSSL|capPluginAuthLenC, "dev@pr-1", "", nil)
-	if _, err := parseHandshakeResponse(body); err == nil {
-		t.Error("SSL should be rejected")
-	}
-	body = buildClientResponse(t, capSecureConn, "dev@pr-1", "", nil)
+func TestParseHandshakeResponseRejectsOldProtocol(t *testing.T) {
+	// 非 4.1 は拒否(SSL は authTerminate 側で isSSLRequest により終端するため
+	// parseHandshakeResponse では拒否しない)。
+	body := buildClientResponse(t, capSecureConn, "dev@pr-1", "", nil)
 	if _, err := parseHandshakeResponse(body); err == nil {
 		t.Error("non-4.1 should be rejected")
+	}
+}
+
+func TestVerifyNativePassword(t *testing.T) {
+	salt := bytes.Repeat([]byte{0x21}, 20)
+	// クライアントは同じ salt でトークンを計算する。正しいパスワードは検証成功。
+	tok := nativeToken("s3cret", salt)
+	if !verifyNativePassword("s3cret", salt, tok) {
+		t.Error("correct password should verify")
+	}
+	// 誤ったパスワードは失敗。
+	if verifyNativePassword("wrong", salt, tok) {
+		t.Error("wrong password must not verify")
+	}
+	// 空パスワード同士は空トークンで一致。
+	if !verifyNativePassword("", salt, nativeToken("", salt)) {
+		t.Error("empty password should verify against empty token")
+	}
+	// 空トークン(認証情報なし)は非空パスワードに対して失敗。
+	if verifyNativePassword("s3cret", salt, nil) {
+		t.Error("empty token must not verify against a real password")
+	}
+}
+
+func TestIsSSLRequest(t *testing.T) {
+	// SSLRequest: caps に SSL、username 無しの短いパケット。
+	ssl := binary.LittleEndian.AppendUint32(nil, uint32(capProtocol41|capSSL))
+	ssl = binary.LittleEndian.AppendUint32(ssl, 1<<24)
+	ssl = append(ssl, 0xff)
+	ssl = append(ssl, make([]byte, 23)...)
+	if !isSSLRequest(ssl) {
+		t.Error("short SSL packet should be detected")
+	}
+	// username 付きのフル応答は SSLRequest ではない。
+	full := buildClientResponse(t, capProtocol41|capSSL|capSecureConn, "dev@pr-1", "", bytes.Repeat([]byte{1}, 20))
+	if isSSLRequest(full) {
+		t.Error("full handshake response is not an SSL request")
 	}
 }
 

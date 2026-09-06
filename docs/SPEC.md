@@ -763,24 +763,25 @@ DNS は「VPC 内から解決できて sashiki ホストに向く」なら何で
 
 ## 23. MySQL プロトコルプロキシ
 
-> **改訂(2026-09-06、issue #31)**: 原文 v2 は「認証中継は成立しない」として proxy を v0.4 に後送りしていたが、
-> 実装(ADR-006: バックエンド起点 AuthSwitch 転送)で中継は成立しており、v1.0 でプロキシは稼働済み。
-> そのうえで、**方式 A(認証終端)への移行を採用**する(#51)。
+> **改訂(2026-09-06、issue #31 / #51)**: 原文 v2 は「認証中継は成立しない」として proxy を v0.4 に後送りしていたが、
+> 実装(ADR-006: バックエンド起点 AuthSwitch 転送)で中継は成立し稼働していた。そのうえで **方式 A(認証終端)へ移行済み**(#51, ADR-007)。
+> 以下 23-2 が現行の実装、23-1 は経緯として残す。
 
-### 23-1. 現状(v1.x)
+### 23-1. 旧方式(ADR-006、経緯)
 
 - 固定エンドポイント `:3306`、branch は `dev@pr-123` 形式の username でルーティング
-- 認証はバックエンド起点の AuthSwitch 転送で中継(ADR-006)
+- 認証はバックエンド起点の AuthSwitch 転送で中継(ADR-006)。正否は backend が判断
 - lazy create: 存在しない branch への接続で create → ready まで TCP を保持(`TypicalCreate <= 20s` の backend のみ)
-- 既知の課題: 認証前に create が走るため、ポートに到達できる相手が任意名で clone + mysqld 起動を積み上げられる(緩和策: `lazy_create` 無効化・接続元制限)
+- 既知の課題: **認証前に create が走る**ため、ポートに到達できる相手が任意名で clone + mysqld 起動を積み上げられる(#7 の DoS)。→ 23-2 で解消
 
-### 23-2. 方式 A(認証終端)への移行(#51)
+### 23-2. 方式 A(認証終端)【現行・実装済み #51 / ADR-007】
 
-sashiki がクライアント認証(`dev@pr-123` のパスワード検証)を終端し、バックエンドへは sashiki が保持する credential で接続する。
+sashiki がクライアント認証(`dev@pr-123` のパスワード検証)を**終端**し、バックエンドへは sashiki が保持する credential で接続する。
 
-- `app_user` のパスワードは Secrets Manager(または設定された secret 経路)から読み、クライアント認証と backend 接続の両方に使う
-- **認証してから create**: lazy create の無認証リソース確保(DoS)を構造的に解消
-- TLS 終端を sashiki に一元化。`caching_sha2_password` にも対応可能になる
+- `app_user`(`engine.mysql.proxy_pass`、本番は Secrets Manager 由来)のパスワードで **mysql_native_password をサーバー側検証**(salt に対する応答を定時間比較)。合成ハンドシェイクで native を名乗るので 8.0/8.4 のデフォルト caching_sha2 クライアントも接続できる
+- **認証に成功してから route / lazy create**: 認証前の無償リソース確保(#7 の DoS)を構造的に解消
+- backend へは sashiki がクライアントとして native で接続し直す(認証はクライアントから不可視)
+- TLS 終端は sashiki に一元化。`proxy.tls_cert` / `proxy.tls_key` 指定時に有効(クライアント↔sashiki=TLS、sashiki↔backend=localhost 平文)。SSLRequest を検出して TLS へ切替
 - クライアントは普通の MySQL 接続で済む(SNI 方式のような全クライアント TLS+SNI 対応は不要)
 
 ### 23-3. proxy が提供する UX

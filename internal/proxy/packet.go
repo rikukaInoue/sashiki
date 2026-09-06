@@ -5,6 +5,8 @@ package proxy
 
 import (
 	"crypto/rand"
+	"crypto/sha1"
+	"crypto/subtle"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -74,17 +76,21 @@ const synthCaps = uint32(capLongPassword | capProtocol41 | capSecureConn | capPl
 	capMultiStatements | capMultiResults)
 
 // buildInitialHandshake は sashiki が名乗る合成ハンドシェイク(protocol 10)。
-// salt は使い捨て(クライアントの応答は捨てて AuthSwitch でやり直させる)。
-func buildInitialHandshake(connID uint32) ([]byte, error) {
+// 返す salt(20byte)は方式A(#51)でクライアント認証の検証に使う。
+// sslAvailable が true のとき capSSL を広告し、クライアントの TLS 要求を受け入れる。
+func buildInitialHandshake(connID uint32, sslAvailable bool) ([]byte, []byte, error) {
 	salt := make([]byte, 20)
 	if _, err := rand.Read(salt); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// salt に 0x00 が混ざると null 終端と衝突するため避ける
 	for i := range salt {
 		salt[i] = salt[i]%94 + 33
 	}
 	caps := synthCaps
+	if sslAvailable {
+		caps |= capSSL
+	}
 
 	b := []byte{10}                                 // protocol version
 	b = append(b, []byte("8.0.0-sashiki-proxy")...) // server version
@@ -102,7 +108,56 @@ func buildInitialHandshake(connID uint32) ([]byte, error) {
 	b = append(b, 0)
 	b = append(b, []byte(nativePlugin)...)
 	b = append(b, 0)
-	return b, nil
+	return b, salt, nil
+}
+
+// nativeToken は mysql_native_password のクライアント応答トークンを計算する。
+//
+//	token = SHA1(pass) XOR SHA1(salt || SHA1(SHA1(pass)))
+//
+// 空パスワードは空トークン。
+func nativeToken(password string, salt []byte) []byte {
+	if password == "" {
+		return nil
+	}
+	stage1 := sha1.Sum([]byte(password))
+	stage2 := sha1.Sum(stage1[:])
+	h := sha1.New()
+	h.Write(salt)
+	h.Write(stage2[:])
+	scr := h.Sum(nil)
+	out := make([]byte, len(stage1))
+	for i := range stage1 {
+		out[i] = stage1[i] ^ scr[i]
+	}
+	return out
+}
+
+// verifyNativePassword は salt に対するクライアント応答 token が password と
+// 一致するかを定時間比較で検証する(方式A: 認証終端)。
+func verifyNativePassword(password string, salt, token []byte) bool {
+	return subtle.ConstantTimeCompare(nativeToken(password, salt), token) == 1
+}
+
+// isSSLRequest は HandshakeResponse が SSLRequest(TLS へ切り替える短いパケット)
+// かどうか。SSLRequest は caps+maxlen+charset+reserved(23)のみで username が無い。
+func isSSLRequest(body []byte) bool {
+	if len(body) < 4 {
+		return false
+	}
+	caps := binary.LittleEndian.Uint32(body[0:4])
+	return caps&capSSL != 0 && len(body) <= 36
+}
+
+// buildOK は認証成功時にクライアントへ返す OK パケット(protocol 41)。
+func buildOK() []byte {
+	return []byte{
+		0x00,       // OK header
+		0x00,       // affected_rows (lenenc 0)
+		0x00,       // last_insert_id (lenenc 0)
+		0x02, 0x00, // status flags (SERVER_STATUS_AUTOCOMMIT)
+		0x00, 0x00, // warnings
+	}
 }
 
 // handshakeResponse は client の HandshakeResponse41 のうち必要な項目。
@@ -112,6 +167,7 @@ type handshakeResponse struct {
 	charset  byte
 	username string
 	database string
+	authResp []byte // 方式A(#51): salt に対するクライアント認証トークン
 }
 
 func parseHandshakeResponse(body []byte) (handshakeResponse, error) {
@@ -122,9 +178,6 @@ func parseHandshakeResponse(body []byte) (handshakeResponse, error) {
 	r.caps = binary.LittleEndian.Uint32(body[0:4])
 	if r.caps&capProtocol41 == 0 {
 		return r, fmt.Errorf("client does not speak protocol 4.1")
-	}
-	if r.caps&capSSL != 0 {
-		return r, fmt.Errorf("TLS is not supported by sashiki proxy yet")
 	}
 	r.maxLen = binary.LittleEndian.Uint32(body[4:8])
 	r.charset = body[8]
@@ -139,13 +192,17 @@ func parseHandshakeResponse(body []byte) (handshakeResponse, error) {
 	}
 	r.username = string(body[pos:end])
 	pos = end + 1
-	// auth response (読み飛ばす — sashiki の salt に対する応答なので使わない)
+	// auth response(方式A ではこれを検証に使う)
 	if r.caps&capPluginAuthLenC != 0 {
 		if pos >= len(body) {
 			return r, fmt.Errorf("truncated auth data")
 		}
 		alen := int(body[pos])
 		pos++
+		if pos+alen > len(body) {
+			return r, fmt.Errorf("truncated auth data")
+		}
+		r.authResp = body[pos : pos+alen]
 		pos += alen
 	} else if r.caps&capSecureConn != 0 {
 		if pos >= len(body) {
@@ -153,11 +210,17 @@ func parseHandshakeResponse(body []byte) (handshakeResponse, error) {
 		}
 		alen := int(body[pos])
 		pos++
+		if pos+alen > len(body) {
+			return r, fmt.Errorf("truncated auth data")
+		}
+		r.authResp = body[pos : pos+alen]
 		pos += alen
 	} else {
+		start := pos
 		for pos < len(body) && body[pos] != 0 {
 			pos++
 		}
+		r.authResp = body[start:pos]
 		pos++
 	}
 	if pos > len(body) {
@@ -241,7 +304,9 @@ func buildBackendHandshakeResponse(r handshakeResponse, backendCaps uint32, user
 	b = append(b, 0)
 	b = append(b, byte(len(authResp)))
 	b = append(b, authResp...)
-	if caps&capConnectWithDB != 0 && r.database != "" {
+	// capConnectWithDB を広告したら db フィールドは必須(空でも null を書く)。
+	// 省くと backend が後続の plugin 名を DB 名として誤読する。
+	if caps&capConnectWithDB != 0 {
 		b = append(b, []byte(r.database)...)
 		b = append(b, 0)
 	}
@@ -262,3 +327,16 @@ func buildErr(code uint16, sqlState, msg string) []byte {
 
 func isOK(body []byte) bool  { return len(body) > 0 && body[0] == 0x00 }
 func isErr(body []byte) bool { return len(body) > 0 && body[0] == 0xff }
+
+// errText は ERR パケットから人間可読なメッセージ(code + 本文)を取り出す。
+func errText(body []byte) string {
+	if len(body) < 3 {
+		return "unknown error"
+	}
+	code := binary.LittleEndian.Uint16(body[1:3])
+	msg := body[3:]
+	if len(msg) > 6 && msg[0] == '#' { // '#' + 5 桁 SQLSTATE
+		msg = msg[6:]
+	}
+	return fmt.Sprintf("%d %s", code, string(msg))
+}
