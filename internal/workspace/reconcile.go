@@ -50,6 +50,10 @@ func (m *Manager) Reconcile(ctx context.Context) (ReconcileReport, error) {
 		vols, verr := vl.ListBranchVolumes(ctx)
 		if verr == nil {
 			for _, name := range vols {
+				// 予約名(_validate 等)は orphan 扱いしない(state.db 非登録でも正当)。
+				if IsReserved(name) {
+					continue
+				}
 				if !known[name] {
 					rep.Orphans = append(rep.Orphans, name)
 				}

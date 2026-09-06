@@ -16,6 +16,16 @@ import (
 	"github.com/rikukaInoue/sashiki/internal/storage"
 )
 
+// ReservedPrefix で始まる名前は sashiki 内部予約(validate 用の一時 branch 等)。
+// name_pattern(^[a-z0-9-]+$)により利用者は作成できない。reconcile / orphan GC は
+// 予約名を対象外にする。
+const ReservedPrefix = "_"
+
+// IsReserved は内部予約名かどうか。
+func IsReserved(name string) bool {
+	return len(name) > 0 && name[0] == ReservedPrefix[0]
+}
+
 // エラー種別(API 層で HTTP ステータスに写像する)。
 var (
 	ErrInvalidName  = errors.New("invalid branch name")
@@ -88,6 +98,8 @@ type Manager struct {
 
 	// baseline publish ポリシー(#38)
 	baselinePolicy RefreshConfig
+	// baseline の set / GC / publish を直列化する(Fix 3)。
+	baselineMu sync.Mutex
 }
 
 // SetBaselinePolicy は refresh の publish ポリシーを設定する(sashikid 起動時)。
@@ -382,8 +394,26 @@ func (m *Manager) recreateFrom(ctx context.Context, b state.Branch, origin stora
 		_ = m.db.SetState(b.Name, state.StateError, err.Error())
 		return Info{}, err
 	}
-	// hook を再適用してから @init 契約を揃える。
+	// hook を再適用してから @init 契約を揃える。Create と同じく
+	// 「hook → graceful stop → @init → start」を通し、recreate 後の branch にも
+	// 有効な @init を用意する(これが無いと後続の reset が Rollback 先を失う)。
 	if err := m.runHook(ctx, hookEv, b, newVol); err != nil {
+		_ = m.db.SetState(b.Name, state.StateError, err.Error())
+		return Info{}, err
+	}
+	if err := m.eng.Stop(ctx, newIns); err != nil { // graceful(snapshot 前は必須)
+		_ = m.db.SetState(b.Name, state.StateError, err.Error())
+		return Info{}, fmt.Errorf("recreate stop before @init: %w", err)
+	}
+	if _, err := m.st.SnapshotInit(ctx, newVol); err != nil {
+		_ = m.db.SetState(b.Name, state.StateError, err.Error())
+		return Info{}, fmt.Errorf("recreate @init: %w", err)
+	}
+	if err := m.eng.Start(ctx, newIns); err != nil {
+		_ = m.db.SetState(b.Name, state.StateError, err.Error())
+		return Info{}, err
+	}
+	if err := m.eng.WaitReady(ctx, newIns); err != nil {
 		_ = m.db.SetState(b.Name, state.StateError, err.Error())
 		return Info{}, err
 	}

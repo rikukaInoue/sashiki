@@ -160,8 +160,11 @@ func (m *Manager) runRefresh(ctx context.Context, rc RefreshConfig, tag string) 
 	if rc.RequireValidated && !validated {
 		return fmt.Errorf("publish rejected: baseline is not validated (require_validated)")
 	}
-	if err := m.db.SetCurrentBaseline(string(snap)); err != nil {
-		return fmt.Errorf("publish (set current): %w", err)
+	m.baselineMu.Lock()
+	perr := m.db.SetCurrentBaseline(string(snap))
+	m.baselineMu.Unlock()
+	if perr != nil {
+		return fmt.Errorf("publish (set current): %w", perr)
 	}
 	log.Printf("baseline refresh: published %s (masked=%v validated=%v)", snap, masked, validated)
 	return nil
@@ -178,6 +181,9 @@ func (m *Manager) validateCandidate(ctx context.Context, snap storage.SnapshotRe
 		if job, derr := m.st.DeleteAsync(ctx, vol); derr == nil {
 			_, _ = m.st.Poll(ctx, job)
 		}
+	}
+	if err := m.admitMemory("baseline-validate"); err != nil {
+		return fmt.Errorf("cannot validate (admission): %w", err)
 	}
 	vol, err := m.st.Clone(ctx, snap, name)
 	if err != nil {

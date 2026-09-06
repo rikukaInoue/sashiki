@@ -17,8 +17,18 @@ import (
 // SetBaseline は current pointer を指定 snapshot へ切り替える(仕様 12-2)。
 // 直前の正常版へ即 rollback するのに使う。snapshot は登録済みである必要がある。
 func (m *Manager) SetBaseline(ctx context.Context, snapshot string) error {
-	if _, err := m.db.GetBaseline(snapshot); err != nil {
+	m.baselineMu.Lock()
+	defer m.baselineMu.Unlock()
+	b, err := m.db.GetBaseline(snapshot)
+	if err != nil {
 		return fmt.Errorf("baseline %s is not registered", snapshot)
+	}
+	// publish ポリシー(refresh と同じ)を set にも課す(抜け道を塞ぐ)。
+	if m.baselinePolicy.RequireMasked && !b.Prov.Masked {
+		return fmt.Errorf("cannot set baseline %s: not masked (require_masked)", snapshot)
+	}
+	if m.baselinePolicy.RequireValidated && !b.Prov.Validated {
+		return fmt.Errorf("cannot set baseline %s: not validated (require_validated)", snapshot)
 	}
 	return m.db.SetCurrentBaseline(snapshot)
 }
@@ -37,6 +47,10 @@ type GCResult struct {
 // GCBaselines は GC ポリシーに従って古い baseline snapshot を削除する。
 // current・branch から参照中・直近 KeepLast は残す。
 func (m *Manager) GCBaselines(ctx context.Context, cfg GCConfig) (GCResult, error) {
+	// SetBaseline と直列化して「current にしようとしている baseline を GC が消す」
+	// 競合を防ぐ(current の読み取りと削除を同一クリティカルセクションで行う)。
+	m.baselineMu.Lock()
+	defer m.baselineMu.Unlock()
 	baselines, err := m.db.ListBaselines()
 	if err != nil {
 		return GCResult{}, err

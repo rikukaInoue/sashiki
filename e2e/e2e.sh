@@ -217,6 +217,8 @@ val=$(mysql -udev@pr-1 -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.
 sashiki recreate pr-1 > /dev/null || fail "recreate should succeed"
 val=$(mysql -udev@pr-1 -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.items" 2>/dev/null)
 [ "$val" = "4" ] || fail "recreate should move pr-1 to current baseline (got $val)"
+# recreate 後に reset が成功すること(@init が存在する検証 = Fix 2)
+sashiki reset pr-1 > /dev/null || fail "reset after recreate should work (valid @init)"
 
 log "github action entrypoint (create/idempotent/delete)"
 AE="$SCRIPT_DIR/../action/entrypoint.sh"
