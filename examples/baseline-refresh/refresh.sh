@@ -31,6 +31,9 @@ done
 mysql -uroot -S "$SOCK" -e "SELECT 1" > /dev/null
 # ----------------------------------------------------------------------
 
+# PII マスクを実施したら sentinel を touch(require_masked のとき publish 条件)
+# mkdir -p /run/sashiki && touch /run/sashiki/baseline-masked
+
 # 正常終了(必須): スナップショットは必ず正常終了状態でのみ取得する
 mysqladmin -uroot -S "$SOCK" shutdown
 sleep 2

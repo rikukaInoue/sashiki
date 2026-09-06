@@ -20,6 +20,7 @@ type Config struct {
 	Engine   Engine   `yaml:"engine"`
 	Proxy    Proxy    `yaml:"proxy"`
 	Branches Branches `yaml:"branches"`
+	Baseline Baseline `yaml:"baseline"`
 	Hooks    Hooks    `yaml:"hooks"`
 	Auth     Auth     `yaml:"auth"`
 }
@@ -107,6 +108,14 @@ type Branches struct {
 	ReaperInterval    time.Duration `yaml:"reaper_interval"`
 }
 
+// Baseline は baseline publish のポリシー(仕様 12-3/12-4)。
+type Baseline struct {
+	RequireMasked    bool   `yaml:"require_masked"`
+	RequireValidated bool   `yaml:"require_validated"`
+	ValidatePort     int    `yaml:"validate_port"`   // validate 用の一時ポート(既定 3999)
+	MaskedSentinel   string `yaml:"masked_sentinel"` // build script が touch する印(既定 /run/sashiki/baseline-masked)
+}
+
 // Hooks はフック設定。
 type Hooks struct {
 	Dir     string        `yaml:"dir"`
@@ -162,6 +171,7 @@ func Default() Config {
 			DeleteAfterIdle:   168 * time.Hour,
 			ReaperInterval:    time.Minute,
 		},
+		Baseline: Baseline{ValidatePort: 3999, MaskedSentinel: "/run/sashiki/baseline-masked"},
 		Hooks: Hooks{
 			Dir:    "/etc/sashiki/hooks",
 			LogDir: "/var/log/sashiki/hooks",
