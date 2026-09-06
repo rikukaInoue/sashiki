@@ -1273,3 +1273,26 @@ func TestReaperSkipsBranchWithPolledConns(t *testing.T) {
 		t.Errorf("state = %s, want running (active conn protects from idle stop)", info.State)
 	}
 }
+
+// --- #82 create --baseline ---
+
+func TestCreateFromBaseline(t *testing.T) {
+	m := newTestManager(t, &mockStorage{}, &mockEngine{}, "")
+	if err := m.db.RegisterBaseline("pool/base@baseline-x", state.BaselineProvenance{}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := m.CreateWithMetaFrom(context.Background(), "pr-1", 0, state.Meta{}, "pool/base@baseline-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.OriginSnapshot != "pool/base@baseline-x" {
+		t.Errorf("origin = %q, want pool/base@baseline-x", info.OriginSnapshot)
+	}
+	// 未登録 baseline は ErrBaselineNotFound(branch 行も残さない)
+	if _, err := m.CreateWithMetaFrom(context.Background(), "pr-2", 0, state.Meta{}, "nope@nope"); !errors.Is(err, ErrBaselineNotFound) {
+		t.Errorf("err = %v, want ErrBaselineNotFound", err)
+	}
+	if _, err := m.Get(context.Background(), "pr-2"); !errors.Is(err, ErrNotFound) {
+		t.Error("failed create must not leave a branch row")
+	}
+}

@@ -28,12 +28,13 @@ func IsReserved(name string) bool {
 
 // エラー種別(API 層で HTTP ステータスに写像する)。
 var (
-	ErrInvalidName    = errors.New("invalid branch name")
-	ErrExists         = errors.New("branch already exists")
-	ErrNotFound       = state.ErrNotFound
-	ErrLimitReached   = errors.New("branch limit reached")
-	ErrNoFreePort     = errors.New("no free port in range")
-	ErrUnknownProfile = errors.New("unknown profile")
+	ErrInvalidName      = errors.New("invalid branch name")
+	ErrExists           = errors.New("branch already exists")
+	ErrNotFound         = state.ErrNotFound
+	ErrLimitReached     = errors.New("branch limit reached")
+	ErrNoFreePort       = errors.New("no free port in range")
+	ErrUnknownProfile   = errors.New("unknown profile")
+	ErrBaselineNotFound = errors.New("baseline not found")
 )
 
 // ProfilePolicy は profile ごとの idle lifecycle(仕様 11-3)。0 のフィールドは
@@ -230,8 +231,14 @@ func (m *Manager) Create(ctx context.Context, name string, port int) (Info, erro
 // ValidName は branch 名が name_pattern に合致するかを返す(API の同期事前検証用)。
 func (m *Manager) ValidName(name string) bool { return m.nameRe.MatchString(name) }
 
-// CreateWithMeta は provenance 付きで branch を作成する(仕様 11-2)。
+// CreateWithMeta は current baseline から provenance 付きで branch を作成する(仕様 11-2)。
 func (m *Manager) CreateWithMeta(ctx context.Context, name string, port int, meta state.Meta) (Info, error) {
+	return m.CreateWithMetaFrom(ctx, name, port, meta, "")
+}
+
+// CreateWithMetaFrom は baseline を指定して branch を作成する(#82: create --baseline)。
+// baseline が空なら current を使う。指定した baseline が未登録なら ErrBaselineNotFound。
+func (m *Manager) CreateWithMetaFrom(ctx context.Context, name string, port int, meta state.Meta, baseline string) (Info, error) {
 	if !m.nameRe.MatchString(name) {
 		return Info{}, ErrInvalidName
 	}
@@ -266,6 +273,12 @@ func (m *Manager) CreateWithMeta(ctx context.Context, name string, port int, met
 	}
 
 	origin := m.currentBaseline()
+	if baseline != "" {
+		if _, gerr := m.db.GetBaseline(baseline); gerr != nil {
+			return Info{}, fmt.Errorf("%w: %s", ErrBaselineNotFound, baseline)
+		}
+		origin = storage.SnapshotRef(baseline)
+	}
 	if err := m.db.CreateBranch(name, p, string(origin)); err != nil {
 		return Info{}, err
 	}

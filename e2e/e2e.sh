@@ -263,6 +263,14 @@ sashiki show prov-test --json | grep -q '"purpose":"review"' || fail "purpose sh
 sashiki show prov-test --json | grep -q 'github_pr' || fail "source (opaque) should round-trip"
 sashiki delete prov-test > /dev/null
 
+log "create --baseline (#82: 指定 baseline から作成)"
+sashiki create bl-test --baseline "$POOL/base@baseline" > /dev/null || fail "create --baseline should work"
+grep -q bl-test <<<"$(sashiki list)" || fail "bl-test should be created from the given baseline"
+sashiki delete bl-test > /dev/null
+# 未登録 baseline は失敗し、branch を残さない
+sashiki create bl-bad --baseline "nope@nope" 2>/dev/null && fail "create --baseline unknown should fail"
+grep -q bl-bad <<<"$(sashiki list)" && fail "failed create --baseline must not leave a branch"
+
 log "profile / lease (#34)"
 # 既定 profile(preview)が付く
 sashiki create prof-def > /dev/null || fail "create with default profile"
