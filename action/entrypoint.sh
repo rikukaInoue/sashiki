@@ -25,9 +25,14 @@ if [ -n "${SASHIKI_API_TOKEN:-}" ]; then
   auth=(-H "Authorization: Bearer ${SASHIKI_API_TOKEN}")
 fi
 
+# 応答ボディの書き先。固定パスだと別ユーザーの残骸ファイルで書き込みに
+# 失敗する(curl exit 23)ため mktemp を使う。
+RESP=$(mktemp "${TMPDIR:-/tmp}/sashiki-action-resp.XXXXXX")
+trap 'rm -f "$RESP"' EXIT
+
 api() {
   local method=$1 path=$2 body=${3:-}
-  local args=(-sS -o /tmp/sashiki-action-resp.json -w '%{http_code}' -X "$method" "${auth[@]}" \
+  local args=(-sS -o "$RESP" -w '%{http_code}' -X "$method" "${auth[@]}" \
     -H "Content-Type: application/json" "${SASHIKI_API_URL}${path}")
   if [ -n "$body" ]; then args+=(-d "$body"); fi
   curl "${args[@]}"
@@ -72,7 +77,7 @@ case "$SASHIKI_EVENT" in
     case "$code" in
       204) echo "sashiki: branch '${SASHIKI_BRANCH}' deleted" ;;
       404) echo "sashiki: branch '${SASHIKI_BRANCH}' not found (already deleted)" ;;  # 冪等
-      *)   echo "sashiki: delete failed (HTTP $code)"; cat /tmp/sashiki-action-resp.json; exit 1 ;;
+      *)   echo "sashiki: delete failed (HTTP $code)"; cat "$RESP"; exit 1 ;;
     esac
     ;;
   opened|reopened|synchronize)
@@ -85,11 +90,11 @@ case "$SASHIKI_EVENT" in
     case "$code" in
       201) created=true ;;
       200) created=false ;;
-      *)   echo "sashiki: create failed (HTTP $code)"; cat /tmp/sashiki-action-resp.json; exit 1 ;;
+      *)   echo "sashiki: create failed (HTTP $code)"; cat "$RESP"; exit 1 ;;
     esac
-    host=$(python3 -c 'import json;print(json.load(open("/tmp/sashiki-action-resp.json"))["host"])')
-    port=$(python3 -c 'import json;print(json.load(open("/tmp/sashiki-action-resp.json"))["port"])')
-    user=$(python3 -c 'import json;print(json.load(open("/tmp/sashiki-action-resp.json"))["user"])')
+    host=$(RESP="$RESP" python3 -c 'import json,os;print(json.load(open(os.environ["RESP"]))["host"])')
+    port=$(RESP="$RESP" python3 -c 'import json,os;print(json.load(open(os.environ["RESP"]))["port"])')
+    user=$(RESP="$RESP" python3 -c 'import json,os;print(json.load(open(os.environ["RESP"]))["user"])')
     echo "sashiki: branch '${SASHIKI_BRANCH}' ready (created=${created})"
     emit host "$host"
     emit port "$port"
