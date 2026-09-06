@@ -16,6 +16,18 @@ inputs:
     description: "ブランチ名 (省略時: pr-<PR番号>)"
     required: false
     default: ""
+  profile:
+    description: "lifecycle profile (例: preview / ci / sandbox。省略時はサーバー既定)"
+    required: false
+    default: ""
+  source:
+    description: "provenance の source JSON (省略時は github_pr を自動生成)"
+    required: false
+    default: ""
+  on_close:
+    description: "PR close 時の動作 (delete | keep。keep は TTL 回収に任せる)"
+    required: false
+    default: "delete"
   comment:
     description: "PR に接続先をコメントする (true|false)"
     required: false
@@ -46,6 +58,10 @@ runs:
         SASHIKI_API_TOKEN: ${{ inputs.token }}
         SASHIKI_BRANCH: ${{ inputs.branch != '' && inputs.branch || format('pr-{0}', github.event.pull_request.number) }}
         SASHIKI_EVENT: ${{ github.event.action }}
+        SASHIKI_PROFILE: ${{ inputs.profile }}
+        SASHIKI_SOURCE: ${{ inputs.source }}
+        SASHIKI_ON_CLOSE: ${{ inputs.on_close }}
+        SASHIKI_PR: ${{ github.event.pull_request.number }}
       run: |
         SASHIKI_OUTPUT="$GITHUB_OUTPUT" "${{ github.action_path }}/entrypoint.sh"
 
