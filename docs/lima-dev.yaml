@@ -1,0 +1,22 @@
+# macOS ローカル開発用の Lima VM 定義(sashiki を常駐させる)。
+#   limactl start --name=sashiki-dev ./docs/lima-dev.yaml --yes
+#
+# E2E 用の e2e/lima.yaml と違い、:3306(proxy)/ :8080(API)を Mac host へ
+# port-forward し、開発で使えるだけの memory/disk を確保する。
+# baseline のサイズに合わせて memory / disk は調整すること。
+images:
+  - location: "https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-arm64.img"
+    arch: "aarch64"
+  - location: "https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-amd64.img"
+    arch: "x86_64"
+cpus: 4
+memory: "6GiB"   # mysqld 1 本 ≈ 400MB。同時に起こすブランチ数 × 0.4GB + 余裕
+disk: "60GiB"    # baseline + 各ブランチの CoW 差分。baseline が大きいなら増やす
+mounts: []
+# Mac host から VM のサービスへ届くようにポート転送する。
+# OrbStack のコンテナからは host.docker.internal:3306 で届く。
+portForwards:
+  - guestPort: 3306
+    hostPort: 3306
+  - guestPort: 8080
+    hostPort: 8080

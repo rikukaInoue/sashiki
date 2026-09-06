@@ -1,0 +1,104 @@
+# ローカル開発(macOS + Lima)
+
+「git worktree でブランチごとに並行開発、DB も worktree ごとに独立させたい」——
+sashiki はこれに向いている。worktree 1 本 = DB ブランチ 1 本(同じ baseline から CoW クローン、
+完全分離、`reset` で即戻せる)。ここでは **macOS で常駐させて開発に使う**手順を書く。
+
+## 構成
+
+sashiki は **ZFS + systemd(Linux カーネル)が必須**なので、macOS では **Lima のフル VM** の中で
+動かす。アプリ側(OrbStack のコンテナや Mac ホストのプロセス)は VM の MySQL に TCP で繋ぐ。
+
+```
+[macOS]
+ ├─ OrbStack ─► アプリのコンテナ                    ─┐
+ ├─ Mac host のプロセス(go run など)              ─┼─► :3306 ─► [Lima VM] sashikid
+ └─ Lima VM(Ubuntu + ZFS)◄── port-forward 3306/8080 ┘        (proxy が dev@branch で振り分け)
+```
+
+> **なぜ VM?** sashiki の CoW は ZFS の機能で、ZFS は out-of-tree のカーネルモジュール。
+> **OrbStack / Docker Desktop の軽量共有カーネルでは ZFS を load できない見込み**なので、
+> フル VM(Lima / Colima / UTM)の中で動かす。アプリは今までどおり OrbStack でよい。
+
+## セットアップ
+
+### 1. VM を起動(要 `brew install lima`)
+
+```bash
+limactl start --name=sashiki-dev ./docs/lima-dev.yaml --yes
+limactl shell sashiki-dev   # 以降このシェルの中で作業
+```
+
+`docs/lima-dev.yaml` は :3306 / :8080 を Mac host へ port-forward してある(memory/disk は
+baseline サイズに合わせて調整)。
+
+### 2. インストール & 初期化(VM 内)
+
+```bash
+# sashiki 導入
+curl -fsSL https://raw.githubusercontent.com/rikukaInoue/sashiki/main/install.sh | sudo bash
+
+# ループバックファイルの zpool で初期化(物理ディスク不要)
+truncate -s 40G /var/tmp/sashiki.img
+sudo sashiki init --pool tank --device /var/tmp/sashiki.img
+```
+
+### 3. baseline(元データ)を入れる(VM 内)
+
+```bash
+# 手元の本番相当ダンプを VM に渡してから
+sashiki baseline import --from /path/to/dump.sql
+sudo systemctl enable --now sashikid
+```
+
+これで `sashiki-dev` VM に、いつでもブランチを払い出せる MySQL が常駐する。
+
+## worktree ごとに DB を生やす
+
+proxy の **lazy create** を使うと、`dev@<branch>` で**初回接続した瞬間にそのブランチが生える**。
+CLI で create する必要すらない。各 worktree の `.envrc`(direnv)にこう書く:
+
+```bash
+# <repo>/.envrc  (git worktree ごとに同じ内容でよい)
+export DB_HOST=host.docker.internal   # OrbStack のコンテナから。Mac host 直なら 127.0.0.1
+export DB_PORT=3306
+export DB_USER="dev@$(git branch --show-current | tr '/' '-' | cut -c1-32)"
+export DB_PASSWORD=dev                # ローカル既定。config の proxy_pass を変えたら合わせる
+```
+
+- branch 名は sashiki の `name_pattern`(`^[a-z0-9-]{1,32}$`)に合わせて整形している(`/`→`-`、32 文字まで)。
+- worktree でアプリを起動 → その branch の DB に繋がる。**別の worktree は完全に別 DB**。
+- 使っていない worktree の DB は **idle で自動停止**(mysqld が落ちてメモリ 0、再接続で起床)。
+  worktree を 10 個持っていても、実際に走らせている数ぶんしかメモリを食わない。
+
+### 管理コマンド(VM 内 or `limactl shell` 越し)
+
+```bash
+limactl shell sashiki-dev sashiki list          # ブランチ一覧
+limactl shell sashiki-dev sashiki reset  my-feat # 作成時点へ戻す
+limactl shell sashiki-dev sashiki recreate my-feat # 最新 baseline から作り直す
+limactl shell sashiki-dev sashiki delete my-feat
+```
+
+CLI は VM 内の API(loopback)を叩くのでトークン不要。Mac から直接叩きたい場合は
+[トークン](SPEC.md#20-4-api-トークン)を発行して `SASHIKI_API_URL` / `SASHIKI_API_TOKEN` を設定する。
+
+## OrbStack のアプリから繋ぐ
+
+- **OrbStack のコンテナ**から: `host.docker.internal:3306`(OrbStack は host.docker.internal を Mac host に解決する)。
+- **Mac host のプロセス**(`go run` など)から: `127.0.0.1:3306`(Lima の port-forward 先)。
+- ユーザーは `dev@<branch>`、パスワードは config の `proxy_pass`(既定 `dev`)。
+
+## 後片付け
+
+```bash
+limactl stop sashiki-dev     # 一時停止(データは残る)
+limactl delete -f sashiki-dev # VM ごと破棄
+```
+
+## これが向く / 向かない
+
+- **向く**: baseline が大きい(数十 GB)、worktree を何本も並行、migration を実データで試す、reset を多用する。
+- **向かない(Docker で十分)**: 軽い MySQL が 1 個欲しいだけ。その場合は素の container の方が VM 不要で楽。
+
+判断の目安は [README の損益分岐](../README.md) と [docs/COSTS.md](COSTS.md) を参照。

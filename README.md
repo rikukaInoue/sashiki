@@ -52,6 +52,8 @@ profile は用途ごとの寿命(idle 停止 / 自動削除)を表す。`create 
 
 ## 使ってみる(Ubuntu 24.04)
 
+> **macOS で試す / git worktree ごとに DB を分けたい人は** → [docs/LOCAL-DEV.md](docs/LOCAL-DEV.md)(Lima VM + OrbStack + worktree 連動)。sashiki は ZFS が要るので Mac ではフル VM の中で動かす。
+
 ### 1. インストール
 
 ```bash
