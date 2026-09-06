@@ -78,6 +78,8 @@ func New(mgr *workspace.Manager, domain, engineType, proxyUser, proxyPass, token
 	s.mux.HandleFunc("POST /v1/baseline/set", s.handleSetBaseline)
 	s.mux.HandleFunc("POST /v1/baseline/gc", s.handleGCBaselines)
 	s.mux.HandleFunc("GET /v1/capacity", s.handleCapacity)
+	s.mux.HandleFunc("GET /v1/doctor", s.handleDoctor)
+	s.mux.HandleFunc("POST /v1/gc/orphans", s.handleGCOrphans)
 	s.mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /", s.handleWebUI)
 	return s
@@ -224,6 +226,33 @@ func (s *Server) handleCapacity(w http.ResponseWriter, r *http.Request) {
 		"memory":   map[string]any{"available_bytes": c.MemAvailableBytes, "expected_rss_bytes": c.ExpectedRSSBytes},
 		"branches": map[string]any{"running": c.Running, "max_running": c.MaxRunning, "max_branches": c.MaxBranches},
 	})
+}
+
+func (s *Server) handleDoctor(w http.ResponseWriter, r *http.Request) {
+	d, err := s.mgr.Doctor(r.Context())
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"pool_healthy":       d.PoolHealthy,
+		"pool_used_ratio":    d.PoolUsedRatio,
+		"current_baseline":   d.CurrentBaseline,
+		"branch_count":       d.BranchCount,
+		"port_conflicts":     d.PortConflicts,
+		"orphans":            d.Orphans,
+		"memory_headroom_ok": d.MemHeadroomOK,
+		"issues":             d.Issues,
+	})
+}
+
+func (s *Server) handleGCOrphans(w http.ResponseWriter, r *http.Request) {
+	deleted, err := s.mgr.GCOrphans(r.Context())
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {

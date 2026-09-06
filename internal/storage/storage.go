@@ -85,5 +85,10 @@ type LogicalSizer interface {
 	LogicalBytes(ctx context.Context, vol Volume) (int64, error)
 }
 
+// VolumeLister は branch volume を列挙できるバックエンド(reconciliation / orphan GC 用)。
+type VolumeLister interface {
+	ListBranchVolumes(ctx context.Context) ([]string, error) // branch 名の一覧
+}
+
 // NopSnapshot は SnapshotInit を持たないバックエンドが返す番兵値。
 const NopSnapshot SnapshotRef = ""
