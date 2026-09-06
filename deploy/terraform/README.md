@@ -112,3 +112,19 @@ apply 後にサイズが戻ったら通常運用に戻る。
   Secrets Manager(`password_secret_arn`)。どちらも平文で state に近い形で
   持たない運用にすること(`terraform.tfstate` の暗号化・アクセス制限は前提)。
 - 単一ノード構成のため `reader_endpoint` は `endpoint` と同じ値を返す(RDS 互換)。
+
+## Web UI / API を手元から使う(SSM ポートフォワード)
+
+API(と Web UI・データブラウザ)は localhost 前提の認証設計のため、リモートに公開せず
+SSM ポートフォワードで手元に引いて使う(SSH 鍵・公開ポート不要):
+
+```bash
+aws ssm start-session --target $(terraform output -raw instance_id) \
+  --document-name AWS-StartPortForwardingSession \
+  --parameters '{"portNumber":["8080"],"localPortNumber":["8080"]}'
+# → ブラウザで http://localhost:8080(ブランチ一覧・データブラウザ)
+```
+
+loopback からは無認証で全機能が使える。データブラウザは localhost 以外の Origin を
+403 で遮断するため、トンネル以外の経路では動かない(意図的な設計)。
+チーム向けに常時公開したい場合は ALB + OIDC 等のインフラ層認証を別途前段に置くこと。

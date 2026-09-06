@@ -45,3 +45,8 @@ output "api_token_ssm_path" {
   description = "API トークン(SecureString)を保存した SSM パラメータ名"
   value       = aws_ssm_parameter.api_token.name
 }
+
+output "instance_id" {
+  description = "EC2 インスタンス ID(SSM ポートフォワードで Web UI / API を使うときに指定)"
+  value       = aws_instance.this.id
+}
