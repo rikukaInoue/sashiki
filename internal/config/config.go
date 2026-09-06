@@ -133,10 +133,12 @@ type ProfilePolicy struct {
 
 // Baseline は baseline publish のポリシー(仕様 12-3/12-4)。
 type Baseline struct {
-	RequireMasked    bool   `yaml:"require_masked"`
-	RequireValidated bool   `yaml:"require_validated"`
-	ValidatePort     int    `yaml:"validate_port"`   // validate 用の一時ポート(既定 3999)
-	MaskedSentinel   string `yaml:"masked_sentinel"` // build script が touch する印(既定 /run/sashiki/baseline-masked)
+	RequireMasked    bool          `yaml:"require_masked"`
+	RequireValidated bool          `yaml:"require_validated"`
+	ValidatePort     int           `yaml:"validate_port"`   // validate 用の一時ポート(既定 3999)
+	MaskedSentinel   string        `yaml:"masked_sentinel"` // build script が touch する印(既定 /run/sashiki/baseline-masked)
+	KeepLast         int           `yaml:"keep_last"`       // GC で残す直近 N(既定 3、#86)
+	Retention        time.Duration `yaml:"retention"`       // GC で残す期間(0=無期限、#86)
 }
 
 // Hooks はフック設定。
@@ -203,7 +205,7 @@ func Default() Config {
 			},
 			DefaultProfile: "preview",
 		},
-		Baseline: Baseline{ValidatePort: 3999, MaskedSentinel: "/run/sashiki/baseline-masked"},
+		Baseline: Baseline{ValidatePort: 3999, MaskedSentinel: "/run/sashiki/baseline-masked", KeepLast: 3},
 		Hooks: Hooks{
 			Dir:    "/etc/sashiki/hooks",
 			LogDir: "/var/log/sashiki/hooks",

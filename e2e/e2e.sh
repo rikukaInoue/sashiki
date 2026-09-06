@@ -214,8 +214,14 @@ log "baseline immutable / set / gc (#37)"
 curl -sf http://127.0.0.1:8080/v1/baselines | grep -q '"is_current":true' || fail "should have a current baseline"
 NB=$(curl -sf http://127.0.0.1:8080/v1/baselines | grep -o '"snapshot"' | wc -l)
 [ "$NB" -ge 2 ] || fail "should have >=2 baselines after refresh (got $NB)"
+# gc --dry-run(#86): 実際には消さず、応答に dry_run:true(current/参照中は消えない前提)
+sashiki baseline gc --dry-run | grep -q '"dry_run":true' || fail "baseline gc --dry-run should report dry_run"
+NB2=$(curl -sf http://127.0.0.1:8080/v1/baselines | grep -o '"snapshot"' | wc -l)
+[ "$NB2" -eq "$NB" ] || fail "dry-run must not delete baselines ($NB2 != $NB)"
+# 負の keep_last は 400(#86)
+sashiki baseline gc --keep-last -1 2>/dev/null && fail "negative keep_last should be rejected"
 # gc: current と参照中は残る(pr-1 が旧baseline参照中)
-sashiki baseline gc > /dev/null || fail "baseline gc"
+sashiki baseline gc --keep-last 5 > /dev/null || fail "baseline gc"
 # current baseline はまだ存在
 sashiki baseline list | grep -q '\*' || fail "current baseline should remain after gc"
 

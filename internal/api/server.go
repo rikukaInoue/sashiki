@@ -221,16 +221,24 @@ func (s *Server) handleSetBaseline(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGCBaselines(w http.ResponseWriter, r *http.Request) {
-	keepLast := 3
+	gc := s.mgr.BaselineGCConfig() // config 由来の keep_last / retention 既定
 	if v := r.URL.Query().Get("keep_last"); v != "" {
-		_, _ = fmt.Sscanf(v, "%d", &keepLast)
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			writeErr(w, http.StatusBadRequest, "invalid_name", "keep_last must be a non-negative integer")
+			return
+		}
+		gc.KeepLast = n
 	}
-	res, err := s.mgr.GCBaselines(r.Context(), workspace.GCConfig{KeepLast: keepLast})
+	if r.URL.Query().Get("dry_run") == "true" {
+		gc.DryRun = true
+	}
+	res, err := s.mgr.GCBaselines(r.Context(), gc)
 	if err != nil {
 		s.writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"deleted": res.Deleted, "kept": res.Kept})
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": res.Deleted, "kept": res.Kept, "dry_run": gc.DryRun})
 }
 
 func (s *Server) handleCapacity(w http.ResponseWriter, r *http.Request) {

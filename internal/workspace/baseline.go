@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"time"
 
 	"github.com/rikukaInoue/sashiki/internal/state"
 	"github.com/rikukaInoue/sashiki/internal/storage"
@@ -35,7 +36,9 @@ func (m *Manager) SetBaseline(ctx context.Context, snapshot string) error {
 
 // GCConfig は baseline GC のポリシー。
 type GCConfig struct {
-	KeepLast int // 直近 N 個は残す(0 = 無制限に古いのを消す)
+	KeepLast  int           // 直近 N 個は残す(0 = 個数では残さない)
+	Retention time.Duration // この期間より新しい baseline は残す(0 = 期間では残さない)
+	DryRun    bool          // true なら削除せず「削除対象」を Deleted に列挙する
 }
 
 // GCResult は GC の結果。
@@ -78,9 +81,16 @@ func (m *Manager) GCBaselines(ctx context.Context, cfg GCConfig) (GCResult, erro
 			keep = true // branch が参照中
 		case cfg.KeepLast > 0 && i < cfg.KeepLast:
 			keep = true // 直近 N
+		case cfg.Retention > 0 && time.Since(b.CreatedAt) < cfg.Retention:
+			keep = true // retention より新しい
 		}
 		if keep {
 			res.Kept = append(res.Kept, b.Snapshot)
+			continue
+		}
+		// dry-run: 実際には消さず、削除対象として列挙する。
+		if cfg.DryRun {
+			res.Deleted = append(res.Deleted, b.Snapshot)
 			continue
 		}
 		// storage から snapshot を削除(DeleteBaselineSnapshot を持つバックエンドのみ)。
