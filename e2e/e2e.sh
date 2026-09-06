@@ -141,7 +141,7 @@ val=$(mysql -udev@pr-1 -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.
 if mysql -udev@Bad_Name -pdev -h127.0.0.1 -P3306 -e "SELECT 1" 2>/dev/null; then
   fail "proxy: invalid branch name should be rejected"
 fi
-# パスワード誤りはバックエンドが拒否
+# パスワード誤りは proxy が終端で拒否(方式A #51)
 if mysql -udev@pr-1 -pWRONG -h127.0.0.1 -P3306 -e "SELECT 1" 2>/dev/null; then
   fail "proxy: wrong password should be rejected"
 fi
@@ -149,6 +149,13 @@ fi
 if mysql -udev -pdev -h127.0.0.1 -P3306 -e "SELECT 1" 2>/dev/null; then
   fail "proxy: user without @branch should be rejected"
 fi
+# 方式A の肝(#51 / #7): 認証前に branch を作らない。誤パスワードで未知の
+# branch 名へ接続しても、認証終端で弾かれて lazy create は走らない(DoS 構造の解消)。
+if mysql -udev@pr-dos -pWRONG -h127.0.0.1 -P3306 -e "SELECT 1" 2>/dev/null; then
+  fail "proxy: auth-before-create — wrong password must be rejected"
+fi
+sleep 1
+grep -q "pr-dos" <<<"$(sashiki list)" && fail "proxy: 認証失敗した branch(pr-dos)は作られてはならない (#7 DoS)"
 
 log "metrics & Web UI"
 probe http://127.0.0.1:9100/metrics 'sashiki_branches{state="running"} 2' \

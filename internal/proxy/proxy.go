@@ -1,16 +1,17 @@
 // Package proxy は :3306 の固定エンドポイント。クライアントのユーザー名
-// `<user>@<branch>` からバックエンドの mysqld を選び、認証を中継する。
+// `<user>@<branch>` からバックエンドの mysqld を選ぶ。
 //
-// sashiki はパスワードを保存しない。合成ハンドシェイクでユーザー名だけを取得し、
-// バックエンドにはユーザーの実プラグインと異なるプラグインを名乗って接続する。
-// するとバックエンドが AuthSwitchRequest(新しい salt 付き)を返すので、それを
-// そのままクライアントへ転送して認証させる(正否の判断はバックエンド)。
-// この方式では両側の sequence 番号が自然に揃い、書き換えが不要(ADR-006)。
-// 認証完了後は素通し。
+// 方式A(認証終端, #51): sashiki が app_user のパスワードを保持し、クライアントの
+// mysql_native_password 認証を自身で検証する。**検証に成功してから**ブランチを
+// route / lazy create するため、認証前の無償リソース確保(#7 の DoS 構造)が
+// 起きない。バックエンドへは sashiki が保持する credential で接続し直す。
+// TLS 終端は cert 指定時のみ有効(クライアント↔sashiki=TLS、sashiki↔backend=
+// localhost 平文)。以前の認証中継(ADR-006)は DECISIONS.md に経緯として残す。
 package proxy
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log"
@@ -37,9 +38,16 @@ type Config struct {
 	BackendHost      string // 既定 127.0.0.1
 	MaxConnPerBranch int    // 既定 50
 	// AllowedUser が非空なら、<user>@<branch> の user 部がこれと一致する
-	// 接続だけを受け付ける。認証前の lazy create の乱発を抑える
-	// (name_pattern・max_branches・メモリガードに加えた第一関門)。
+	// 接続だけを受け付ける。認証前の第一関門。
 	AllowedUser string
+
+	// AppUser / AppPassword は方式A の app credential。クライアント認証の検証と
+	// バックエンド接続の両方に使う(本番は Secrets Manager 由来の値を配線する)。
+	AppUser     string
+	AppPassword string
+
+	// TLSConfig が非 nil なら TLS 終端を有効にする(クライアント↔sashiki)。
+	TLSConfig *tls.Config
 }
 
 // Server は MySQL プロトコルプロキシ。
@@ -60,6 +68,9 @@ func New(cfg Config, router Router) (*Server, error) {
 	}
 	if cfg.MaxConnPerBranch == 0 {
 		cfg.MaxConnPerBranch = 50
+	}
+	if cfg.AppUser == "" {
+		cfg.AppUser = "dev"
 	}
 	re, err := regexp.Compile(cfg.NamePattern)
 	if err != nil {
@@ -119,7 +130,7 @@ func (s *Server) handle(ctx context.Context, client net.Conn) {
 	defer func() { _ = client.Close() }()
 	_ = client.SetDeadline(time.Now().Add(60 * time.Second))
 
-	if err := s.authRelay(ctx, client); err != nil {
+	if err := s.authTerminate(ctx, client); err != nil {
 		log.Printf("proxy: %v", err)
 	}
 }
@@ -130,11 +141,11 @@ func authErr(client net.Conn, seq byte, code uint16, state, msg string) error {
 	return fmt.Errorf("auth rejected: %s", msg)
 }
 
-// authRelay は認証フェーズを中継し、成功後はそのまま素通しに移行して
-// 接続が終わるまでブロックする。
-func (s *Server) authRelay(ctx context.Context, client net.Conn) error {
-	// 1. 合成ハンドシェイク送信
-	hs, err := buildInitialHandshake(s.connID.Add(1))
+// authTerminate は方式A の認証フェーズ。クライアント認証を sashiki 自身が
+// 検証し、成功してから branch を route / create してバックエンドへ接続し直す。
+func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
+	// 1. 合成ハンドシェイク送信(salt はクライアント検証に使う)
+	hs, salt, err := buildInitialHandshake(s.connID.Add(1), s.cfg.TLSConfig != nil)
 	if err != nil {
 		return err
 	}
@@ -142,83 +153,71 @@ func (s *Server) authRelay(ctx context.Context, client net.Conn) error {
 		return err
 	}
 
-	// 2. クライアント応答からユーザー名を取得
+	// 2. クライアント応答。TLS 要求なら終端してから本応答を読み直す。
 	resp, err := readPacket(client)
 	if err != nil {
 		return err
 	}
+	seq := resp.seq
+	if isSSLRequest(resp.body) {
+		if s.cfg.TLSConfig == nil {
+			return authErr(client, seq+1, 1045, "28000", "TLS not configured")
+		}
+		tlsConn := tls.Server(client, s.cfg.TLSConfig)
+		if err := tlsConn.Handshake(); err != nil {
+			return fmt.Errorf("tls handshake: %w", err)
+		}
+		client = tlsConn
+		if resp, err = readPacket(client); err != nil {
+			return err
+		}
+		seq = resp.seq
+	}
 	hr, err := parseHandshakeResponse(resp.body)
 	if err != nil {
-		return authErr(client, resp.seq+1, 1045, "28000", err.Error())
+		return authErr(client, seq+1, 1045, "28000", err.Error())
 	}
 	user, branch, ok := strings.Cut(hr.username, "@")
 	if !ok || !s.nameRe.MatchString(branch) {
-		return authErr(client, resp.seq+1, 1045, "28000",
+		return authErr(client, seq+1, 1045, "28000",
 			fmt.Sprintf("Access denied: user must be <user>@<branch> (got %q)", hr.username))
 	}
 	if s.cfg.AllowedUser != "" && user != s.cfg.AllowedUser {
-		return authErr(client, resp.seq+1, 1045, "28000",
+		return authErr(client, seq+1, 1045, "28000",
 			fmt.Sprintf("Access denied for user %q", user))
 	}
 
-	// 3. ブランチ解決
+	// 3. 認証終端: app パスワードで検証する。**ここを通るまで branch に触れない**
+	//    (認証前 lazy create の DoS 構造を解消 — #7 / #51)。
+	if !verifyNativePassword(s.cfg.AppPassword, salt, hr.authResp) {
+		return authErr(client, seq+1, 1045, "28000",
+			fmt.Sprintf("Access denied for user '%s'@'%s' (using password: YES)", user, branch))
+	}
+
+	// 4. 認証済み → branch 解決(必要なら lazy create)
 	port, err := s.router.RouteBranch(ctx, branch)
 	if err != nil {
-		return authErr(client, resp.seq+1, 1049, "42000",
-			fmt.Sprintf("Unknown branch '%s'", branch))
+		return authErr(client, seq+1, 1049, "42000", fmt.Sprintf("Unknown branch '%s'", branch))
 	}
 	if !s.acquire(branch) {
-		return authErr(client, resp.seq+1, 1040, "08004", "Too many connections for branch")
+		return authErr(client, seq+1, 1040, "08004", "Too many connections for branch")
 	}
 	defer s.release(branch)
 
-	// 4. バックエンド接続 + salt 取得
+	// 5. バックエンドへ sashiki 保持の credential で接続し直す
 	backend, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", s.cfg.BackendHost, port), 10*time.Second)
 	if err != nil {
-		return authErr(client, resp.seq+1, 2003, "HY000", "backend unavailable")
+		return authErr(client, seq+1, 2003, "HY000", "backend unavailable")
 	}
 	defer func() { _ = backend.Close() }()
-	bhs, err := readPacket(backend)
-	if err != nil {
-		return err
-	}
-	_, backendCaps, err := parseBackendHandshake(bhs.body)
-	if err != nil {
-		return err
+	if berr := s.authenticateBackend(backend); berr != nil {
+		log.Printf("proxy: backend auth for %s@%s: %v", user, branch, berr)
+		return authErr(client, seq+1, 2003, "HY000", "backend auth failed")
 	}
 
-	// 5. バックエンドへ HandshakeResponse。ユーザーの実プラグイン(native)と
-	//    異なる caching_sha2 を名乗ることで、バックエンドに AuthSwitchRequest を
-	//    送らせる。それをそのままクライアントへ転送すると、両側の sequence が
-	//    自然に揃う(handshake=0, response=1, switch=2, reply=3, result=4)ため
-	//    seq の書き換えが不要になる。ADR-006。
-	bResp := buildBackendHandshakeResponse(hr, backendCaps, user, nil, sha2Plugin)
-	if err := writePacket(backend, packet{seq: 1, body: bResp}); err != nil {
+	// 6. クライアントへ OK を返して認証完了
+	if err := writePacket(client, packet{seq: seq + 1, body: buildOK()}); err != nil {
 		return err
-	}
-
-	// 6. 認証フェーズの素直な転送(seq もそのまま)。backend の OK/ERR で終わる。
-	for {
-		p, err := readPacket(backend)
-		if err != nil {
-			return fmt.Errorf("read backend auth reply: %w", err)
-		}
-		if err := writePacket(client, p); err != nil {
-			return err
-		}
-		if isOK(p.body) {
-			break
-		}
-		if isErr(p.body) {
-			return fmt.Errorf("backend rejected auth for %s@%s", user, branch)
-		}
-		cp, err := readPacket(client)
-		if err != nil {
-			return fmt.Errorf("read client auth reply: %w", err)
-		}
-		if err := writePacket(backend, cp); err != nil {
-			return err
-		}
 	}
 
 	// 認証完了 → 素通し(接続終了までブロック)
@@ -229,4 +228,60 @@ func (s *Server) authRelay(ctx context.Context, client net.Conn) error {
 	go func() { _, _ = io.Copy(client, backend); done <- struct{}{} }()
 	<-done // 片方向が終わったら両方閉じる(defer が client/backend を閉じる)
 	return nil
+}
+
+// authenticateBackend は sashiki がクライアントとして backend mysqld へ
+// mysql_native_password で認証する(方式A)。backend の dev は native_password。
+func (s *Server) authenticateBackend(backend net.Conn) error {
+	bhs, err := readPacket(backend)
+	if err != nil {
+		return fmt.Errorf("read backend handshake: %w", err)
+	}
+	salt, backendCaps, err := parseBackendHandshake(bhs.body)
+	if err != nil {
+		return err
+	}
+	// backend 認証では DB を選ばない(接続後にクライアントが USE する)。
+	// capConnectWithDB を広告すると db フィールドが必須になり、省くと backend が
+	// 後続の plugin 名を DB 名と誤読するため、そもそも広告しない。
+	hr := handshakeResponse{caps: synthCaps &^ capConnectWithDB, maxLen: 16 * 1024 * 1024, charset: 0xff}
+	token := nativeToken(s.cfg.AppPassword, salt)
+	resp := buildBackendHandshakeResponse(hr, backendCaps, s.cfg.AppUser, token, nativePlugin)
+	if err := writePacket(backend, packet{seq: bhs.seq + 1, body: resp}); err != nil {
+		return err
+	}
+	for {
+		p, err := readPacket(backend)
+		if err != nil {
+			return fmt.Errorf("read backend auth result: %w", err)
+		}
+		switch {
+		case isOK(p.body):
+			return nil
+		case isErr(p.body):
+			return fmt.Errorf("backend rejected app credential: %s", errText(p.body))
+		case len(p.body) > 0 && p.body[0] == 0xfe: // AuthSwitchRequest → native で応答し直す
+			swSalt := parseAuthSwitchSalt(p.body)
+			tok := nativeToken(s.cfg.AppPassword, swSalt)
+			if err := writePacket(backend, packet{seq: p.seq + 1, body: tok}); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("unexpected backend auth packet 0x%02x", p.body[0])
+		}
+	}
+}
+
+// parseAuthSwitchSalt は AuthSwitchRequest(0xfe + plugin\0 + salt)から salt を取る。
+func parseAuthSwitchSalt(body []byte) []byte {
+	pos := 1
+	for pos < len(body) && body[pos] != 0 { // plugin name
+		pos++
+	}
+	pos++ // null
+	salt := body[pos:]
+	for len(salt) > 0 && salt[len(salt)-1] == 0 { // 末尾 null を落とす
+		salt = salt[:len(salt)-1]
+	}
+	return salt
 }

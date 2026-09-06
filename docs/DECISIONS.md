@@ -51,3 +51,18 @@
 4. baseline import が作る proxy_user は **mysql_native_password**。AuthSwitch 1 回で認証が完結し決定的になる(caching_sha2 の full-auth は RSA 鍵交換が挟まる)。8.4 以降は native がデフォルト無効のため、caching_sha2 対応は TLS 終端(sni ルーティング)導入時に再検討
 
 **理由**: 実機の挙動(2 回目 AuthSwitch 拒否・caps 不一致の Malformed packet)に合わせた最小の設計。認証フェーズは素直な双方向転送ループだけで済む。
+
+## ADR-007: プロキシは「認証終端(方式A)」へ移行、proxy 自身がパスワードを検証する
+
+**背景**: ADR-006(バックエンド起点の AuthSwitch 転送)は中継として成立し実機で稼働していたが、認証の正否をバックエンドに委ねるため、**認証前にブランチを route / lazy create してしまう**構造的な問題が残っていた(ポートに到達できる相手が任意名で clone + mysqld 起動を積み上げられる DoS、#7)。また TLS 終端・caching_sha2 対応・パスワード管理の一元化が中継方式では難しい。#31 で方式A(認証終端)を採用と決定し、#51 で実装した。
+
+**決定**:
+1. sashiki が app_user のパスワード(`engine.mysql.proxy_pass`、本番は Secrets Manager 由来)を保持し、クライアントの **mysql_native_password 認証を自身で検証**する(`SHA1(pass) XOR SHA1(salt||SHA1(SHA1(pass)))` を合成ハンドシェイクの salt に対して照合、定時間比較)。
+2. **認証に成功してから** `RouteBranch` / lazy create する。認証前の無償リソース確保(#7 の DoS 構造)を解消する。
+3. バックエンドへは sashiki がクライアントとして mysql_native_password で接続し直す(保持している credential を使用)。認証フェーズはクライアントから見えない。
+4. TLS 終端は `proxy.tls_cert` / `proxy.tls_key` 指定時のみ有効(クライアント↔sashiki=TLS、sashiki↔backend=localhost 平文)。SSLRequest を検出して `tls.Server` に切り替えてから本 HandshakeResponse を読む。
+5. クライアントには合成ハンドシェイクで `mysql_native_password` を名乗るため、8.0/8.4 のデフォルト(caching_sha2)クライアントも native 応答で接続できる。将来 caching_sha2 の full-auth を終端する場合は TLS 前提で追加する。
+
+**理由**: 認証を終端することで #7 の DoS を構造的に閉じ、TLS 終端とパスワード管理を sashiki 側に一元化できる。ADR-006 は「中継でも成立する」ことを実証した経緯として本ファイルに残す(現行の実装は本 ADR)。
+
+**関連**: #31(決定)、#51(実装)、#7(DoS)、ADR-006(前方式・経緯として保持)。

@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"log"
 	"log/slog"
@@ -187,11 +188,25 @@ func main() {
 		log.Printf("sashikid: プロキシは MySQL 専用のため engine=%s では起動しません(警告を消すには listen.proxy: \"\")", cfg.Engine.Type)
 	}
 	if cfg.Listen.Proxy != "" && cfg.Engine.Type == "mysql" {
+		// 方式A(#51): proxy が app 認証を終端する。app credential は
+		// engine.mysql の proxy_user/proxy_pass(本番は Secrets 由来)を使う。
+		var tlsCfg *tls.Config
+		if cfg.Proxy.TLSCert != "" && cfg.Proxy.TLSKey != "" {
+			cert, cerr := tls.LoadX509KeyPair(cfg.Proxy.TLSCert, cfg.Proxy.TLSKey)
+			if cerr != nil {
+				log.Fatalf("proxy tls: %v", cerr)
+			}
+			tlsCfg = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
+			log.Printf("sashikid: proxy TLS 終端を有効化しました")
+		}
 		px, err := proxy.New(proxy.Config{
 			Listen:           cfg.Listen.Proxy,
 			NamePattern:      cfg.Branches.NamePattern,
 			MaxConnPerBranch: cfg.Proxy.MaxConnPerBranch,
 			AllowedUser:      cfg.Engine.Mysql.ProxyUser,
+			AppUser:          cfg.Engine.Mysql.ProxyUser,
+			AppPassword:      cfg.Engine.Mysql.ProxyPass,
+			TLSConfig:        tlsCfg,
 		}, mgr)
 		if err != nil {
 			log.Fatalf("proxy: %v", err)

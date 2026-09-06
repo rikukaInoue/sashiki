@@ -100,7 +100,9 @@ type MysqlEngine struct {
 
 // Proxy はプロトコルプロキシの設定。
 type Proxy struct {
-	MaxConnPerBranch int `yaml:"max_conn_per_branch"`
+	MaxConnPerBranch int    `yaml:"max_conn_per_branch"`
+	TLSCert          string `yaml:"tls_cert"` // 空なら TLS 終端しない(平文)。方式A #51
+	TLSKey           string `yaml:"tls_key"`
 }
 
 // Branches はブランチのポリシー。
