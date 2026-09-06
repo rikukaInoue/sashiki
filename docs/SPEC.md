@@ -5,7 +5,7 @@
 > [EBS 版 PoC 記事](https://rikuka.dev/blog/db-branch-zfs-mysql-poc/) を参照)。
 >
 > 23 章(プロキシ)は issue #31 の決定(2026-09-06、認証終端=方式 A の採用)を反映して原文から改訂済み。
-> 仕様と実装の既知の差分は issue #44 / #48 で追跡する。個別の設計判断は [DECISIONS.md](DECISIONS.md)(ADR)へ。
+> 仕様と実装の既知の差分は issue #44 / #48(および精査で起票した #78〜#90)で追跡する。個別の設計判断は [DECISIONS.md](DECISIONS.md)(ADR)へ。
 
 -----
 
@@ -246,17 +246,18 @@ production → export/copy → mask/anonymize → validation → baseline → br
 ```go
 type Engine interface {
     Start(ctx, inst) error
-    StopGracefully(ctx, inst) error   // snapshot 前に使う
-    Kill(ctx, inst) error             // rollback で破棄する dirty state に使う
-    Ready(ctx, inst) error
-    Capabilities() EngineCapabilities
+    Stop(ctx, inst) error        // 正常終了。snapshot 前は必ずこちら
+    Kill(ctx, inst) error        // rollback で破棄する dirty state に使う
+    WaitReady(ctx, inst) error
+    IsRunning(ctx, inst) (bool, error)
 }
+// オプショナル: ConnCounter(接続数。idle 判定・last_conn_at 更新に使用)
 ```
 
 使い分け:
 
-- baseline snapshot 前 → `StopGracefully`
-- `@init` snapshot 前 → `StopGracefully`
+- baseline snapshot 前 → `Stop`(graceful)
+- `@init` snapshot 前 → `Stop`(graceful)
 - ebs-zfs の reset 前 → `Kill`(rollback で filesystem ごと捨てるので graceful は不要。PoC では reset 時間の大半が graceful shutdown だった)
 - rollback 後 → `Start`
 
@@ -457,12 +458,12 @@ hook 側がやること: Git clone、PR checkout、依存インストール、mi
 |-----------------------------------------------|-----------------------------------------------------------------|
 |`SASHIKI_EVENT`                                |`on-create`                                                      |
 |`SASHIKI_BRANCH`                               |`pr-123`                                                         |
-|`SASHIKI_PORT` / `SASHIKI_SOCKET` / `SASHIKI_DATADIR`|`3401` / `/run/sashiki/pr-123.sock` / `/dbpool/branches/pr-123/data`|
+|`SASHIKI_PORT` / `SASHIKI_SOCKET` / `SASHIKI_DATADIR`|`3401` / `/tmp/mysql-pr-123.sock` / `/dbpool/branches/pr-123/data`|
 |`SASHIKI_ENGINE`                               |`mysql`                                                          |
 |`SASHIKI_ADMIN_USER`                           |`root`(socket 経由)                                                |
-|`SASHIKI_ORIGIN_BASELINE`                      |`baseline-20260905-abc123`                                       |
-|`SASHIKI_BASELINE_SCHEMA_REVISION`             |`20260905_042`                                                   |
-|`SASHIKI_SOURCE_JSON`                          |`{"type":"github_pr","repository":"shop","ref":"123"}`           |
+|`SASHIKI_ORIGIN_SNAPSHOT`                      |`dbpool/base@baseline-20260905-abc123`                           |
+|`SASHIKI_BASELINE_SCHEMA_REVISION`(未実装 #81) |`20260905_042`                                                   |
+|`SASHIKI_SOURCE_JSON`(未実装 #81)              |`{"type":"github_pr","repository":"shop","ref":"123"}`           |
 |`SASHIKI_STATE_DIR`                            |`/var/lib/sashiki/branches/pr-123`(hook の作業領域)                   |
 
 - 非 0 終了: `on-create` は branch を `error`(recoverable)で残す。`on-reset` / `on-delete` は記録して続行。`on-baseline-validate` の失敗は publish を阻止
@@ -485,7 +486,7 @@ hook 側がやること: Git clone、PR checkout、依存インストール、mi
 |`POST`  |`/branches/{name}/wake`     |sleeping → running                                         |202 + operation|404 / 507                        |
 |`POST`  |`/branches/{name}/sleep`    |running → sleeping                                         |202 + operation|404                              |
 |`POST`  |`/branches/{name}/retry`    |failed_operation を再実行                                      |202 + operation|404 / 409                        |
-|`POST`  |`/branches/{name}/lease`    |`{extend: "7d"}`                                           |200            |404                              |
+|`POST`  |`/branches/{name}/lease`    |`{for: "7d"}`                                           |200            |404                              |
 |`DELETE`|`/branches/{name}`          |削除                                                         |202 + operation|404                              |
 |`GET`   |`/baselines`                |一覧                                                         |200            |                                 |
 |`GET`   |`/baselines/current`        |current                                                    |200            |                                 |
@@ -496,6 +497,10 @@ hook 側がやること: Git clone、PR checkout、依存インストール、mi
 |`GET`   |`/operations/{id}`          |非同期操作の状態                                                   |200            |404                              |
 |`GET`   |`/capacity`                 |memory / storage / ports の空き                               |200            |                                 |
 |`GET`   |`/healthz`                  |                                                           |200            |                                 |
+
+> **実装ノート(v1.x 現在)**: 表の baseline 系は実装では `GET /v1/baseline`(current)/ `GET /v1/baselines` / `POST /v1/baseline/set|gc|refresh`(build→validate→publish の一括)。段階 API 化は #84。
+> また表にない実装済みエンドポイントとして `GET /v1/doctor`、`POST /v1/gc/orphans`、`POST /v1/drain`、`GET /v1/branches/{name}/schema`、`POST /v1/branches/{name}/query`(データブラウザ)、`POST /v1/branches/{name}/hooks/{event}`、Web UI(`GET /`)がある。
+> 202 + operation 応答は目標仕様で、現状は同期実行 + operation 記録(`Sashiki-Operation-Id` ヘッダ)。非同期化は #82。
 
 すべての変更操作は **operation** を返す。ebs-zfs で 1 秒で終わっても同じ形にする(fsx で必要になるため)。
 
