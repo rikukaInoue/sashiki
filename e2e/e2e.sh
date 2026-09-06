@@ -284,12 +284,12 @@ log "reconciliation + doctor (#42)"
 # doctor が健全性を返す
 curl -sf http://127.0.0.1:8080/v1/doctor | grep -q '"current_baseline"' || fail "doctor should report"
 sashiki doctor | grep -q 'branch_count' || fail "doctor CLI"
-# twigd を kill して再起動 → running だった branch は sleeping に整合(mysqld も残る場合あり)
+# sashikid を kill して再起動 → running だった branch は sleeping に整合(mysqld も残る場合あり)
 sashiki create recon-test > /dev/null
 kill $SASHIKID_PID 2>/dev/null; sleep 1
 # recon-test の mysqld を止める(プロセス死亡を再現)
 systemctl stop mysqld@recon-test 2>/dev/null || true
-/usr/local/bin/sashikid --config /etc/sashiki/config.yaml > /var/log/sashiki/twigd.log 2>&1 &
+/usr/local/bin/sashikid --config /etc/sashiki/config.yaml > /var/log/sashiki/sashikid.log 2>&1 &
 SASHIKID_PID=$!
 for _ in $(seq 1 30); do curl -sf http://127.0.0.1:8080/v1/healthz > /dev/null 2>&1 && break; sleep 0.5; done
 # reconcile で running → sleeping に降格しているはず

@@ -420,7 +420,7 @@ func (b *Backend) DeleteBaselineSnapshot(ctx context.Context, snap storage.Snaps
 }
 
 // ListBranchVolumes: fsx の branch volume 列挙は DescribeVolumes で可能。
-// twig-branch タグから branch 名を復元する(reconcile / orphan 検出用)。
+// sashiki-branch タグから branch 名を復元する(reconcile / orphan 検出用)。
 func (b *Backend) ListBranchVolumes(ctx context.Context) ([]string, error) {
 	vols, err := b.listAllVolumes(ctx)
 	if err != nil {

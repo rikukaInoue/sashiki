@@ -1,6 +1,6 @@
 // baseline の set / GC(仕様 12-1, 12-2, 12-5)。baseline は main の immutable
 // publication。current は pointer にすぎず、publish しても既存 branch の
-// origin は変わらない。GC は lineage(どの branch が参照中か)を twig が把握し、
+// origin は変わらない。GC は lineage(どの branch が参照中か)を sashiki が把握し、
 // current・参照中は残す。zfs promote は使わない(lineage が追えなくなる)。
 package workspace
 
