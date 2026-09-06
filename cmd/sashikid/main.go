@@ -17,6 +17,7 @@ import (
 	enginemysql "github.com/rikukaInoue/sashiki/internal/engine/mysql"
 	enginepostgres "github.com/rikukaInoue/sashiki/internal/engine/postgres"
 	"github.com/rikukaInoue/sashiki/internal/hooks"
+	"github.com/rikukaInoue/sashiki/internal/obs"
 	"github.com/rikukaInoue/sashiki/internal/ops"
 	"github.com/rikukaInoue/sashiki/internal/proxy"
 	"github.com/rikukaInoue/sashiki/internal/state"
@@ -34,7 +35,7 @@ var version = "dev" // -ldflags で埋め込む
 func main() {
 	configPath := flag.String("config", "/etc/sashiki/config.yaml", "path to config.yaml")
 	flag.Parse()
-	log.Printf("sashikid %s", version)
+	obs.Logger().Info("sashikid starting", "version", version)
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -89,7 +90,7 @@ func main() {
 		// リーパーが使用中ブランチを「アイドル」と誤判定して停止・削除してしまう。
 		// 接続追跡ができるようになるまでアイドル回収は無効化する。
 		if cfg.Branches.IdleStopAfter > 0 || cfg.Branches.DeleteAfterIdle > 0 {
-			log.Printf("sashikid: engine=postgres では接続追跡ができないため idle_stop_after / delete_after_idle を無効化します")
+			obs.Logger().Warn("engine=postgres では接続追跡ができないため idle_stop_after / delete_after_idle を無効化します")
 			cfg.Branches.IdleStopAfter = 0
 			cfg.Branches.DeleteAfterIdle = 0
 		}
@@ -142,10 +143,9 @@ func main() {
 
 	// 起動時に state.db と ZFS/engine を突き合わせる(仕様 20-1)。
 	if rep, err := mgr.Reconcile(context.Background()); err != nil {
-		log.Printf("reconcile: %v", err)
+		obs.Logger().Error("reconcile failed", "error", err.Error())
 	} else if len(rep.Demoted)+len(rep.Errored)+len(rep.Orphans) > 0 {
-		log.Printf("reconcile: demoted=%d errored=%d orphans=%d",
-			len(rep.Demoted), len(rep.Errored), len(rep.Orphans))
+		obs.Logger().Info("reconcile", "demoted", len(rep.Demoted), "errored", len(rep.Errored), "orphans", len(rep.Orphans))
 	}
 
 	go mgr.RunReaper(ctx, cfg.Branches.ReaperInterval)
@@ -155,15 +155,15 @@ func main() {
 			mux := http.NewServeMux()
 			mux.Handle("GET /metrics", api.MetricsHandler(mgr))
 			srv := &http.Server{Addr: cfg.Listen.Metrics, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-			log.Printf("sashikid: metrics listening on %s", cfg.Listen.Metrics)
+			obs.Logger().Info("metrics listening", "addr", cfg.Listen.Metrics)
 			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Printf("metrics: %v", err)
+				obs.Logger().Error("metrics server stopped", "error", err.Error())
 			}
 		}()
 	}
 
 	if cfg.Listen.Proxy != "" && cfg.Engine.Type != "mysql" {
-		log.Printf("sashikid: プロキシは MySQL 専用のため engine=%s では起動しません(警告を消すには listen.proxy: \"\")", cfg.Engine.Type)
+		obs.Logger().Warn("proxy not started: MySQL only", "engine", cfg.Engine.Type, "hint", "listen.proxy: \"\" で警告を消せます")
 	}
 	if cfg.Listen.Proxy != "" && cfg.Engine.Type == "mysql" {
 		px, err := proxy.New(proxy.Config{
@@ -181,11 +181,10 @@ func main() {
 				log.Fatalf("proxy: %v", err)
 			}
 		}()
-		log.Printf("sashikid: proxy listening on %s", cfg.Listen.Proxy)
+		obs.Logger().Info("proxy listening", "addr", cfg.Listen.Proxy)
 	}
 
-	log.Printf("sashikid: listening on %s (backend=%s engine=%s)",
-		cfg.Listen.API, cfg.Storage.Backend, cfg.Engine.Type)
+	obs.Logger().Info("api listening", "addr", cfg.Listen.API, "backend", cfg.Storage.Backend, "engine", cfg.Engine.Type)
 	if err := srv.Listen(ctx, cfg.Listen.API); err != nil {
 		log.Fatal(err)
 	}

@@ -11,7 +11,6 @@ package workspace
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -20,6 +19,7 @@ import (
 	"time"
 
 	"github.com/rikukaInoue/sashiki/internal/hooks"
+	"github.com/rikukaInoue/sashiki/internal/obs"
 	"github.com/rikukaInoue/sashiki/internal/state"
 	"github.com/rikukaInoue/sashiki/internal/storage"
 )
@@ -101,7 +101,7 @@ func (m *Manager) RefreshBaseline(ctx context.Context, rc RefreshConfig) (tag st
 		defer cancel()
 		if err := m.runRefresh(cctx, rc, tag); err != nil {
 			refreshLastErr.Store(err.Error())
-			log.Printf("baseline refresh: %v", err)
+			obs.Log(cctx).Error("baseline refresh failed", "component", "baseline-refresh", "tag", tag, "error", err.Error())
 			return
 		}
 		refreshLastErr.Store("")
@@ -129,7 +129,7 @@ func (m *Manager) runRefresh(ctx context.Context, rc RefreshConfig, tag string) 
 		if err2 := rc.CheckQuiesced(ctx); err2 != nil {
 			return fmt.Errorf("base is not quiesced after script (snapshot aborted): %w", err2)
 		}
-		log.Printf("baseline refresh: leftover mysqld was terminated before snapshot")
+		obs.Log(ctx).Warn("baseline refresh terminated leftover mysqld before snapshot", "component", "baseline-refresh", "tag", tag)
 	}
 	// --- build: script が投入/マスク/migration/正常終了を済ませた candidate を snapshot ---
 	snap, err := m.st.SnapshotBase(ctx, tag)
@@ -166,7 +166,7 @@ func (m *Manager) runRefresh(ctx context.Context, rc RefreshConfig, tag string) 
 	if perr != nil {
 		return fmt.Errorf("publish (set current): %w", perr)
 	}
-	log.Printf("baseline refresh: published %s (masked=%v validated=%v)", snap, masked, validated)
+	obs.Log(ctx).Info("baseline refresh published", "component", "baseline-refresh", "tag", tag, "snapshot", string(snap), "masked", masked, "validated", validated)
 	return nil
 }
 
@@ -257,7 +257,7 @@ func (m *Manager) reclaimBase(ctx context.Context) {
 	}
 	pids := findProcsUsing(path)
 	for _, pid := range pids {
-		log.Printf("baseline refresh: sending SIGTERM to leftover pid %d", pid)
+		obs.Log(ctx).Warn("baseline refresh sending SIGTERM to leftover pid", "component", "baseline-refresh", "pid", pid)
 		_ = syscall.Kill(pid, syscall.SIGTERM)
 	}
 	deadline := time.Now().Add(30 * time.Second)

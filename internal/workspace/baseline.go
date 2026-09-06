@@ -7,9 +7,9 @@ package workspace
 import (
 	"context"
 	"fmt"
-	"log"
 	"sort"
 
+	"github.com/rikukaInoue/sashiki/internal/obs"
 	"github.com/rikukaInoue/sashiki/internal/state"
 	"github.com/rikukaInoue/sashiki/internal/storage"
 )
@@ -86,7 +86,7 @@ func (m *Manager) GCBaselines(ctx context.Context, cfg GCConfig) (GCResult, erro
 		// storage から snapshot を削除(DeleteBaselineSnapshot を持つバックエンドのみ)。
 		if bd, ok := m.st.(baselineDeleter); ok {
 			if err := bd.DeleteBaselineSnapshot(ctx, storage.SnapshotRef(b.Snapshot)); err != nil {
-				log.Printf("baseline gc: delete %s: %v", b.Snapshot, err)
+				obs.Log(ctx).Error("baseline gc delete failed", "component", "baseline-gc", "snapshot", b.Snapshot, "error", err.Error())
 				res.Kept = append(res.Kept, b.Snapshot)
 				continue
 			}

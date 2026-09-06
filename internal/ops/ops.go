@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"time"
 
+	"github.com/rikukaInoue/sashiki/internal/obs"
 	"github.com/rikukaInoue/sashiki/internal/state"
 )
 
@@ -40,7 +41,8 @@ func randomID() string {
 }
 
 // Start は typ/target の operation を作り、fn をバックグラウンドで実行する。
-// operation id を即座に返す(呼び出し側は 202 で返す)。
+// operation id を即座に返す(呼び出し側は 202 で返す)。fn には operation_id /
+// branch を載せた context を渡すので、fn 内のログにも同じ id/branch が乗る。
 func (r *Runner) Start(typ, target string, fn func(ctx context.Context) error) (string, error) {
 	id := r.newID()
 	if err := r.store.CreateOperation(id, typ, target); err != nil {
@@ -48,12 +50,8 @@ func (r *Runner) Start(typ, target string, fn func(ctx context.Context) error) (
 	}
 	go func() {
 		// operation はリクエストのライフサイクルから切り離す(fsx は数分かかる)。
-		ctx := context.Background()
-		errMsg := ""
-		if err := fn(ctx); err != nil {
-			errMsg = err.Error()
-		}
-		_ = r.store.FinishOperation(id, errMsg)
+		octx := obs.WithOperation(context.Background(), id, target)
+		r.run(octx, id, typ, fn)
 	}()
 	return id, nil
 }
@@ -65,13 +63,42 @@ func (r *Runner) RunSync(typ, target string, fn func(ctx context.Context) error)
 	if err := r.store.CreateOperation(id, typ, target); err != nil {
 		return "", err
 	}
-	runErr := fn(context.Background())
+	octx := obs.WithOperation(context.Background(), id, target)
+	return id, r.run(octx, id, typ, fn)
+}
+
+// RunSyncCtx は親 context を引き継いで RunSync する(API ハンドラ用)。
+// 親の operation_id / branch を上書きして fn へ渡す。
+func (r *Runner) RunSyncCtx(ctx context.Context, typ, target string, fn func(ctx context.Context) error) (string, error) {
+	id := r.newID()
+	if err := r.store.CreateOperation(id, typ, target); err != nil {
+		return "", err
+	}
+	octx := obs.WithOperation(ctx, id, target)
+	return id, r.run(octx, id, typ, fn)
+}
+
+// run は operation のライフサイクルログ + メトリクス記録を挟んで fn を実行する。
+func (r *Runner) run(ctx context.Context, id, typ string, fn func(ctx context.Context) error) error {
+	start := r.now()
+	obs.Log(ctx).Info("operation started", "type", typ)
+	runErr := fn(ctx)
+	dur := r.now().Sub(start)
+	result := state.OpCompleted
 	errMsg := ""
 	if runErr != nil {
+		result = state.OpFailed
 		errMsg = runErr.Error()
 	}
 	_ = r.store.FinishOperation(id, errMsg)
-	return id, runErr
+	obs.RecordOperation(typ, result, dur)
+	lg := obs.Log(ctx).With("type", typ, "result", result, "duration_ms", dur.Milliseconds())
+	if runErr != nil {
+		lg.Error("operation finished", "error", errMsg)
+	} else {
+		lg.Info("operation finished")
+	}
+	return runErr
 }
 
 // Get は operation を取得する。

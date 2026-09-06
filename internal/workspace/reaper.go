@@ -6,9 +6,9 @@ package workspace
 
 import (
 	"context"
-	"log"
 	"time"
 
+	"github.com/rikukaInoue/sashiki/internal/obs"
 	"github.com/rikukaInoue/sashiki/internal/state"
 )
 
@@ -25,7 +25,7 @@ func (m *Manager) RunReaper(ctx context.Context, interval time.Duration) {
 			return
 		case <-t.C:
 			if err := m.Reap(ctx); err != nil {
-				log.Printf("reaper: %v", err)
+				obs.Log(ctx).Error("reaper pass failed", "component", "reaper", "error", err.Error())
 			}
 		}
 	}
@@ -55,16 +55,16 @@ func (m *Manager) Reap(ctx context.Context) error {
 
 		if m.cfg.DeleteAfterIdle > 0 && idle >= m.cfg.DeleteAfterIdle &&
 			(b.State == state.StateRunning || b.State == state.StateSleeping) {
-			log.Printf("reaper: deleting %s (idle %s)", b.Name, idle.Round(time.Second))
+			obs.Log(ctx).Info("reaper deleting idle branch", "component", "reaper", "branch", b.Name, "idle", idle.Round(time.Second).String())
 			if err := m.Delete(ctx, b.Name); err != nil {
-				log.Printf("reaper: delete %s: %v", b.Name, err)
+				obs.Log(ctx).Error("reaper delete failed", "component", "reaper", "branch", b.Name, "error", err.Error())
 			}
 			continue
 		}
 		if m.cfg.IdleStopAfter > 0 && idle >= m.cfg.IdleStopAfter && b.State == state.StateRunning {
-			log.Printf("reaper: stopping %s (idle %s)", b.Name, idle.Round(time.Second))
+			obs.Log(ctx).Info("reaper stopping idle branch", "component", "reaper", "branch", b.Name, "idle", idle.Round(time.Second).String())
 			if err := m.Sleep(ctx, b.Name); err != nil {
-				log.Printf("reaper: stop %s: %v", b.Name, err)
+				obs.Log(ctx).Error("reaper stop failed", "component", "reaper", "branch", b.Name, "error", err.Error())
 			}
 		}
 	}

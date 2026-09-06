@@ -6,8 +6,8 @@ package workspace
 import (
 	"context"
 	"fmt"
-	"log"
 
+	"github.com/rikukaInoue/sashiki/internal/obs"
 	"github.com/rikukaInoue/sashiki/internal/state"
 	"github.com/rikukaInoue/sashiki/internal/storage"
 )
@@ -61,7 +61,7 @@ func (m *Manager) Reconcile(ctx context.Context) (ReconcileReport, error) {
 		}
 	}
 	if len(rep.Demoted)+len(rep.Errored)+len(rep.Orphans) > 0 {
-		log.Printf("reconcile: demoted=%v errored=%v orphans=%v", rep.Demoted, rep.Errored, rep.Orphans)
+		obs.Log(ctx).Info("reconcile", "component", "reconcile", "demoted", rep.Demoted, "errored", rep.Errored, "orphans", rep.Orphans)
 	}
 	return rep, nil
 }

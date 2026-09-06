@@ -49,12 +49,13 @@ func (s *Server) SetOps(r *ops.Runner) {
 }
 
 // track は typ/target の operation を記録しつつ fn を同期実行する。
-// operation_id を返す(ops 未配線なら空)。
-func (s *Server) track(typ, target string, fn func() error) (string, error) {
+// operation_id を返す(ops 未配線なら空)。fn には operation_id / branch を
+// 載せた context を渡すので、Manager 側のログにも同じ id/branch が乗る。
+func (s *Server) track(ctx context.Context, typ, target string, fn func(context.Context) error) (string, error) {
 	if s.ops == nil {
-		return "", fn()
+		return "", fn(ctx)
 	}
-	return s.ops.RunSync(typ, target, func(context.Context) error { return fn() })
+	return s.ops.RunSyncCtx(ctx, typ, target, fn)
 }
 
 // New は Server を作る。tokens は nil 可(env トークンのみ)。
@@ -290,9 +291,9 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	existOK := r.URL.Query().Get("exist_ok") == "true"
 	var info workspace.Info
 	meta := state.Meta{Profile: req.Profile, Owner: req.Owner, Purpose: req.Purpose, Source: string(req.Source)}
-	opID, err := s.track("create", req.Name, func() error {
+	opID, err := s.track(r.Context(), "create", req.Name, func(ctx context.Context) error {
 		var e error
-		info, e = s.mgr.CreateWithMeta(r.Context(), req.Name, req.Port, meta)
+		info, e = s.mgr.CreateWithMeta(ctx, req.Name, req.Port, meta)
 		return e
 	})
 	if errors.Is(err, workspace.ErrExists) && existOK {
@@ -321,9 +322,9 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleReset(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	var info workspace.Info
-	opID, err := s.track("reset", name, func() error {
+	opID, err := s.track(r.Context(), "reset", name, func(ctx context.Context) error {
 		var e error
-		info, e = s.mgr.Reset(r.Context(), name)
+		info, e = s.mgr.Reset(ctx, name)
 		return e
 	})
 	if err != nil {
@@ -337,9 +338,9 @@ func (s *Server) handleReset(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRecreate(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	var info workspace.Info
-	opID, err := s.track("recreate", name, func() error {
+	opID, err := s.track(r.Context(), "recreate", name, func(ctx context.Context) error {
 		var e error
-		info, e = s.mgr.Recreate(r.Context(), name)
+		info, e = s.mgr.Recreate(ctx, name)
 		return e
 	})
 	if err != nil {
@@ -353,9 +354,9 @@ func (s *Server) handleRecreate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleWake(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	var info workspace.Info
-	opID, err := s.track("wake", name, func() error {
+	opID, err := s.track(r.Context(), "wake", name, func(ctx context.Context) error {
 		var e error
-		info, e = s.mgr.Wake(r.Context(), name)
+		info, e = s.mgr.Wake(ctx, name)
 		return e
 	})
 	if err != nil {
@@ -369,9 +370,9 @@ func (s *Server) handleWake(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	var info workspace.Info
-	opID, err := s.track("retry", name, func() error {
+	opID, err := s.track(r.Context(), "retry", name, func(ctx context.Context) error {
 		var e error
-		info, e = s.mgr.Retry(r.Context(), name)
+		info, e = s.mgr.Retry(ctx, name)
 		return e
 	})
 	if err != nil {
@@ -394,8 +395,8 @@ func (s *Server) handleRunHook(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	opID, err := s.track("delete", name, func() error {
-		return s.mgr.Delete(r.Context(), name)
+	opID, err := s.track(r.Context(), "delete", name, func(ctx context.Context) error {
+		return s.mgr.Delete(ctx, name)
 	})
 	if err != nil {
 		s.writeError(w, err)

@@ -12,6 +12,7 @@ import (
 
 	"github.com/rikukaInoue/sashiki/internal/engine"
 	"github.com/rikukaInoue/sashiki/internal/hooks"
+	"github.com/rikukaInoue/sashiki/internal/obs"
 	"github.com/rikukaInoue/sashiki/internal/state"
 	"github.com/rikukaInoue/sashiki/internal/storage"
 )
@@ -229,6 +230,7 @@ func (m *Manager) CreateWithMeta(ctx context.Context, name string, port int, met
 	failStage := func(stage string, cause error) (Info, error) {
 		// error 状態+診断で残す(ログ確認のため自動削除しない)。仕様 11-1/14-2。
 		_ = m.failOp(name, "create", stage, cause)
+		obs.Log(ctx).Error("create failed", "branch", name, "op", "create", "stage", stage, "error", cause.Error())
 		return Info{}, cause
 	}
 
@@ -794,6 +796,8 @@ func (m *Manager) runHook(ctx context.Context, event hooks.Event, b state.Branch
 	res, err := m.hooks.Run(ctx, event, m.hookEnv(b, vol))
 	_ = m.db.RecordHookFinish(id, res.ExitCode)
 	if err != nil {
+		obs.RecordHookFailure(string(event))
+		obs.Log(ctx).Error("hook failed", "branch", b.Name, "event", string(event), "exit_code", res.ExitCode, "error", err.Error())
 		return fmt.Errorf("hook %s failed: %w", event, err)
 	}
 	return nil
