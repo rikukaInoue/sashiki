@@ -128,6 +128,7 @@ func (s *Server) release(branch string) {
 
 func (s *Server) handle(ctx context.Context, client net.Conn) {
 	defer func() { _ = client.Close() }()
+	enableKeepAlive(client)
 	_ = client.SetDeadline(time.Now().Add(60 * time.Second))
 
 	if err := s.authTerminate(ctx, client); err != nil {
@@ -222,12 +223,49 @@ func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
 
 	// 認証完了 → 素通し(接続終了までブロック)
 	s.router.TouchConn(branch)
+	enableKeepAlive(backend)
 	_ = client.SetDeadline(time.Time{})
-	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(backend, client); done <- struct{}{} }()
-	go func() { _, _ = io.Copy(client, backend); done <- struct{}{} }()
-	<-done // 片方向が終わったら両方閉じる(defer が client/backend を閉じる)
+	pipe(client, backend)
 	return nil
+}
+
+// closeWriter は書き込み側だけを閉じられる接続(*net.TCPConn / *tls.Conn)。
+type closeWriter interface{ CloseWrite() error }
+
+// pipe は認証後のデータフェーズを双方向に素通しする。片方向の EOF で
+// 全体を叩き切るのではなく、その向きだけ CloseWrite で half-close して
+// もう片方向を完走させる。これにより:
+//   - backend が結果セットを流し込んでいる最中に client 側が先に終わっても、
+//     結果を途中でぶった切らない
+//   - backend(mysqld)が idle_stop_after で消えたときは client へ綺麗な EOF が
+//     伝わり、プールしたコネクションを再利用するドライバが「半端に閉じた/残
+//     バイトのある」接続を掴んで readColumns で panic するのを防ぐ
+func pipe(client, backend net.Conn) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, _ = io.Copy(backend, client) // client → backend(リクエスト)
+		if cw, ok := backend.(closeWriter); ok {
+			_ = cw.CloseWrite() // これ以上リクエストは来ない、と backend に伝える
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		_, _ = io.Copy(client, backend) // backend → client(応答)
+		if cw, ok := client.(closeWriter); ok {
+			_ = cw.CloseWrite() // 応答完了/backend 消滅を client へ綺麗な EOF で伝える
+		}
+	}()
+	wg.Wait()
+}
+
+// enableKeepAlive は TCP keepalive を有効化して、消えた peer を早く検知する。
+func enableKeepAlive(c net.Conn) {
+	if t, ok := c.(*net.TCPConn); ok {
+		_ = t.SetKeepAlive(true)
+		_ = t.SetKeepAlivePeriod(30 * time.Second)
+	}
 }
 
 // authenticateBackend は sashiki がクライアントとして backend mysqld へ
