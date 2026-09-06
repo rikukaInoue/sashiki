@@ -59,9 +59,10 @@ func (b *Backend) execZfs(ctx context.Context, args ...string) (string, error) {
 // Capabilities はローカル zfs の性格: 全操作が速い。
 func (b *Backend) Capabilities() storage.Capabilities {
 	return storage.Capabilities{
-		FastRollback:  true,
-		TypicalCreate: 2 * time.Second,
-		AsyncDelete:   false,
+		FastRollback:      true,
+		TypicalCreate:     2 * time.Second,
+		AsyncDelete:       false,
+		ClonesAreDistinct: false, // 固定名 branch_parent/<name>
 	}
 }
 
@@ -115,6 +116,19 @@ func (b *Backend) SnapshotInit(ctx context.Context, vol storage.Volume) (storage
 func (b *Backend) Rollback(ctx context.Context, vol storage.Volume, snap storage.SnapshotRef) error {
 	_, err := b.run(ctx, "rollback", "-r", string(snap))
 	return err
+}
+
+// Rename は zfs rename で dataset 名を変える(recreate の退避スワップ用)。
+func (b *Backend) Rename(ctx context.Context, vol storage.Volume, newName string) (storage.Volume, error) {
+	newDS := b.branchDataset(newName)
+	if _, err := b.run(ctx, "rename", vol.Dataset, newDS); err != nil {
+		return storage.Volume{}, err
+	}
+	mp, err := b.run(ctx, "get", "-H", "-o", "value", "mountpoint", newDS)
+	if err != nil {
+		return storage.Volume{}, err
+	}
+	return storage.Volume{Name: newName, Dataset: newDS, Path: mp}, nil
 }
 
 // DeleteAsync は zfs destroy。ローカル zfs は同期で即完了するため、

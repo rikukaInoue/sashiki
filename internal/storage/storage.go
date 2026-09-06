@@ -10,9 +10,13 @@ import (
 
 // Capabilities はバックエンドの性格の宣言。コアの挙動切り替えに使う。
 type Capabilities struct {
-	FastRollback  bool          // zfs: true / fsx: false
-	TypicalCreate time.Duration // zfs: ~2s / fsx: ~70s
-	AsyncDelete   bool          // zfs: false / fsx: true
+	FastRollback  bool          // ebs-zfs: true / fsx-zfs: false
+	TypicalCreate time.Duration // ebs-zfs: ~2s / fsx-zfs: ~70s
+	AsyncDelete   bool          // ebs-zfs: false / fsx-zfs: true
+	// ClonesAreDistinct: Clone(name) が呼ぶたび別実体を作り、同名 branch の
+	// 新旧が共存できるか。fsx-zfs=true(世代サフィックス)、ebs-zfs=false(固定名)。
+	// false のバックエンドの recreate は「旧を退避→新 clone→旧削除」になる。
+	ClonesAreDistinct bool
 }
 
 // SnapshotRef はスナップショットの完全修飾名(例: dbpool/base@baseline-20260901)。
@@ -62,6 +66,12 @@ type Storage interface {
 
 	// UsedBytes はボリュームの現在のディスク消費(CoW差分)。
 	UsedBytes(ctx context.Context, vol Volume) (int64, error)
+}
+
+// Renamer は ClonesAreDistinct=false のバックエンドが実装する。recreate の
+// 退避スワップに使う(旧 volume を一時名へ、失敗時に戻す)。
+type Renamer interface {
+	Rename(ctx context.Context, vol Volume, newName string) (Volume, error)
 }
 
 // NopSnapshot は SnapshotInit を持たないバックエンドが返す番兵値。

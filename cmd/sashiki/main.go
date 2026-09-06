@@ -34,6 +34,7 @@ func usage() int {
   sashiki create <name> [--port N] [--json]
   sashiki delete <name>
   sashiki reset  <name> [--json]
+  sashiki recreate <name> [--json]
   sashiki list   [--json]
   sashiki show   <name> [--json]
   sashiki connect <name>
@@ -58,6 +59,8 @@ func run(args []string) int {
 		return cmdDelete(rest)
 	case "reset":
 		return cmdSimpleBranch(rest, "reset")
+	case "recreate":
+		return cmdSimpleBranch(rest, "recreate")
 	case "list":
 		return cmdList(rest)
 	case "show":

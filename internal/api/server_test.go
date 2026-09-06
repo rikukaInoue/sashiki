@@ -52,6 +52,7 @@ type fakeEngine struct{}
 
 func (fakeEngine) Start(ctx context.Context, i engine.Instance) error     { return nil }
 func (fakeEngine) Stop(ctx context.Context, i engine.Instance) error      { return nil }
+func (fakeEngine) Kill(ctx context.Context, i engine.Instance) error      { return nil }
 func (fakeEngine) WaitReady(ctx context.Context, i engine.Instance) error { return nil }
 func (fakeEngine) IsRunning(ctx context.Context, i engine.Instance) (bool, error) {
 	return true, nil

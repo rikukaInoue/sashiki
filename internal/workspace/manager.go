@@ -240,7 +240,10 @@ func (m *Manager) Reset(ctx context.Context, name string) (Info, error) {
 		return Info{}, err
 	}
 	if !m.st.Capabilities().FastRollback {
-		return m.resetRecreate(ctx, b)
+		// 遅いバックエンド(fsx)の reset は @init 相当を「同じ origin から
+		// 作り直し」で再現する。recreate と違い baseline は current でなく
+		// branch の origin を使う。
+		return m.recreateFrom(ctx, b, storage.SnapshotRef(b.OriginSnapshot), hooks.OnCreate)
 	}
 	if err := m.db.SetState(name, state.StateResetting, ""); err != nil {
 		return Info{}, err
@@ -251,7 +254,9 @@ func (m *Manager) Reset(ctx context.Context, name string) (Info, error) {
 	}
 	ins := m.instance(b, vol)
 
-	_ = m.eng.Stop(ctx, ins) // 停止済みでもエラーにしない
+	// rollback で dirty state を捨てるため graceful は不要(Kill で高速化)。
+	// PoC では reset 時間の大半が graceful shutdown だった。
+	_ = m.eng.Kill(ctx, ins)
 	initSnap := storage.SnapshotRef(vol.Dataset + "@init")
 	if err := m.st.Rollback(ctx, vol, initSnap); err != nil {
 		_ = m.db.SetState(name, state.StateError, err.Error())
@@ -273,10 +278,29 @@ func (m *Manager) Reset(ctx context.Context, name string) (Info, error) {
 	return m.info(ctx, name)
 }
 
-// resetRecreate は遅いバックエンド(fsx)の reset: baseline から新クローンを
-// 作り、mysqld を新ボリュームへ付け替え、旧ボリュームは裏で非同期削除する。
-// 体感 reset ≈ clone 時間(約70秒)。restore API(10分超)は使わない(仕様 15-3)。
-func (m *Manager) resetRecreate(ctx context.Context, b state.Branch) (Info, error) {
+// Recreate は main が進んだ branch を最新 current baseline から作り直す。
+// reset(同じ baseline の @init へ戻す)とは別操作。既存 branch の自動追従は
+// しない(利用者が明示的に recreate する)。
+func (m *Manager) Recreate(ctx context.Context, name string) (Info, error) {
+	unlock := m.lock(name)
+	defer unlock()
+
+	b, err := m.db.GetBranch(name)
+	if err != nil {
+		return Info{}, err
+	}
+	// on-recreate があればそれを、無ければ on-create を再適用する。
+	ev := hooks.OnRecreate
+	if _, ok := m.hookExists(hooks.OnRecreate); !ok {
+		ev = hooks.OnCreate
+	}
+	return m.recreateFrom(ctx, b, m.currentBaseline(), ev)
+}
+
+// recreateFrom は origin から新クローンを作り、mysqld を新ボリュームへ付け替え、
+// 旧ボリュームを非同期削除する共通経路(reset の fsx 版 / recreate が共有)。
+// 切替(state.db の origin 更新・付け替え)はここに一度だけ書く(仕様 13章)。
+func (m *Manager) recreateFrom(ctx context.Context, b state.Branch, origin storage.SnapshotRef, hookEv hooks.Event) (Info, error) {
 	if err := m.db.SetState(b.Name, state.StateResetting, ""); err != nil {
 		return Info{}, err
 	}
@@ -285,13 +309,33 @@ func (m *Manager) resetRecreate(ctx context.Context, b state.Branch) (Info, erro
 		_ = m.db.SetState(b.Name, state.StateError, err.Error())
 		return Info{}, err
 	}
-	newVol, err := m.st.Clone(ctx, storage.SnapshotRef(b.OriginSnapshot), b.Name)
+	// 旧 mysqld は Kill(dirty state を捨てるので graceful 不要)。
+	_ = m.eng.Kill(ctx, m.instance(b, oldVol))
+
+	// 固定名バックエンド(ebs-zfs)は新旧が同名で共存できないため、旧を一時名へ
+	// 退避してから clone する。clone 失敗時は退避を戻して原状復帰する。
+	renamer, needSwap := m.st.(storage.Renamer)
+	swapName := ""
+	if !m.st.Capabilities().ClonesAreDistinct && needSwap {
+		swapName = b.Name + "-recreating"
+		stashed, rerr := renamer.Rename(ctx, oldVol, swapName)
+		if rerr != nil {
+			_ = m.db.SetState(b.Name, state.StateError, rerr.Error())
+			return Info{}, fmt.Errorf("recreate stash: %w", rerr)
+		}
+		oldVol = stashed
+	}
+	newVol, err := m.st.Clone(ctx, origin, b.Name)
 	if err != nil {
+		// clone 失敗: 退避した旧を元の名前へ戻す(原状復帰)
+		if swapName != "" {
+			if restored, rerr := renamer.Rename(ctx, oldVol, b.Name); rerr == nil {
+				_ = m.eng.Start(ctx, m.instance(b, restored))
+			}
+		}
 		_ = m.db.SetState(b.Name, state.StateError, err.Error())
 		return Info{}, fmt.Errorf("recreate clone: %w", err)
 	}
-	oldIns := m.instance(b, oldVol)
-	_ = m.eng.Stop(ctx, oldIns)
 	newIns := m.instance(b, newVol)
 	if err := m.eng.Start(ctx, newIns); err != nil {
 		_ = m.db.SetState(b.Name, state.StateError, err.Error())
@@ -301,13 +345,17 @@ func (m *Manager) resetRecreate(ctx context.Context, b state.Branch) (Info, erro
 		_ = m.db.SetState(b.Name, state.StateError, err.Error())
 		return Info{}, err
 	}
-	// zfs の reset は @init(= on-create フック適用後)に戻る。契約を揃えるため、
-	// 作り直し経路でも on-create フックを再実行してから on-reset を呼ぶ。
-	if err := m.runHook(ctx, hooks.OnCreate, b, newVol); err != nil {
+	// hook を再適用してから @init 契約を揃える。
+	if err := m.runHook(ctx, hookEv, b, newVol); err != nil {
 		_ = m.db.SetState(b.Name, state.StateError, err.Error())
 		return Info{}, err
 	}
-	// 旧ボリュームは裏で削除(fsx は約6分かかるがユーザーは待たない)
+	// origin を更新(recreate は current baseline に、reset は同じ origin)。
+	if err := m.db.UpdateOrigin(b.Name, string(origin)); err != nil {
+		_ = m.db.SetState(b.Name, state.StateError, err.Error())
+		return Info{}, err
+	}
+	// 旧ボリュームは裏で削除(fsx は約6分)。
 	if job, err := m.st.DeleteAsync(ctx, oldVol); err == nil {
 		go m.pollDeletion(job)
 	}
