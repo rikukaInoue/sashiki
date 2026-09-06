@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -123,4 +124,30 @@ func (e *Engine) WaitReady(ctx context.Context, ins engine.Instance) error {
 func (e *Engine) IsRunning(ctx context.Context, ins engine.Instance) (bool, error) {
 	out, _ := e.run(ctx, "systemctl", "is-active", e.unit(ins.Branch))
 	return out == "active", nil
+}
+
+// ConnCount は現在のクライアント接続数を返す(engine.ConnCounter, #41)。
+// `SHOW STATUS LIKE 'Threads_connected'` を mysql CLI で取得し、自分(この
+// クライアント)の接続を1つ差し引く。sudo は不要(TCP で dev ユーザー接続)。
+func (e *Engine) ConnCount(ctx context.Context, ins engine.Instance) (int, error) {
+	cmd := exec.CommandContext(ctx, "mysql",
+		"-u"+e.cfg.ProxyUser, "-p"+e.cfg.ProxyPass,
+		"-h127.0.0.1", fmt.Sprintf("-P%d", ins.Port),
+		"-N", "-B", "-e", "SHOW STATUS LIKE 'Threads_connected'")
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, fmt.Errorf("mysql show status (port %d): %w", ins.Port, err)
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) < 2 {
+		return 0, fmt.Errorf("unexpected SHOW STATUS output: %q", strings.TrimSpace(string(out)))
+	}
+	n, err := strconv.Atoi(fields[len(fields)-1])
+	if err != nil {
+		return 0, fmt.Errorf("parse threads_connected %q: %w", fields[len(fields)-1], err)
+	}
+	if n > 0 {
+		n-- // 自分の接続を除く
+	}
+	return n, nil
 }

@@ -107,10 +107,12 @@ func (m *mockStorage) LogicalBytes(ctx context.Context, vol storage.Volume) (int
 }
 
 type mockEngine struct {
-	started  []string
-	stopped  []string
-	killed   []string
-	startErr error
+	started   []string
+	stopped   []string
+	killed    []string
+	startErr  error
+	connCount int   // ConnCount が返す接続数(#41)
+	connErr   error // ConnCount が返すエラー
 }
 
 func (m *mockEngine) Start(ctx context.Context, ins engine.Instance) error {
@@ -131,6 +133,9 @@ func (m *mockEngine) Kill(ctx context.Context, ins engine.Instance) error {
 func (m *mockEngine) WaitReady(ctx context.Context, ins engine.Instance) error { return nil }
 func (m *mockEngine) IsRunning(ctx context.Context, ins engine.Instance) (bool, error) {
 	return false, nil
+}
+func (m *mockEngine) ConnCount(ctx context.Context, ins engine.Instance) (int, error) {
+	return m.connCount, m.connErr
 }
 
 // --- helpers ---
@@ -1161,5 +1166,65 @@ func TestReapDeletesExpiredLeaseEvenIfActive(t *testing.T) {
 	}
 	if _, err := m.Get(context.Background(), "pr-1"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("expired lease branch should be deleted even if active, got err=%v", err)
+	}
+}
+
+// --- #41 connpoll (engine ポーリングで last_conn_at 更新) ---
+
+func TestConnPollerTouchesLastConn(t *testing.T) {
+	eng := &mockEngine{connCount: 2}
+	m := newTestManager(t, &mockStorage{}, eng, "")
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := m.Get(context.Background(), "pr-1")
+	if before.LastConnAt != nil {
+		t.Fatal("last_conn_at should be nil before poll")
+	}
+	m.pollConnsOnce(context.Background(), eng)
+	after, _ := m.Get(context.Background(), "pr-1")
+	if after.LastConnAt == nil {
+		t.Error("connpoll should set last_conn_at when connections > 0")
+	}
+	if got := m.activeConns("pr-1"); got != 2 {
+		t.Errorf("activeConns = %d, want 2 (from poll)", got)
+	}
+}
+
+func TestConnPollerProtectsOnError(t *testing.T) {
+	eng := &mockEngine{connErr: errors.New("connection refused")}
+	m := newTestManager(t, &mockStorage{}, eng, "")
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	m.pollConnsOnce(context.Background(), eng)
+	// 判定不能 → 使用中(1)として保護。last_conn_at は触らない。
+	if got := m.activeConns("pr-1"); got != 1 {
+		t.Errorf("activeConns = %d, want 1 (protected on error)", got)
+	}
+	after, _ := m.Get(context.Background(), "pr-1")
+	if after.LastConnAt != nil {
+		t.Error("last_conn_at should NOT be touched on ConnCount error")
+	}
+}
+
+func TestReaperSkipsBranchWithPolledConns(t *testing.T) {
+	eng := &mockEngine{connCount: 1} // 常に接続あり
+	m := newTestManagerCfg(t, &mockStorage{}, eng, "", func(c *Config) {
+		c.IdleStopAfter = 10 * time.Millisecond
+		c.DeleteAfterIdle = time.Hour
+	})
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	// poll が接続を検出 → activeConns>0 で reaper の対象外になる。
+	m.pollConnsOnce(context.Background(), eng)
+	time.Sleep(15 * time.Millisecond)
+	if err := m.Reap(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	info, _ := m.Get(context.Background(), "pr-1")
+	if info.State != state.StateRunning {
+		t.Errorf("state = %s, want running (active conn protects from idle stop)", info.State)
 	}
 }

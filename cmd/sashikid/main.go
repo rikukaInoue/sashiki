@@ -94,15 +94,9 @@ func main() {
 			ListenAddresses: cfg.Engine.Postgres.ListenAddresses,
 			Sudo:            cfg.Engine.Postgres.Sudo,
 		})
-		// postgres はプロキシを通らないため last_conn_at が更新されず、
-		// リーパーが使用中ブランチを「アイドル」と誤判定して停止・削除してしまう。
-		// 接続追跡ができるようになるまでアイドル回収は無効化する。
-		if cfg.Branches.IdleStopAfter > 0 || cfg.Branches.DeleteAfterIdle > 0 || len(cfg.Branches.Profiles) > 0 {
-			log.Printf("sashikid: engine=postgres では接続追跡ができないため idle_stop_after / delete_after_idle / profile を無効化します")
-			cfg.Branches.IdleStopAfter = 0
-			cfg.Branches.DeleteAfterIdle = 0
-			cfg.Branches.Profiles = nil // profile 由来の idle 閾値も無効化(lease は影響なし)
-		}
+		// postgres の idle 回収は #41 の capability 判定(下)に一本化した。
+		// postgres は ConnCounter を実装しているので connpoll が last_conn_at を
+		// 更新でき、idle_stop_after / delete_after_idle / profile を無効化する必要はない。
 	default:
 		eng = enginemysql.New(enginemysql.Config{
 			EnvDir:    cfg.Engine.Mysql.EnvDir,
@@ -110,6 +104,18 @@ func main() {
 			ProxyPass: cfg.Engine.Mysql.ProxyPass,
 			Sudo:      cfg.Engine.Mysql.Sudo,
 		})
+	}
+
+	// idle 回収は「接続の有無が分かる」ことが前提。engine が接続数を取得できる
+	// (engine.ConnCounter)なら connpoll が last_conn_at を更新するので、proxy を
+	// 通らない postgres / fsx 直続でも安全に回収できる(#41: 旧 postgres 無効化の解除)。
+	// 取得手段が無い engine のときだけ idle_stop_after / delete_after_idle を無効化する。
+	if _, ok := eng.(engine.ConnCounter); !ok {
+		if cfg.Branches.IdleStopAfter > 0 || cfg.Branches.DeleteAfterIdle > 0 {
+			log.Printf("sashikid: engine=%s は接続数を取得できない(ConnCounter 未実装)ため idle_stop_after / delete_after_idle を無効化します", cfg.Engine.Type)
+			cfg.Branches.IdleStopAfter = 0
+			cfg.Branches.DeleteAfterIdle = 0
+		}
 	}
 
 	hr := hooks.NewRunner(cfg.Hooks.Dir, cfg.Hooks.LogDir, cfg.Hooks.Timeout)
@@ -161,6 +167,9 @@ func main() {
 	}
 
 	go mgr.RunReaper(ctx, cfg.Branches.ReaperInterval)
+	// engine を定期ポーリングして last_conn_at を更新する(#41)。engine が
+	// ConnCounter 未実装なら内部で即 return する。
+	go mgr.RunConnPoller(ctx, cfg.Branches.ReaperInterval)
 
 	if cfg.Listen.Metrics != "" {
 		go func() {

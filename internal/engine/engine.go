@@ -26,3 +26,12 @@ type Engine interface {
 	// IsRunning は起動中かどうか。
 	IsRunning(ctx context.Context, ins Instance) (bool, error)
 }
+
+// ConnCounter は稼働中インスタンスの現在のクライアント接続数を返せる engine(#41)。
+// proxy を通らない接続(postgres / fsx 直続)でも last_conn_at を更新できるよう、
+// reaper 用のポーラがこれを type assertion で使う。未実装の engine では
+// idle 回収を無効化する(接続の有無が判定できないため)。
+// 返す値は「自分(ポーラ)の接続を除いた」クライアント接続数。
+type ConnCounter interface {
+	ConnCount(ctx context.Context, ins Instance) (int, error)
+}
