@@ -111,6 +111,11 @@ type Manager struct {
 	touchMu   sync.Mutex
 	lastTouch map[string]time.Time
 
+	// #41: connpoll が最後に観測した branch ごとのクライアント接続数(proxy 非依存)。
+	// activeConns にマージして reaper の使用中判定に使う。
+	pollMu    sync.Mutex
+	pollConns map[string]int
+
 	// baseline publish ポリシー(#38)
 	baselinePolicy RefreshConfig
 	// baseline の set / GC / publish を直列化する(Fix 3)。
@@ -132,6 +137,7 @@ func New(cfg Config, st storage.Storage, bp BaselineProvider, eng engine.Engine,
 		cfg: cfg, st: st, baseline: bp, eng: eng, hooks: hr, db: db,
 		nameRe: re, locks: map[string]*sync.Mutex{},
 		lastTouch: map[string]time.Time{},
+		pollConns: map[string]int{},
 	}, nil
 }
 
@@ -512,11 +518,20 @@ func (m *Manager) SetActiveConns(fn func(name string) int) {
 	m.cfg.ActiveConns = fn
 }
 
+// activeConns は「使用中」判定に使う接続数。proxy(cfg.ActiveConns)と
+// connpoll(pollConns, #41)の大きい方を返す。どちらか一方でも接続を検出
+// していれば reaper の停止・削除対象から外す。
 func (m *Manager) activeConns(name string) int {
-	if m.cfg.ActiveConns == nil {
-		return 0
+	n := 0
+	if m.cfg.ActiveConns != nil {
+		n = m.cfg.ActiveConns(name)
 	}
-	return m.cfg.ActiveConns(name)
+	m.pollMu.Lock()
+	if p := m.pollConns[name]; p > n {
+		n = p
+	}
+	m.pollMu.Unlock()
+	return n
 }
 
 // resolveProfileName は create 時の profile 名を確定する。空なら DefaultProfile。

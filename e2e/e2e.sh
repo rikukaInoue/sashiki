@@ -373,6 +373,21 @@ val=$(mysql -udev@pr-idle -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM a
 # TTL: 15 秒放置で自動削除
 sleep 18
 grep -q pr-idle <<<"$(sashiki list)" && fail "reaper: pr-idle should be TTL-deleted"
+
+# #41: proxy を通らない直接接続でも idle stop を防げること(engine ポーリングで
+# last_conn_at を更新する)。proxy(3306)ではなく branch の実ポートへ直接つなぐと
+# proxy の activeConns には出ないため、これは connpoll でしか検出できない。
+log "reaper: 直接接続は idle stop を防ぐ (#41)"
+sashiki create pr-hold > /dev/null
+holdport=$(sashiki show pr-hold --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["port"])')
+mysql -udev -pdev -h127.0.0.1 -P"$holdport" -e "SELECT SLEEP(12)" >/dev/null 2>&1 &
+holdpid=$!
+sleep 7   # idle_stop_after(3s)を十分超える
+grep -q "pr-hold.*running" <<<"$(sashiki list)" \
+  || { sashiki list; fail "reaper: 直接接続中の pr-hold は running のままであるべき (#41)"; }
+wait "$holdpid" 2>/dev/null || true
+sashiki delete pr-hold > /dev/null
+
 # 設定を戻して再起動
 kill $SASHIKID_PID 2>/dev/null || true
 sleep 1
