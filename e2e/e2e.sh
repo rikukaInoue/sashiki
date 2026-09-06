@@ -214,6 +214,18 @@ SASHIKI_EVENT=closed bash "$AE" || fail "action: closed should delete"
 SASHIKI_EVENT=closed bash "$AE" || fail "action: closed should be idempotent (404 OK)"
 unset SASHIKI_API_URL SASHIKI_BRANCH
 
+log "operations 記録 (async ops API)"
+# operation id で決定的に検証(op list の grep はタイミングに脆い)
+opid=$(curl -sf -D - -o /dev/null -X POST http://127.0.0.1:8080/v1/branches \
+  -H "Content-Type: application/json" -d '{"name":"op-test"}' \
+  | tr -d '\r' | awk 'tolower($1)=="sashiki-operation-id:"{print $2}')
+[ -n "$opid" ] || fail "create should return operation id header"
+curl -sf "http://127.0.0.1:8080/v1/operations/$opid" | grep -q '"target":"op-test"' \
+  || fail "operation should be queryable by id"
+curl -sf "http://127.0.0.1:8080/v1/operations/$opid" | grep -q '"type":"create"' \
+  || fail "operation type should be create"
+sashiki delete op-test > /dev/null
+
 log "delete"
 sashiki delete pr-1
 sashiki delete pr-2
