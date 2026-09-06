@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rikukaInoue/sashiki/internal/engine"
 	"github.com/rikukaInoue/sashiki/internal/ops"
@@ -103,15 +104,18 @@ func newTestServerWithDB(t *testing.T) (*httptest.Server, *state.DB) {
 func TestAPILifecycle(t *testing.T) {
 	srv := newTestServer(t, "")
 
-	// create
+	// create → 202(非同期化 #82。newTestServer は ops 未配線なので同期実行される)
 	resp, err := http.Post(srv.URL+"/v1/branches", "application/json",
 		strings.NewReader(`{"name":"pr-1"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("create status = %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("create status = %d, want 202", resp.StatusCode)
 	}
+	_ = resp.Body.Close()
+	// 作成結果は GET で確認する(応答は operation_id のみ)
+	resp, _ = http.Get(srv.URL + "/v1/branches/pr-1")
 	var b struct {
 		Name  string `json:"name"`
 		State string `json:"state"`
@@ -145,18 +149,18 @@ func TestAPILifecycle(t *testing.T) {
 	}
 	_ = resp.Body.Close()
 
-	// reset
+	// reset → 202
 	resp, _ = http.Post(srv.URL+"/v1/branches/pr-1/reset", "application/json", nil)
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("reset status = %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Errorf("reset status = %d, want 202", resp.StatusCode)
 	}
 	_ = resp.Body.Close()
 
-	// delete
+	// delete → 202
 	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/v1/branches/pr-1", nil)
 	resp, _ = http.DefaultClient.Do(req)
-	if resp.StatusCode != http.StatusNoContent {
-		t.Errorf("delete status = %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Errorf("delete status = %d, want 202", resp.StatusCode)
 	}
 	_ = resp.Body.Close()
 
@@ -337,17 +341,45 @@ func TestMetricsOperationStats(t *testing.T) {
 	}
 }
 
+// waitOp は operation が完了(running 以外)するまでポーリングして最終 state を返す。
+func waitOp(t *testing.T, srv *httptest.Server, opID string) string {
+	t.Helper()
+	for i := 0; i < 200; i++ {
+		resp, err := http.Get(srv.URL + "/v1/operations/" + opID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var o struct {
+			State string `json:"state"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&o)
+		_ = resp.Body.Close()
+		if o.State != "running" && o.State != "" {
+			return o.State
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("operation %s did not finish", opID)
+	return ""
+}
+
 func TestAPIOperationsTracking(t *testing.T) {
 	srv, db := newTestServerWithDB(t)
-	// create すると operation が記録され、ヘッダに id が付く
+	// create → 202、ヘッダに operation id。完了を待ってから operation を検証する。
 	resp, err := http.Post(srv.URL+"/v1/branches", "application/json", strings.NewReader(`{"name":"pr-1"}`))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("create status = %d, want 202", resp.StatusCode)
 	}
 	opID := resp.Header.Get("Sashiki-Operation-Id")
 	_ = resp.Body.Close()
 	if opID == "" {
 		t.Fatal("create should return operation id header")
+	}
+	if st := waitOp(t, srv, opID); st != "completed" {
+		t.Fatalf("op state = %s, want completed", st)
 	}
 	// GET /v1/operations/{id}
 	resp, _ = http.Get(srv.URL + "/v1/operations/" + opID)
@@ -382,6 +414,16 @@ func TestAPICreateWithProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("create status = %d, want 202", resp.StatusCode)
+	}
+	opID := resp.Header.Get("Sashiki-Operation-Id")
+	_ = resp.Body.Close()
+	if st := waitOp(t, srv, opID); st != "completed" {
+		t.Fatalf("create op state = %s, want completed", st)
+	}
+	// provenance は作成後に GET で確認する(応答は operation_id のみ)
+	resp, _ = http.Get(srv.URL + "/v1/branches/pr-1")
 	defer func() { _ = resp.Body.Close() }()
 	var b struct {
 		Owner   string          `json:"owner"`
