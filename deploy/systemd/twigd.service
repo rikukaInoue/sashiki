@@ -12,5 +12,5 @@ Restart=on-failure
 [Install]
 WantedBy=multi-user.target
 
-# sashiki ユーザーには sudoers で以下だけを許可する:
-#   sashiki ALL=(root) NOPASSWD: /usr/sbin/zfs, /usr/bin/systemctl start mysqld@*, /usr/bin/systemctl stop mysqld@*, /usr/bin/systemctl is-active mysqld@*
+# sashiki ユーザーの sudoers は sashiki init が /etc/sudoers.d/sashiki に生成する
+# (実呼び出し形に合わせたパス制限付き。cmd/sashiki/hardening.go 参照 #78)。

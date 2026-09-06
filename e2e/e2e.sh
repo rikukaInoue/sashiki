@@ -39,15 +39,9 @@ apt-get update -q > /dev/null
 apt-get install -y -q zfsutils-linux mysql-server-8.0 mysql-client-8.0 apparmor-utils > /dev/null
 systemctl stop mysql 2>/dev/null || true
 systemctl disable mysql 2>/dev/null || true
-# AppArmor: aa-complain が環境によって効かないことがあるため、
-# mysqld プロファイルを disable 登録 + カーネルからアンロードする(両方やる)。
-if [ -f /etc/apparmor.d/usr.sbin.mysqld ]; then
-  mkdir -p /etc/apparmor.d/disable
-  ln -sf /etc/apparmor.d/usr.sbin.mysqld /etc/apparmor.d/disable/ || true
-  apparmor_parser -R /etc/apparmor.d/usr.sbin.mysqld 2>&1 || true
-fi
-aa-complain /usr/sbin/mysqld 2>&1 || true
-aa-status 2>/dev/null | grep -i mysqld || echo "apparmor: mysqld profile not loaded (OK)"
+# AppArmor は回避しない: sashiki init が生成する sashiki-mysqld プロファイル
+# (enforce)の下でシナリオ全体を通す(#79)。旧 PoC の disable symlink が
+# VM 使い回しで残っていても init が掃除する。
 
 # --- 1. クリーンアップ(再実行安全) ---
 log "cleanup previous run"
@@ -69,6 +63,10 @@ zfs list $POOL/base $POOL/branches > /dev/null || fail "init should create datas
 # 再実行安全であること(主要ステップがスキップされ成功する)
 init2=$(sashiki init --pool $POOL --skip-packages --yes) || fail "init re-run should succeed"
 grep -q "スキップ" <<<"$init2" || fail "init should be idempotent"
+# AppArmor プロファイルと sudoers が生成されていること(詳細な enforce 検証は末尾 #79)
+aa-status | grep -q 'sashiki-mysqld' || fail "apparmor: init should load sashiki-mysqld profile"
+visudo -cf /etc/sudoers.d/sashiki || fail "sudoers: generated file should pass visudo (#78)"
+grep -q "zfs destroy -r $POOL/branches/\*" /etc/sudoers.d/sashiki || fail "sudoers: destroy should be path-restricted (#78)"
 # E2E 用にポートレンジと上限を絞る
 sed -i 's/port_range: \[3401, 3600\]/port_range: [3401, 3410]/' /etc/sashiki/config.yaml
 sed -i 's/max_branches: 50/max_branches: 5/' /etc/sashiki/config.yaml
@@ -411,6 +409,47 @@ cp /tmp/sashiki-config.bak /etc/sashiki/config.yaml
 SASHIKID_PID=$!
 sleep 1
 
+# --- AppArmor enforce の実効性 (#79) ---
+log "apparmor enforce"
+# (1) sashiki-mysqld プロファイルが enforce モードでロードされていること
+aa-status | sed -n '/profiles are in enforce mode/,/profiles are in complain mode/p' \
+  | grep -q 'sashiki-mysqld' || { aa-status; fail "apparmor: sashiki-mysqld should be in enforce mode"; }
+
+# (2) branch の mysqld プロセスが実際に confinement 下にあること
+sashiki create pr-aa > /dev/null
+aapid=$(systemctl show -p MainPID --value mysqld@pr-aa)
+{ [ -n "$aapid" ] && [ "$aapid" != "0" ]; } || fail "apparmor: mysqld@pr-aa should be running"
+grep -q 'sashiki-mysqld (enforce)' "/proc/$aapid/attr/current" \
+  || fail "apparmor: mysqld@pr-aa should be confined (got: $(cat "/proc/$aapid/attr/current"))"
+sashiki delete pr-aa > /dev/null
+
+# (3) 負のテスト: datadir 外(/var/lib/mysql)への書込が拒否されること。
+# 通常の branch mysqld は deb 既定の secure_file_priv(/var/lib/mysql-files)で
+# OUTFILE が MySQL 側で弾かれ AppArmor の検証にならないため、secure_file_priv を
+# 無効化した一時 mysqld を base datadir で起動して確認する。
+# この mysqld は必ず正常終了させる(以後 base の snapshot は取得しないため
+# baseline 不変条件には影響しない)。
+install -d -o mysql -g mysql /var/lib/mysql   # DAC では書ける状態を保証(拒否 = AppArmor 起因)
+mysqld --user=mysql --datadir=/$POOL/base/data --skip-networking \
+  --socket=/tmp/sashiki-aa.sock --pid-file=/tmp/sashiki-aa.pid \
+  --log-error=/var/log/sashiki/aa-test.err --secure-file-priv= --daemonize \
+  || { tail -30 /var/log/sashiki/aa-test.err; fail "apparmor: temp mysqld should start under enforce"; }
+for _ in $(seq 1 60); do mysqladmin -uroot -S /tmp/sashiki-aa.sock ping >/dev/null 2>&1 && break; sleep 1; done
+# 正の対照: 許可パス(base datadir)への OUTFILE は成功する
+mysql -uroot -S /tmp/sashiki-aa.sock \
+  -e "SELECT 1 INTO OUTFILE '/$POOL/base/data/sashiki-aa-allowed.txt'" \
+  || fail "apparmor: write inside datadir should be allowed"
+# 負: /var/lib/mysql(datadir 外)への OUTFILE は AppArmor が拒否する
+if mysql -uroot -S /tmp/sashiki-aa.sock \
+  -e "SELECT 1 INTO OUTFILE '/var/lib/mysql/sashiki-aa-denied.txt'" 2>/dev/null; then
+  fail "apparmor: write outside datadir should be denied"
+fi
+[ ! -f /var/lib/mysql/sashiki-aa-denied.txt ] || fail "apparmor: denied file should not exist"
+mysqladmin -uroot -S /tmp/sashiki-aa.sock shutdown || fail "apparmor: temp mysqld should shut down cleanly"
+# datadir を掴んだまま zpool destroy(後片付け)に進まないよう終了を待つ
+for _ in $(seq 1 30); do [ ! -f /tmp/sashiki-aa.pid ] && break; sleep 1; done
+[ ! -f /tmp/sashiki-aa.pid ] || fail "apparmor: temp mysqld did not exit"
+rm -f "/$POOL/base/data/sashiki-aa-allowed.txt"
 
 # --- 6. 後片付け ---
 log "cleanup"
