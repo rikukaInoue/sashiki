@@ -44,6 +44,10 @@ type Branch struct {
 	Purpose   string
 	Source    string // opaque JSON
 	ExpiresAt *time.Time
+	// 実体参照(仕様 19章 / #90): fsx の世代管理と reset 戻り先の明示に使う。
+	EngineState  string // mysqld の期待状態(running|stopped。空 = 不明/遷移中)
+	InitSnapshot string // reset の戻り先 @init(空なら <dataset>@init を組み立てる)
+	VolumeRef    string // backend 固有の volume 識別子(dataset 名など)
 }
 
 // HookRun は hook 実行記録。
@@ -84,6 +88,9 @@ func Open(path string) (*DB, error) {
 		"ALTER TABLE branches ADD COLUMN purpose TEXT",
 		"ALTER TABLE branches ADD COLUMN source TEXT",
 		"ALTER TABLE branches ADD COLUMN expires_at TEXT",
+		"ALTER TABLE branches ADD COLUMN engine_state TEXT",
+		"ALTER TABLE branches ADD COLUMN init_snapshot TEXT",
+		"ALTER TABLE branches ADD COLUMN volume_ref TEXT",
 		"ALTER TABLE baselines ADD COLUMN source_revision TEXT",
 		"ALTER TABLE baselines ADD COLUMN schema_revision TEXT",
 		"ALTER TABLE baselines ADD COLUMN data_as_of TEXT",
@@ -113,7 +120,10 @@ CREATE TABLE IF NOT EXISTS branches (
   owner            TEXT,
   purpose          TEXT,
   source           TEXT,
-  expires_at       TEXT
+  expires_at       TEXT,
+  engine_state     TEXT,
+  init_snapshot    TEXT,
+  volume_ref       TEXT
 );
 CREATE TABLE IF NOT EXISTS hook_runs (
   id          INTEGER PRIMARY KEY,
@@ -167,11 +177,34 @@ func (d *DB) CreateBranch(name string, port int, origin string) error {
 }
 
 // SetState は状態遷移を記録する。error 以外に遷移するとき詳細をクリアする。
+// SetProvision は volume の実体参照と @init snapshot を記録する(仕様 19章 / #90)。
+// create / recreate の切替後に呼ぶ。fsx の世代管理と reset 戻り先の明示に使う。
+func (d *DB) SetProvision(name, volumeRef, initSnapshot string) error {
+	res, err := d.sql.Exec(
+		`UPDATE branches SET volume_ref = ?, init_snapshot = ? WHERE name = ?`,
+		volumeRef, initSnapshot, name)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (d *DB) SetState(name, st, errMsg string) error {
+	// engine_state(仕様 11-1)は lifecycle state から導出して同時更新する:
+	// running → mysqld 稼働、sleeping → 停止。遷移中(creating/resetting/deleting)
+	// と error は前回値を保持する(不明のため)。
 	res, err := d.sql.Exec(
 		`UPDATE branches SET state = ?, error_message = ?,
+		   engine_state = CASE ?
+		     WHEN 'running' THEN 'running'
+		     WHEN 'sleeping' THEN 'stopped'
+		     ELSE engine_state END,
 		   failed_operation = NULL, error_code = NULL, recoverable = NULL, suggested_actions = NULL
-		 WHERE name = ?`, st, errMsg, name)
+		 WHERE name = ?`, st, errMsg, st, name)
 	if err != nil {
 		return err
 	}
@@ -261,7 +294,8 @@ func (d *DB) GetBranch(name string) (Branch, error) {
 	row := d.sql.QueryRow(
 		`SELECT name, state, port, origin_snapshot, created_at, last_conn_at, COALESCE(error_message,''),
 		        failed_operation, error_code, recoverable, suggested_actions,
-		        profile, owner, purpose, source, expires_at
+		        profile, owner, purpose, source, expires_at,
+		        engine_state, init_snapshot, volume_ref
 		 FROM branches WHERE name = ?`, name)
 	return scanBranch(row)
 }
@@ -271,7 +305,8 @@ func (d *DB) ListBranches() ([]Branch, error) {
 	rows, err := d.sql.Query(
 		`SELECT name, state, port, origin_snapshot, created_at, last_conn_at, COALESCE(error_message,''),
 		        failed_operation, error_code, recoverable, suggested_actions,
-		        profile, owner, purpose, source, expires_at
+		        profile, owner, purpose, source, expires_at,
+		        engine_state, init_snapshot, volume_ref
 		 FROM branches ORDER BY created_at`)
 	if err != nil {
 		return nil, err
@@ -315,9 +350,11 @@ func scanBranch(row scannable) (Branch, error) {
 	var failedOp, errCode, sug sql.NullString
 	var rec sql.NullInt64
 	var profile, owner, purpose, source, expires sql.NullString
+	var engineState, initSnap, volRef sql.NullString
 	err := row.Scan(&b.Name, &b.State, &b.Port, &b.OriginSnapshot, &created, &lastConn, &b.ErrorMessage,
 		&failedOp, &errCode, &rec, &sug,
-		&profile, &owner, &purpose, &source, &expires)
+		&profile, &owner, &purpose, &source, &expires,
+		&engineState, &initSnap, &volRef)
 	if errors.Is(err, sql.ErrNoRows) {
 		return b, ErrNotFound
 	}
@@ -334,6 +371,9 @@ func scanBranch(row scannable) (Branch, error) {
 	b.Owner = owner.String
 	b.Purpose = purpose.String
 	b.Source = source.String
+	b.EngineState = engineState.String
+	b.InitSnapshot = initSnap.String
+	b.VolumeRef = volRef.String
 	if expires.Valid {
 		if t, err := time.Parse(timeFmt, expires.String); err == nil {
 			b.ExpiresAt = &t

@@ -313,9 +313,13 @@ func (m *Manager) CreateWithMetaFrom(ctx context.Context, name string, port int,
 			return failStage("engine-stop", fmt.Errorf("engine stop before @init: %w", err))
 		}
 	}
-	if _, err := m.st.SnapshotInit(ctx, vol); err != nil {
+	initRef, err := m.st.SnapshotInit(ctx, vol)
+	if err != nil {
 		return failStage("snapshot", fmt.Errorf("snapshot @init: %w", err))
 	}
+	// 実体参照を記録(reset の戻り先と fsx 世代管理。仕様 19章 / #90)。
+	// 失敗しても reset 側が <dataset>@init を組み立てるため非致命。
+	_ = m.db.SetProvision(name, vol.Dataset, string(initRef))
 	if err := m.eng.Start(ctx, ins); err != nil {
 		return failStage("engine-start", fmt.Errorf("engine start: %w", err))
 	}
@@ -357,7 +361,11 @@ func (m *Manager) Reset(ctx context.Context, name string) (Info, error) {
 	// rollback で dirty state を捨てるため graceful は不要(Kill で高速化)。
 	// PoC では reset 時間の大半が graceful shutdown だった。
 	_ = m.eng.Kill(ctx, ins)
+	// 記録済みの @init(仕様 19章 / #90)を優先し、無ければ従来どおり組み立てる
 	initSnap := storage.SnapshotRef(vol.Dataset + "@init")
+	if b.InitSnapshot != "" {
+		initSnap = storage.SnapshotRef(b.InitSnapshot)
+	}
 	if err := m.st.Rollback(ctx, vol, initSnap); err != nil {
 		_ = m.db.SetState(name, state.StateError, err.Error())
 		return Info{}, fmt.Errorf("rollback: %w", err)
@@ -464,10 +472,13 @@ func (m *Manager) recreateFrom(ctx context.Context, b state.Branch, origin stora
 		_ = m.db.SetState(b.Name, state.StateError, err.Error())
 		return Info{}, fmt.Errorf("recreate stop before @init: %w", err)
 	}
-	if _, err := m.st.SnapshotInit(ctx, newVol); err != nil {
+	newInitRef, err := m.st.SnapshotInit(ctx, newVol)
+	if err != nil {
 		_ = m.db.SetState(b.Name, state.StateError, err.Error())
 		return Info{}, fmt.Errorf("recreate @init: %w", err)
 	}
+	// 新しい実体参照を記録(仕様 19章 / #90)
+	_ = m.db.SetProvision(b.Name, newVol.Dataset, string(newInitRef))
 	if err := m.eng.Start(ctx, newIns); err != nil {
 		_ = m.db.SetState(b.Name, state.StateError, err.Error())
 		return Info{}, err
