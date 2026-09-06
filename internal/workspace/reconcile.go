@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/rikukaInoue/sashiki/internal/state"
 	"github.com/rikukaInoue/sashiki/internal/storage"
@@ -86,29 +87,81 @@ func (m *Manager) GCOrphans(ctx context.Context) ([]string, error) {
 	return deleted, nil
 }
 
+// DoctorCheck は 1 項目の診断結果。Status は "ok" | "warn" | "error"。
+type DoctorCheck struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Detail string `json:"detail"`
+}
+
+const (
+	checkOK    = "ok"
+	checkWarn  = "warn"
+	checkError = "error"
+)
+
 // DoctorReport は sashiki doctor の診断結果。
 type DoctorReport struct {
-	PoolHealthy     bool
-	PoolUsedRatio   float64
-	CurrentBaseline string
-	BranchCount     int
-	PortConflicts   []string
-	Orphans         []string
-	MemHeadroomOK   bool
-	Issues          []string
+	PoolHealthy       bool // pool 容量が読めるか(CapacityReporter があるか)
+	PoolStatusHealthy bool // zpool status -x が healthy か(#88)
+	PoolStatusDetail  string
+	PoolUsedRatio     float64
+	CurrentBaseline   string
+	BaselineMasked    bool // current baseline が masked か(#88)
+	BaselineValidated bool // current baseline が validated か(#88)
+	StateDBWritable   bool // state.db が書き込み可能か(#88)
+	BranchCount       int
+	PortConflicts     []string
+	Orphans           []string
+	MemHeadroomOK     bool
+	Issues            []string
+	Checks            []DoctorCheck // 整形表示用(#88)
 }
 
 // Doctor は運用者向けの健全性レポートを返す(仕様 20-2)。
 func (m *Manager) Doctor(ctx context.Context) (DoctorReport, error) {
 	var d DoctorReport
+	add := func(name, status, detail string) {
+		d.Checks = append(d.Checks, DoctorCheck{Name: name, Status: status, Detail: detail})
+		if status != checkOK {
+			d.Issues = append(d.Issues, fmt.Sprintf("%s: %s", name, detail))
+		}
+	}
+
 	branches, err := m.db.ListBranches()
 	if err != nil {
 		return d, err
 	}
 	d.BranchCount = len(branches)
+
+	// state.db 書き込み可否
+	if err := m.db.Writable(); err != nil {
+		add("state.db writable", checkError, err.Error())
+	} else {
+		d.StateDBWritable = true
+		add("state.db writable", checkOK, "")
+	}
+
+	// current baseline とその provenance(masked / validated)
 	d.CurrentBaseline = string(m.currentBaseline())
 	if d.CurrentBaseline == "" {
-		d.Issues = append(d.Issues, "current baseline が未設定(baseline import/refresh が必要)")
+		add("current baseline", checkError, "未設定(baseline import/refresh が必要)")
+	} else {
+		add("current baseline", checkOK, d.CurrentBaseline)
+		if row, err := m.db.GetBaseline(d.CurrentBaseline); err == nil {
+			d.BaselineMasked = row.Prov.Masked
+			d.BaselineValidated = row.Prov.Validated
+			if d.BaselineMasked {
+				add("baseline masked", checkOK, "")
+			} else {
+				add("baseline masked", checkWarn, "current baseline は masked 済みとして記録されていない")
+			}
+			if d.BaselineValidated {
+				add("baseline validated", checkOK, "")
+			} else {
+				add("baseline validated", checkWarn, "current baseline は validate 未通過")
+			}
+		}
 	}
 
 	// port 重複
@@ -119,15 +172,41 @@ func (m *Manager) Doctor(ctx context.Context) (DoctorReport, error) {
 		}
 		seen[b.Port] = b.Name
 	}
-	d.Issues = append(d.Issues, mapToIssues("port conflict", d.PortConflicts)...)
+	if len(d.PortConflicts) == 0 {
+		add("port conflicts", checkOK, "")
+	} else {
+		add("port conflicts", checkError, strings.Join(d.PortConflicts, "; "))
+	}
+
+	// pool 健全性(zpool status -x 相当)
+	if psc, ok := m.st.(storage.PoolStatusChecker); ok {
+		healthy, detail, err := psc.PoolStatus(ctx)
+		switch {
+		case err != nil:
+			add("pool status", checkWarn, "取得できません: "+err.Error())
+		case healthy:
+			d.PoolStatusHealthy = true
+			d.PoolStatusDetail = detail
+			add("pool status", checkOK, "healthy")
+		default:
+			d.PoolStatusDetail = detail
+			add("pool status", checkError, detail)
+		}
+	}
 
 	// pool 使用率
 	if cr, ok := m.st.(storage.CapacityReporter); ok {
 		if used, total, err := cr.PoolCapacity(ctx); err == nil && total > 0 {
 			d.PoolHealthy = true
 			d.PoolUsedRatio = float64(used) / float64(total)
-			if m.cfg.CriticalWatermark > 0 && d.PoolUsedRatio >= m.cfg.CriticalWatermark {
-				d.Issues = append(d.Issues, fmt.Sprintf("pool 使用率が critical: %.0f%%", d.PoolUsedRatio*100))
+			pct := fmt.Sprintf("%.0f%%", d.PoolUsedRatio*100)
+			switch {
+			case m.cfg.CriticalWatermark > 0 && d.PoolUsedRatio >= m.cfg.CriticalWatermark:
+				add("pool usage", checkError, "critical: "+pct)
+			case m.cfg.HighWatermark > 0 && d.PoolUsedRatio >= m.cfg.HighWatermark:
+				add("pool usage", checkWarn, "high: "+pct)
+			default:
+				add("pool usage", checkOK, pct)
 			}
 		}
 	}
@@ -135,26 +214,23 @@ func (m *Manager) Doctor(ctx context.Context) (DoctorReport, error) {
 	// orphan
 	if rep, err := m.Reconcile(ctx); err == nil {
 		d.Orphans = rep.Orphans
-		d.Issues = append(d.Issues, mapToIssues("orphan dataset", rep.Orphans)...)
+		if len(d.Orphans) == 0 {
+			add("orphan datasets", checkOK, "")
+		} else {
+			add("orphan datasets", checkWarn, strings.Join(d.Orphans, "; ")+" (gc --orphans で回収)")
+		}
 	}
 
 	// memory headroom
 	if m.cfg.AvailableMem != nil {
 		if err := m.admitMemory("doctor"); err == nil {
 			d.MemHeadroomOK = true
+			add("memory headroom", checkOK, "")
 		} else {
-			d.Issues = append(d.Issues, "memory headroom 不足: "+err.Error())
+			add("memory headroom", checkWarn, err.Error())
 		}
 	} else {
 		d.MemHeadroomOK = true
 	}
 	return d, nil
-}
-
-func mapToIssues(kind string, items []string) []string {
-	var out []string
-	for _, i := range items {
-		out = append(out, kind+": "+i)
-	}
-	return out
 }

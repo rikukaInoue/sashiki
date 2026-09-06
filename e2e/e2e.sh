@@ -361,9 +361,17 @@ sashiki op wait "$opid" --timeout nonsense 2>/dev/null && fail "op wait should r
 sashiki delete op-test > /dev/null
 
 log "reconciliation + doctor (#42)"
-# doctor が健全性を返す
-curl -sf http://127.0.0.1:8080/v1/doctor | grep -q '"current_baseline"' || fail "doctor should report"
-sashiki doctor | grep -q 'branch_count' || fail "doctor CLI"
+# doctor が健全性を返す(#88: 新項目 + [OK]/[WARN]/[ERROR] 整形)
+docjson=$(curl -sf http://127.0.0.1:8080/v1/doctor)
+grep -q '"current_baseline"' <<<"$docjson" || fail "doctor should report current_baseline"
+grep -q '"state_db_writable":true' <<<"$docjson" || fail "doctor: state.db should be writable"
+grep -q '"pool_status_healthy":true' <<<"$docjson" || fail "doctor: pool status should be healthy"
+grep -q '"checks"' <<<"$docjson" || fail "doctor should include checks array"
+docout=$(sashiki doctor)  # healthy 環境なので終了コード 0
+echo "$docout" | grep -q '\[OK\]' || fail "doctor CLI should render [OK] lines"
+echo "$docout" | grep -q 'state.db writable' || fail "doctor CLI should show state.db check"
+echo "$docout" | grep -q '^branches: ' || fail "doctor CLI should show branch count"
+sashiki doctor --json | grep -q '"branch_count"' || fail "doctor --json should pass through raw JSON"
 # sashikid を kill して再起動 → running だった branch は sleeping に整合(mysqld も残る場合あり)
 sashiki create recon-test > /dev/null
 kill $SASHIKID_PID 2>/dev/null; sleep 1

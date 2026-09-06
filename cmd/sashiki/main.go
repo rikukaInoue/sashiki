@@ -49,7 +49,7 @@ func usage() int {
   sashiki token create|list|revoke
   sashiki op list | show <id> | wait <id>
   sashiki capacity
-  sashiki doctor
+  sashiki doctor [--json]
   sashiki gc --orphans
   sashiki drain
   sashiki version

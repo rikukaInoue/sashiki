@@ -166,6 +166,17 @@ CREATE INDEX IF NOT EXISTS idx_operations_target ON operations(target);
 // Close は DB を閉じる。
 func (d *DB) Close() error { return d.sql.Close() }
 
+// Writable は state.db が書き込み可能か確認する(doctor 用 #88)。
+// スキーマ変更を伴う一時テーブルの作成/削除で、read-only ファイルや
+// ディスク満杯を検出する。副作用は残さない。
+func (d *DB) Writable() error {
+	if _, err := d.sql.Exec(`CREATE TABLE IF NOT EXISTS _doctor_probe (id INTEGER)`); err != nil {
+		return err
+	}
+	_, err := d.sql.Exec(`DROP TABLE IF EXISTS _doctor_probe`)
+	return err
+}
+
 const timeFmt = time.RFC3339
 
 // CreateBranch は新しいブランチ行を creating 状態で挿入する。

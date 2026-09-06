@@ -254,3 +254,26 @@ func (b *Backend) PoolCapacity(ctx context.Context) (used, total int64, err erro
 	total, _ = strconv.ParseInt(fields[1], 10, 64)
 	return used, total, nil
 }
+
+// PoolStatus は `zpool status -x` 相当の健全性を返す(仕様 20-2, #88)。
+// PoolCapacity(容量が読めるか)とは別で、DEGRADED / FAULTED 等の異常を検出する。
+// healthy=true なら detail は "healthy"、false なら zpool の診断出力を detail に入れる。
+func (b *Backend) PoolStatus(ctx context.Context) (healthy bool, detail string, err error) {
+	args := []string{"status", "-x", b.cfg.Pool}
+	var cmd *exec.Cmd
+	if b.cfg.Sudo {
+		cmd = exec.CommandContext(ctx, "sudo", append([]string{"-n", "zpool"}, args...)...)
+	} else {
+		cmd = exec.CommandContext(ctx, "zpool", args...)
+	}
+	out, err := cmd.CombinedOutput()
+	text := strings.TrimSpace(string(out))
+	if err != nil {
+		return false, text, fmt.Errorf("zpool status -x: %w: %s", err, text)
+	}
+	// 正常時は "pool '<pool>' is healthy" / "all pools are healthy"。
+	if strings.Contains(text, "is healthy") || strings.Contains(text, "all pools are healthy") {
+		return true, "healthy", nil
+	}
+	return false, text, nil
+}
