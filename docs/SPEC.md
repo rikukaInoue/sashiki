@@ -192,6 +192,9 @@ validate   : candidate から一時 branch を起動して検証 → 破棄
 publish    : current pointer を candidate に向ける
 ```
 
+> 実装ノート: 典型ケース(SQL を流すだけ)は refresh.sh を書かずに
+> `baseline.source_dir` に SQL を置くだけでよい(組み込みローダー、#101)。
+
 validation の最低項目:
 
 - mysqld が起動し、クラッシュリカバリが走っていない

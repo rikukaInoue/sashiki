@@ -134,6 +134,12 @@ type ProfilePolicy struct {
 
 // Baseline は baseline publish のポリシー(仕様 12-3/12-4)。
 type Baseline struct {
+	// refresh の実行方法(#101): refresh_script があればそれを実行。無ければ
+	// source_dir/*.sql を組み込みローダーが冪等適用する(mysql エンジンのみ)。
+	RefreshScript    string        `yaml:"refresh_script"`  // 既定 /etc/sashiki/refresh.sh
+	RefreshTimeout   time.Duration `yaml:"refresh_timeout"` // 既定 1h
+	SourceDir        string        `yaml:"source_dir"`      // 例 /etc/sashiki/baseline-src
+	SourceDB         string        `yaml:"source_db"`       // ローダー実行時に選択する DB(任意)
 	RequireMasked    bool          `yaml:"require_masked"`
 	RequireValidated bool          `yaml:"require_validated"`
 	ValidatePort     int           `yaml:"validate_port"`   // validate 用の一時ポート(既定 3999)
