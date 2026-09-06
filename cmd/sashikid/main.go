@@ -105,18 +105,21 @@ func main() {
 	hr := hooks.NewRunner(cfg.Hooks.Dir, cfg.Hooks.LogDir, cfg.Hooks.Timeout)
 
 	mgr, err := workspace.New(workspace.Config{
-		NamePattern:     cfg.Branches.NamePattern,
-		MaxBranches:     cfg.Branches.MaxBranches,
-		PortLow:         cfg.PortRange()[0],
-		PortHigh:        cfg.PortRange()[1],
-		EngineType:      cfg.Engine.Type,
-		StateDir:        "/var/lib/sashiki/branches",
-		LazyCreate:      cfg.Branches.LazyCreate,
-		LazyMaxWait:     cfg.Branches.LazyCreateMaxWait,
-		IdleStopAfter:   cfg.Branches.IdleStopAfter,
-		DeleteAfterIdle: cfg.Branches.DeleteAfterIdle,
-		AvailableMem:    availableMem,
-		BufferPoolBytes: parseSize(cfg.Engine.Mysql.BufferPoolSize),
+		NamePattern:         cfg.Branches.NamePattern,
+		MaxBranches:         cfg.Branches.MaxBranches,
+		PortLow:             cfg.PortRange()[0],
+		PortHigh:            cfg.PortRange()[1],
+		EngineType:          cfg.Engine.Type,
+		StateDir:            "/var/lib/sashiki/branches",
+		LazyCreate:          cfg.Branches.LazyCreate,
+		LazyMaxWait:         cfg.Branches.LazyCreateMaxWait,
+		IdleStopAfter:       cfg.Branches.IdleStopAfter,
+		DeleteAfterIdle:     cfg.Branches.DeleteAfterIdle,
+		AvailableMem:        availableMem,
+		ExpectedRSSBytes:    parseSize(cfg.Engine.Mysql.ExpectedRSS),
+		MemoryHeadroomBytes: parseSize(cfg.Engine.Mysql.MemoryHeadroom),
+		BufferPoolBytes:     parseSize(cfg.Engine.Mysql.BufferPoolSize),
+		MaxRunning:          cfg.Engine.Mysql.MaxRunning,
 	}, st, bp, eng, hr, db)
 	if err != nil {
 		log.Fatalf("manager: %v", err)

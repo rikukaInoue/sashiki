@@ -86,6 +86,9 @@ type PostgresEngine struct {
 type MysqlEngine struct {
 	PortRange      [2]int `yaml:"port_range"`
 	BufferPoolSize string `yaml:"buffer_pool_size"`
+	ExpectedRSS    string `yaml:"expected_rss"`
+	MemoryHeadroom string `yaml:"memory_headroom"`
+	MaxRunning     int    `yaml:"max_running"`
 	ProxyUser      string `yaml:"proxy_user"`
 	ProxyPass      string `yaml:"proxy_pass"`
 	EnvDir         string `yaml:"env_dir"`
