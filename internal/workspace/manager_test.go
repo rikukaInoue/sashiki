@@ -31,6 +31,15 @@ type mockStorage struct {
 	destroyed        []string
 	cloneErr         error
 	rollbackErr      error
+	quota            map[string]int64 // #85: SetQuota で記録
+}
+
+func (m *mockStorage) SetQuota(ctx context.Context, vol storage.Volume, bytes int64) error {
+	if m.quota == nil {
+		m.quota = map[string]int64{}
+	}
+	m.quota[vol.Dataset] = bytes
+	return nil
 }
 
 func (m *mockStorage) Capabilities() storage.Capabilities { return m.caps }
@@ -1343,5 +1352,31 @@ func TestSetBaselineErrorClassification(t *testing.T) {
 	_ = m.db.RegisterBaseline("pool/base@x", state.BaselineProvenance{})
 	if err := m.SetBaseline(context.Background(), "pool/base@x"); !errors.Is(err, ErrPreconditionFailed) {
 		t.Errorf("unmasked should wrap ErrPreconditionFailed, got %v", err)
+	}
+}
+
+// --- #85 storage quota (refquota) ---
+
+func TestCreateAppliesQuota(t *testing.T) {
+	st := &mockStorage{}
+	m := newTestManagerCfg(t, st, &mockEngine{}, "", func(c *Config) {
+		c.DefaultStorageQuotaBytes = 10 << 20 // 10MiB
+	})
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.quota["pool/branches/pr-1"]; got != 10<<20 {
+		t.Errorf("refquota = %d, want %d", got, 10<<20)
+	}
+}
+
+func TestCreateNoQuotaWhenUnset(t *testing.T) {
+	st := &mockStorage{}
+	m := newTestManager(t, st, &mockEngine{}, "") // quota 未設定
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.quota) != 0 {
+		t.Errorf("quota should not be set when DefaultStorageQuotaBytes=0, got %v", st.quota)
 	}
 }

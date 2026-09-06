@@ -106,6 +106,24 @@ type Config struct {
 	// baseline GC(仕様 12-5, #86)。keep_last=直近 N を残す、retention=期間で残す。
 	BaselineKeepLast  int
 	BaselineRetention time.Duration
+
+	// DefaultStorageQuotaBytes: branch ごとの refquota(#85)。0 = 無制限。
+	// clone 直後に適用し、1 ブランチの暴走が pool を食い尽くすのを防ぐ。
+	// backend が storage.Quota 未実装(fsx)なら適用されない。
+	DefaultStorageQuotaBytes int64
+}
+
+// applyQuota は refquota を branch volume に設定する(#85)。quota 未設定または
+// backend が Quota 未対応なら何もしない。
+func (m *Manager) applyQuota(ctx context.Context, vol storage.Volume) error {
+	if m.cfg.DefaultStorageQuotaBytes <= 0 {
+		return nil
+	}
+	q, ok := m.st.(storage.Quota)
+	if !ok {
+		return nil
+	}
+	return q.SetQuota(ctx, vol, m.cfg.DefaultStorageQuotaBytes)
 }
 
 // BaselineGCConfig は config 由来の GC 既定を返す(API/CLI が override する)。
@@ -312,6 +330,10 @@ func (m *Manager) CreateWithMetaFrom(ctx context.Context, name string, port int,
 	if err != nil {
 		return failStage("clone", fmt.Errorf("clone: %w", err))
 	}
+	// clone 直後に refquota を適用(#85)。1 ブランチの暴走で pool を食い潰さない。
+	if err := m.applyQuota(ctx, vol); err != nil {
+		return failStage("quota", fmt.Errorf("set quota: %w", err))
+	}
 	b, _ := m.db.GetBranch(name)
 	ins := m.instance(b, vol)
 
@@ -468,6 +490,10 @@ func (m *Manager) recreateFrom(ctx context.Context, b state.Branch, origin stora
 		}
 		_ = m.db.SetState(b.Name, state.StateError, err.Error())
 		return Info{}, fmt.Errorf("recreate clone: %w", err)
+	}
+	if err := m.applyQuota(ctx, newVol); err != nil {
+		_ = m.db.SetState(b.Name, state.StateError, err.Error())
+		return Info{}, fmt.Errorf("recreate set quota: %w", err)
 	}
 	newIns := m.instance(b, newVol)
 	if err := m.eng.Start(ctx, newIns); err != nil {

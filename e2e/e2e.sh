@@ -70,6 +70,8 @@ grep -q "zfs destroy -r $POOL/branches/\*" /etc/sudoers.d/sashiki || fail "sudoe
 # E2E 用にポートレンジと上限を絞る
 sed -i 's/port_range: \[3401, 3600\]/port_range: [3401, 3410]/' /etc/sashiki/config.yaml
 sed -i 's/max_branches: 50/max_branches: 5/' /etc/sashiki/config.yaml
+# branch ごとに refquota 100M を課す(#85)
+sed -i '/^  critical_watermark:/a\  default_storage_quota: 100M' /etc/sashiki/config.yaml
 
 # --- 3. ベースライン: sashiki baseline import ---
 log "sashiki baseline import"
@@ -102,6 +104,8 @@ q() { mysql -udev -pdev -h127.0.0.1 -P"$1" -N -e "$2" 2>/dev/null; }
 log "create pr-1"
 time sashiki create pr-1
 [ "$(q 3401 'SELECT COUNT(*) FROM app.items')" = "3" ] || fail "pr-1 should have 3 items"
+# refquota が clone 直後に適用されていること(#85)
+[ "$(zfs get -H -o value refquota $POOL/branches/pr-1)" = "100M" ] || fail "refquota 100M should be applied (#85)"
 
 log "create pr-2 (isolation)"
 sashiki create pr-2
@@ -407,11 +411,21 @@ grep -q pr-idle <<<"$(sashiki list)" && fail "reaper: pr-idle should be TTL-dele
 log "reaper: 直接接続は idle stop を防ぐ (#41)"
 sashiki create pr-hold > /dev/null
 holdport=$(sashiki show pr-hold --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["port"])')
-mysql -udev -pdev -h127.0.0.1 -P"$holdport" -e "SELECT SLEEP(12)" >/dev/null 2>&1 &
+# proxy を通さず branch 実ポートへ直接、長い接続を張る(SLEEP は余裕をもって 30s)
+mysql -udev -pdev -h127.0.0.1 -P"$holdport" -e "SELECT SLEEP(30)" >/dev/null 2>&1 &
 holdpid=$!
-sleep 7   # idle_stop_after(3s)を十分超える
+# 接続が確立して SLEEP が走り始めるまで待つ(これを待たずに idle 判定へ入ると
+# connpoll がまだ接続を観測できておらず reaper に寝かされて flaky になる)。
+for _ in $(seq 1 30); do
+  n=$(mysql -udev -pdev -h127.0.0.1 -P"$holdport" -N -e \
+    "SELECT COUNT(*) FROM information_schema.processlist WHERE info LIKE 'SELECT SLEEP%'" 2>/dev/null)
+  [ "${n:-0}" -ge 1 ] && break
+  sleep 0.3
+done
+sleep 6   # idle_stop_after(3s)+ connpoll(1s周期)を十分に跨ぐ
 grep -q "pr-hold.*running" <<<"$(sashiki list)" \
   || { sashiki list; fail "reaper: 直接接続中の pr-hold は running のままであるべき (#41)"; }
+kill "$holdpid" 2>/dev/null || true
 wait "$holdpid" 2>/dev/null || true
 sashiki delete pr-hold > /dev/null
 
