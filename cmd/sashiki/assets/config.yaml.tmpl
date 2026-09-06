@@ -12,6 +12,7 @@ storage:
   backend: ebs-zfs
   high_watermark: 0.8        # pool使用率がこれを超えるとwarning(メトリクス)
   critical_watermark: 0.95   # これを超えるとcreate/wake/recreateを拒否
+  # default_storage_quota: 10G # branch ごとの refquota(暴走で pool を食い潰さない。空=無制限)
   ebs-zfs:
     pool: {{.Pool}}
     base_dataset: {{.Pool}}/base

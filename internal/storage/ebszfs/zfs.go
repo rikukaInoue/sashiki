@@ -136,6 +136,19 @@ func (b *Backend) SnapshotInit(ctx context.Context, vol storage.Volume) (storage
 	return storage.SnapshotRef(snap), nil
 }
 
+// SetQuota は branch dataset に refquota を設定する(#85)。bytes<=0 で解除。
+// refquota は「その dataset 自身(スナップショット除く)」の上限。1 ブランチの
+// 暴走が pool を食い尽くすのを防ぐ。超過時は書き込みが ENOSPC で失敗する
+// (@init は create 時点の小さな snapshot なので影響しない)。
+func (b *Backend) SetQuota(ctx context.Context, vol storage.Volume, bytes int64) error {
+	val := "none"
+	if bytes > 0 {
+		val = strconv.FormatInt(bytes, 10)
+	}
+	_, err := b.run(ctx, "set", "refquota="+val, vol.Dataset)
+	return err
+}
+
 // Rollback は @init への巻き戻し。-r で @init より後のスナップショットも破棄する。
 func (b *Backend) Rollback(ctx context.Context, vol storage.Volume, snap storage.SnapshotRef) error {
 	_, err := b.run(ctx, "rollback", "-r", string(snap))

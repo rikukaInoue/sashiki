@@ -70,6 +70,8 @@ grep -q "zfs destroy -r $POOL/branches/\*" /etc/sudoers.d/sashiki || fail "sudoe
 # E2E 用にポートレンジと上限を絞る
 sed -i 's/port_range: \[3401, 3600\]/port_range: [3401, 3410]/' /etc/sashiki/config.yaml
 sed -i 's/max_branches: 50/max_branches: 5/' /etc/sashiki/config.yaml
+# branch ごとに refquota 100M を課す(#85)
+sed -i '/^  critical_watermark:/a\  default_storage_quota: 100M' /etc/sashiki/config.yaml
 
 # --- 3. ベースライン: sashiki baseline import ---
 log "sashiki baseline import"
@@ -102,6 +104,8 @@ q() { mysql -udev -pdev -h127.0.0.1 -P"$1" -N -e "$2" 2>/dev/null; }
 log "create pr-1"
 time sashiki create pr-1
 [ "$(q 3401 'SELECT COUNT(*) FROM app.items')" = "3" ] || fail "pr-1 should have 3 items"
+# refquota が clone 直後に適用されていること(#85)
+[ "$(zfs get -H -o value refquota $POOL/branches/pr-1)" = "100M" ] || fail "refquota 100M should be applied (#85)"
 
 log "create pr-2 (isolation)"
 sashiki create pr-2

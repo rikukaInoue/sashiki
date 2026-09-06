@@ -90,5 +90,12 @@ type VolumeLister interface {
 	ListBranchVolumes(ctx context.Context) ([]string, error) // branch 名の一覧
 }
 
+// Quota は branch volume に容量上限(refquota)を設定できるバックエンド(#85)。
+// 1 ブランチの暴走(migration 失敗・大量 UPDATE)が pool を食い尽くすのを防ぐ。
+// bytes<=0 は上限解除。未実装のバックエンド(fsx)では quota は適用されない。
+type Quota interface {
+	SetQuota(ctx context.Context, vol Volume, bytes int64) error
+}
+
 // NopSnapshot は SnapshotInit を持たないバックエンドが返す番兵値。
 const NopSnapshot SnapshotRef = ""
