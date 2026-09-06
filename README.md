@@ -1,9 +1,10 @@
 # sashiki
 
-**本番相当のサイズ・中身の MySQL / PostgreSQL を、数秒でブランチする。**
+**開発環境向けの、ブランチできる RDS。**
 
-ZFS の Copy-on-Write クローンで、何 GB のデータベースでも数百 KB のディスクで即座に複製・リセット・破棄する。
-PR プレビュー、CI の分離 DB、開発者の sandbox、マイグレーション検証——「本番相当データの使い捨て DB」が要る場面のための、セルフホストな control plane。
+本番相当のサイズ・中身の MySQL / PostgreSQL を、Git のブランチのように**数秒で作って・壊して・戻せる**。
+ZFS の Copy-on-Write クローンを使うので、何 GB のデータベースでも複製は数百 KB。
+PR プレビュー・CI・開発者 sandbox・マイグレーション検証——非本番で「独立した DB がすぐ欲しい」場面のためのセルフホスト基盤。
 
 ```console
 $ sashiki create pr-123
