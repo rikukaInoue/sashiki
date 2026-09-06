@@ -45,6 +45,8 @@ func usage() int {
   sashiki token create|list|revoke
   sashiki op list | show <id> | wait <id>
   sashiki capacity
+  sashiki doctor
+  sashiki gc --orphans
   sashiki version
 `)
 	return exitUsage
@@ -84,6 +86,10 @@ func run(args []string) int {
 		return cmdOp(rest)
 	case "capacity":
 		return cmdCapacity(rest)
+	case "doctor":
+		return cmdDoctor(rest)
+	case "gc":
+		return cmdGC(rest)
 	case "version":
 		fmt.Println("sashiki", version)
 		return exitOK

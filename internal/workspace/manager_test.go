@@ -24,6 +24,7 @@ type mockStorage struct {
 	baselinesDeleted []string
 	poolUsed         int64
 	poolTotal        int64
+	volumes          []string
 	cloned           []string
 	snapshots        []string
 	rollbacks        []string
@@ -95,6 +96,10 @@ func (m *mockStorage) DeleteBaselineSnapshot(ctx context.Context, snap storage.S
 
 func (m *mockStorage) PoolCapacity(ctx context.Context) (int64, int64, error) {
 	return m.poolUsed, m.poolTotal, nil
+}
+
+func (m *mockStorage) ListBranchVolumes(ctx context.Context) ([]string, error) {
+	return m.volumes, nil
 }
 
 func (m *mockStorage) LogicalBytes(ctx context.Context, vol storage.Volume) (int64, error) {
@@ -937,5 +942,65 @@ func TestInfoReportsLogicalAndPrivate(t *testing.T) {
 	}
 	if info.LogicalBytes <= info.UsedBytes {
 		t.Errorf("logical (%d) should exceed private (%d) for CoW clone", info.LogicalBytes, info.UsedBytes)
+	}
+}
+
+func TestReconcileDemotesDeadRunningBranch(t *testing.T) {
+	st := &mockStorage{}
+	// IsRunning が false を返す mockEngine(既定)
+	m := newTestManager(t, st, &mockEngine{}, "")
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	// state は running のまま、プロセスは死んでいる想定 → reconcile で sleeping
+	rep, err := m.Reconcile(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Demoted) != 1 || rep.Demoted[0] != "pr-1" {
+		t.Errorf("demoted = %v, want [pr-1]", rep.Demoted)
+	}
+	b, _ := m.db.GetBranch("pr-1")
+	if b.State != state.StateSleeping {
+		t.Errorf("state = %s, want sleeping", b.State)
+	}
+}
+
+func TestReconcileDetectsOrphans(t *testing.T) {
+	st := &mockStorage{volumes: []string{"pr-1", "pr-orphan"}}
+	m := newTestManager(t, st, &mockEngine{}, "")
+	// pr-1 だけ state.db に作る。pr-orphan は dataset のみ
+	if err := m.db.CreateBranch("pr-1", 3401, "pool/base@baseline"); err != nil {
+		t.Fatal(err)
+	}
+	_ = m.db.SetState("pr-1", state.StateSleeping, "")
+	rep, err := m.Reconcile(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Orphans) != 1 || rep.Orphans[0] != "pr-orphan" {
+		t.Errorf("orphans = %v, want [pr-orphan]", rep.Orphans)
+	}
+	// gc --orphans で削除される
+	deleted, err := m.GCOrphans(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deleted) != 1 || deleted[0] != "pr-orphan" {
+		t.Errorf("deleted = %v", deleted)
+	}
+}
+
+func TestDoctorReportsIssues(t *testing.T) {
+	st := &mockStorage{poolUsed: 50, poolTotal: 100, volumes: []string{"pr-1"}}
+	m := newTestManager(t, st, &mockEngine{}, "")
+	_ = m.db.RegisterBaseline("pool/base@b1", state.BaselineProvenance{})
+	_ = m.db.SetCurrentBaseline("pool/base@b1")
+	d, err := m.Doctor(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.PoolHealthy || d.CurrentBaseline == "" {
+		t.Errorf("doctor = %+v", d)
 	}
 }

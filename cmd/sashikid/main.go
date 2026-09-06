@@ -140,6 +140,14 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// 起動時に state.db と ZFS/engine を突き合わせる(仕様 20-1)。
+	if rep, err := mgr.Reconcile(context.Background()); err != nil {
+		log.Printf("reconcile: %v", err)
+	} else if len(rep.Demoted)+len(rep.Errored)+len(rep.Orphans) > 0 {
+		log.Printf("reconcile: demoted=%d errored=%d orphans=%d",
+			len(rep.Demoted), len(rep.Errored), len(rep.Orphans))
+	}
+
 	go mgr.RunReaper(ctx, cfg.Branches.ReaperInterval)
 
 	if cfg.Listen.Metrics != "" {

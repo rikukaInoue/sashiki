@@ -93,6 +93,30 @@ func (b *Backend) Clone(ctx context.Context, baseline storage.SnapshotRef, name 
 	return storage.Volume{Name: name, Dataset: ds, Path: mp}, nil
 }
 
+// ListBranchVolumes は branch_parent 配下の branch 名一覧(reconciliation 用)。
+func (b *Backend) ListBranchVolumes(ctx context.Context) ([]string, error) {
+	out, err := b.run(ctx, "list", "-H", "-o", "name", "-r", b.cfg.BranchParent)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	prefix := b.cfg.BranchParent + "/"
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line == b.cfg.BranchParent {
+			continue
+		}
+		if strings.HasPrefix(line, prefix) {
+			rest := line[len(prefix):]
+			// snapshot(@)やネストは除外し、直下の branch 名のみ
+			if !strings.Contains(rest, "/") && !strings.Contains(rest, "@") {
+				names = append(names, rest)
+			}
+		}
+	}
+	return names, nil
+}
+
 // ResolveVolume は既存ブランチのデータセットとマウントポイントを引く。
 func (b *Backend) ResolveVolume(ctx context.Context, name string) (storage.Volume, error) {
 	ds := b.branchDataset(name)
