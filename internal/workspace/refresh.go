@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rikukaInoue/sashiki/internal/baseline"
 	"github.com/rikukaInoue/sashiki/internal/hooks"
 	"github.com/rikukaInoue/sashiki/internal/state"
 	"github.com/rikukaInoue/sashiki/internal/storage"
@@ -32,6 +33,15 @@ var ErrRefreshRunning = fmt.Errorf("baseline refresh is already running")
 type RefreshConfig struct {
 	Script  string        // /etc/sashiki/refresh.sh
 	Timeout time.Duration // 既定 1h
+	// SourceDir が設定され、かつ Script のファイルが存在しない場合は
+	// 組み込みローダー(internal/baseline.ApplyDir)で SourceDir/*.sql を適用する
+	// (#101。「SQL を置いて refresh」だけで更新が完結する)。
+	SourceDir string
+	SourceDB  string // ローダーが各ファイル実行時に選択する DB(空 = 未選択)
+	// RunSource はテスト注入用(非 nil ならローダーの代わりに呼ばれる)。
+	RunSource func(ctx context.Context) error
+
+	useLoader bool // 内部: SourceDir モードで実行するか
 	// CheckQuiesced は snapshot 取得前の検証(テストで注入)。nil なら
 	// storage の BasePath から既定実装を組み立てる。
 	CheckQuiesced func(ctx context.Context) error
@@ -67,10 +77,22 @@ func RefreshLastError() string {
 // tag には baseline-YYYYMMDDHHMMSS を使う。
 func (m *Manager) RefreshBaseline(ctx context.Context, rc RefreshConfig) (tag string, err error) {
 	if rc.Script == "" {
+		rc.Script = m.baselinePolicy.Script
+	}
+	if rc.Script == "" {
 		rc.Script = "/etc/sashiki/refresh.sh"
 	}
 	if rc.Timeout == 0 {
+		rc.Timeout = m.baselinePolicy.Timeout
+	}
+	if rc.Timeout == 0 {
 		rc.Timeout = time.Hour
+	}
+	if rc.SourceDir == "" {
+		rc.SourceDir = m.baselinePolicy.SourceDir
+	}
+	if rc.SourceDB == "" {
+		rc.SourceDB = m.baselinePolicy.SourceDB
 	}
 	// ポリシー未指定なら Manager 既定を使う。
 	if !rc.RequireMasked && m.baselinePolicy.RequireMasked {
@@ -85,9 +107,19 @@ func (m *Manager) RefreshBaseline(ctx context.Context, rc RefreshConfig) (tag st
 	if rc.MaskedSentinel == "" {
 		rc.MaskedSentinel = m.baselinePolicy.MaskedSentinel
 	}
-	if _, err := os.Stat(rc.Script); err != nil {
-		return "", fmt.Errorf("refresh script %s: %w", rc.Script, err)
+	// SourceDir モード判定: script が無く source_dir がある場合は組み込みローダー。
+	useLoader := rc.RunSource != nil
+	if !useLoader && rc.SourceDir != "" {
+		if _, err := os.Stat(rc.Script); err != nil {
+			useLoader = true
+		}
 	}
+	if !useLoader {
+		if _, err := os.Stat(rc.Script); err != nil {
+			return "", fmt.Errorf("refresh script %s(source_dir も未設定): %w", rc.Script, err)
+		}
+	}
+	rc.useLoader = useLoader
 	if rc.CheckQuiesced == nil {
 		rc.CheckQuiesced = m.defaultQuiesceCheck
 	}
@@ -111,18 +143,28 @@ func (m *Manager) RefreshBaseline(ctx context.Context, rc RefreshConfig) (tag st
 }
 
 func (m *Manager) runRefresh(ctx context.Context, rc RefreshConfig, tag string) error {
-	cmd := exec.CommandContext(ctx, rc.Script)
-	cmd.Env = append(os.Environ(),
-		"SASHIKI_EVENT=baseline-refresh",
-		"SASHIKI_BASELINE_TAG="+tag,
-	)
-	out, scriptErr := cmd.CombinedOutput()
-	if scriptErr != nil {
-		// スクリプト失敗時も mysqld が残っていれば回収を試みる(自己修復)
-		if qerr := rc.CheckQuiesced(ctx); qerr != nil {
-			m.reclaimBase(ctx)
+	if rc.useLoader {
+		if err := m.runSourceLoader(ctx, rc); err != nil {
+			// ローダー失敗時も mysqld が残っていれば回収を試みる(自己修復)
+			if qerr := rc.CheckQuiesced(ctx); qerr != nil {
+				m.reclaimBase(ctx)
+			}
+			return fmt.Errorf("source loader: %w", err)
 		}
-		return fmt.Errorf("script failed: %w: %s", scriptErr, tail(out, 500))
+	} else {
+		cmd := exec.CommandContext(ctx, rc.Script)
+		cmd.Env = append(os.Environ(),
+			"SASHIKI_EVENT=baseline-refresh",
+			"SASHIKI_BASELINE_TAG="+tag,
+		)
+		out, scriptErr := cmd.CombinedOutput()
+		if scriptErr != nil {
+			// スクリプト失敗時も mysqld が残っていれば回収を試みる(自己修復)
+			if qerr := rc.CheckQuiesced(ctx); qerr != nil {
+				m.reclaimBase(ctx)
+			}
+			return fmt.Errorf("script failed: %w: %s", scriptErr, tail(out, 500))
+		}
 	}
 	// exit 0 でも信用せず、snapshot 取得前に quiesce を検証する
 	if err := rc.CheckQuiesced(ctx); err != nil {
@@ -322,4 +364,40 @@ func tail(b []byte, n int) string {
 		return string(b)
 	}
 	return "..." + string(b[len(b)-n:])
+}
+
+// runSourceLoader は組み込みローダー(#101)で SourceDir/*.sql を base に適用する。
+// refresh.sh を書かなくても「SQL を置いて refresh」だけで更新が完結する。
+func (m *Manager) runSourceLoader(ctx context.Context, rc RefreshConfig) error {
+	if rc.RunSource != nil { // テスト注入
+		return rc.RunSource(ctx)
+	}
+	if m.cfg.EngineType != "mysql" {
+		return fmt.Errorf("組み込みローダーは mysql エンジンのみ対応です(engine=%s)", m.cfg.EngineType)
+	}
+	bp, ok := m.st.(basePathProvider)
+	if !ok {
+		return fmt.Errorf("このバックエンドは base の実パスを解決できないため source_dir を使えません(refresh.sh を使ってください)")
+	}
+	base, err := bp.BasePath(ctx)
+	if err != nil || base == "" {
+		return fmt.Errorf("base path: %v", err)
+	}
+	srv := baseline.Server{
+		DataDir:  base + "/data",
+		Socket:   "/tmp/sashiki-refresh.sock",
+		PidFile:  "/tmp/sashiki-refresh.pid",
+		LogError: "/var/log/sashiki/refresh.err",
+	}
+	if os.Geteuid() == 0 {
+		if uid, gid, err := baseline.LookupMysqlUser(); err == nil {
+			srv.UID, srv.GID = uid, gid
+		}
+	}
+	applied, err := baseline.ApplyDir(ctx, srv, baseline.RealOps(), rc.SourceDir, rc.SourceDB)
+	if err != nil {
+		return err
+	}
+	log.Printf("baseline refresh: source loader applied %d file(s): %v", len(applied), applied)
+	return nil
 }

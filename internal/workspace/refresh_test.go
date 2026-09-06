@@ -269,3 +269,65 @@ func TestRefreshRejectsUnmaskedWhenRequired(t *testing.T) {
 		t.Error("unmasked baseline must not be published")
 	}
 }
+
+// script が無く SourceDir がある場合は組み込みローダー経路(#101)。
+func TestRefreshUsesSourceLoaderWhenScriptAbsent(t *testing.T) {
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st := &mockStorageWithBase{base: base}
+	m := newTestManager(t, st, &mockEngine{}, "")
+	called := false
+	if _, err := m.RefreshBaseline(context.Background(), RefreshConfig{
+		Script:        filepath.Join(t.TempDir(), "no-such-script.sh"),
+		SourceDir:     t.TempDir(),
+		RunSource:     func(ctx context.Context) error { called = true; return nil },
+		CheckQuiesced: quiesceOK, SkipValidate: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitRefreshDone(t)
+	if RefreshLastError() != "" {
+		t.Fatalf("refresh error: %s", RefreshLastError())
+	}
+	if !called {
+		t.Error("source loader should be invoked when script is absent")
+	}
+}
+
+// script が存在する場合は SourceDir があっても従来どおり script を優先する。
+func TestRefreshPrefersScriptOverSourceDir(t *testing.T) {
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st := &mockStorageWithBase{base: base}
+	m := newTestManager(t, st, &mockEngine{}, "")
+	marker := filepath.Join(t.TempDir(), "ran")
+	script := writeRefreshScript(t, "touch "+marker)
+	if _, err := m.RefreshBaseline(context.Background(), RefreshConfig{
+		Script:        script,
+		SourceDir:     t.TempDir(),
+		CheckQuiesced: quiesceOK, SkipValidate: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitRefreshDone(t)
+	if RefreshLastError() != "" {
+		t.Fatalf("refresh error: %s", RefreshLastError())
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Error("script should run when it exists (script takes precedence)")
+	}
+}
+
+// script も SourceDir も無ければ従来どおりエラー。
+func TestRefreshFailsWithoutScriptAndSourceDir(t *testing.T) {
+	m := newTestManager(t, &mockStorage{}, &mockEngine{}, "")
+	if _, err := m.RefreshBaseline(context.Background(), RefreshConfig{
+		Script: filepath.Join(t.TempDir(), "missing.sh"),
+	}); err == nil {
+		t.Fatal("missing script without source_dir should fail")
+	}
+}

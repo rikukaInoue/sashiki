@@ -161,6 +161,10 @@ func main() {
 	srv := api.New(mgr, cfg.Domain, cfg.Engine.Type, cfg.Engine.Mysql.ProxyUser, cfg.Engine.Mysql.ProxyPass, token, db)
 	srv.SetOps(ops.New(db))
 	mgr.SetBaselinePolicy(workspace.RefreshConfig{
+		Script:           cfg.Baseline.RefreshScript,
+		Timeout:          cfg.Baseline.RefreshTimeout,
+		SourceDir:        cfg.Baseline.SourceDir,
+		SourceDB:         cfg.Baseline.SourceDB,
 		RequireMasked:    cfg.Baseline.RequireMasked,
 		RequireValidated: cfg.Baseline.RequireValidated,
 		ValidatePort:     cfg.Baseline.ValidatePort,
