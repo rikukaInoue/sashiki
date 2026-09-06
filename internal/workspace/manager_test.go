@@ -1004,3 +1004,27 @@ func TestDoctorReportsIssues(t *testing.T) {
 		t.Errorf("doctor = %+v", d)
 	}
 }
+
+func TestResetWorksAfterRecreate(t *testing.T) {
+	// recreate が @init を取っていないと、後続の reset が Rollback 先を失う(Fix 2)。
+	st := &mockStorage{caps: storage.Capabilities{FastRollback: true, AsyncDelete: true}}
+	m := newTestManager(t, st, &mockEngine{}, "")
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.db.SetCurrentBaseline("pool/base@baseline-new"); err != nil {
+		t.Fatal(err)
+	}
+	snapsBefore := len(st.snapshots)
+	if _, err := m.Recreate(context.Background(), "pr-1"); err != nil {
+		t.Fatal(err)
+	}
+	// recreate は新しい @init を取得しているはず
+	if len(st.snapshots) <= snapsBefore {
+		t.Error("recreate should take a fresh @init snapshot")
+	}
+	// その @init に対して reset が成功する
+	if _, err := m.Reset(context.Background(), "pr-1"); err != nil {
+		t.Fatalf("reset after recreate should work (valid @init): %v", err)
+	}
+}

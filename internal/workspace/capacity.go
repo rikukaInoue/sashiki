@@ -11,11 +11,12 @@ import (
 // Capacity は memory / storage / ports の空き状況(GET /capacity)。
 type Capacity struct {
 	// storage
-	PoolUsedBytes  int64
-	PoolTotalBytes int64
-	PoolUsedRatio  float64
-	HighWatermark  float64
-	CritWatermark  float64
+	StorageIntrospectable bool // false なら backend が pool 使用率を報告できない
+	PoolUsedBytes         int64
+	PoolTotalBytes        int64
+	PoolUsedRatio         float64
+	HighWatermark         float64
+	CritWatermark         float64
 	// ports
 	PortsUsed  int
 	PortsTotal int
@@ -40,6 +41,7 @@ func (m *Manager) Capacity(ctx context.Context) (Capacity, error) {
 	}
 	if cr, ok := m.st.(storage.CapacityReporter); ok {
 		if used, total, err := cr.PoolCapacity(ctx); err == nil && total > 0 {
+			c.StorageIntrospectable = true
 			c.PoolUsedBytes = used
 			c.PoolTotalBytes = total
 			c.PoolUsedRatio = float64(used) / float64(total)

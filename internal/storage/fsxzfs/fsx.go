@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -403,3 +404,40 @@ func (b *Backend) UsedBytes(ctx context.Context, vol storage.Volume) (int64, err
 }
 
 func strPtr(s string) *string { return &s }
+
+// --- Fix 4: optional interface を明示的に「未対応」として実装する ---
+// 無言スキップ(型アサーション失敗)ではなく、呼び出し側が supported=false を
+// 判定・記録できるようにする(仕様の introspection 規約)。
+
+// ErrUnsupported は fsx-zfs が当該操作を未対応であることを表す。
+var ErrUnsupported = fmt.Errorf("operation not supported by fsx-zfs backend")
+
+// DeleteBaselineSnapshot: fsx では baseline snapshot 削除は AWS API 経由が必要
+// (未実装)。呼び出し側は GC 対象外として扱う。
+func (b *Backend) DeleteBaselineSnapshot(ctx context.Context, snap storage.SnapshotRef) error {
+	log.Printf("fsx-zfs: DeleteBaselineSnapshot(%s) は未対応。baseline GC はスキップされます", snap)
+	return ErrUnsupported
+}
+
+// ListBranchVolumes: fsx の branch volume 列挙は DescribeVolumes で可能。
+// twig-branch タグから branch 名を復元する(reconcile / orphan 検出用)。
+func (b *Backend) ListBranchVolumes(ctx context.Context) ([]string, error) {
+	vols, err := b.listAllVolumes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var names []string
+	for _, v := range vols {
+		if v.Name == nil {
+			continue
+		}
+		name := genSuffix.ReplaceAllString(*v.Name, "")
+		if name == "base" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	return names, nil
+}
