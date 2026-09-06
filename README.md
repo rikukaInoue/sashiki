@@ -1,5 +1,10 @@
 # sashiki
 
+![status](https://img.shields.io/badge/status-v0.2%20(public%20preview)-orange) ![license](https://img.shields.io/badge/license-Apache--2.0-blue)
+
+> **成熟度**: v0.2(public preview)。MySQL + GitHub PR プレビューの経路は実機で検証済み。
+> API / config は**まだ固定していない**(マイナー版で破壊的変更があり得る)。本番 DB には使わない。
+
 **開発環境向けの、ブランチできる RDS。**
 
 本番相当のサイズ・中身の MySQL / PostgreSQL を、Git のブランチのように**数秒で作って・壊して・戻せる**。
@@ -34,7 +39,7 @@ $ sashiki delete pr-123    # 用が済んだら消す
 | **CI の分離 DB** | `ci` | ジョブごとに create、短い TTL で自動回収 |
 | **開発者の sandbox** | `sandbox` | 手元から `create`、長めに保持 |
 | **マイグレーション検証** | 任意 | 実データ量で ALTER を試す。壊したら `reset` |
-| **RDS / Aurora の非本番用置き換え** | — | Terraform モジュールで 1 apply(入出力は RDS 互換) |
+| **RDS / Aurora の非本番用置き換え** | — | Terraform モジュールで 1 apply(入出力は RDS 互換)。※非本番のみ |
 
 profile は用途ごとの寿命(idle 停止 / 自動削除)を表す。`create --ttl 7d` や `lease renew` で期限も付けられる。
 
@@ -156,7 +161,7 @@ PR open/reopen で create、close で delete。接続情報を出力するので
 
 ```hcl
 module "db" {
-  source = "github.com/rikukaInoue/sashiki//deploy/terraform?ref=v0.5.0"
+  source = "github.com/rikukaInoue/sashiki//deploy/terraform?ref=v0.2.0"
 
   name           = "myapp-preview"
   vpc_id         = var.vpc_id
@@ -202,6 +207,29 @@ sashiki CLI / Action / Terraform ──HTTP──▶ sashikid ──┬─▶ st
 - 自社固有の処理(マイグレーション適用・データマスク)はコアに入れず **hooks** に追い出す
 
 設計仕様は [docs/SPEC.md](docs/SPEC.md)、設計判断(ADR)は [docs/DECISIONS.md](docs/DECISIONS.md)、コスト比較は [docs/COSTS.md](docs/COSTS.md)。
+
+## プロジェクトに導入するとき用意するもの
+
+sashiki は「汎用エンジン + MySQL/PR の完成した adapter」。コアは非本番のどんな MySQL にも使えるが、
+**各プロジェクトで次の 3 つは自分で用意する**(サンプルは `hooks/` と `docs/`):
+
+1. **baseline の作り方** — 本番データのコピー →(必要なら)マスク → 投入 → 正常終了 → snapshot。
+   `sashiki baseline import`(初回)/ `baseline refresh`(更新、`source_dir` に SQL を置くだけでも可)
+2. **on-create hook** — ブランチ作成時に migration / seed を適用するスクリプト。ORM(Rails / Django /
+   Prisma 等)の migrate コマンドを呼ぶだけ。`@init` 取得前に走るので reset でも保持され、recreate で再適用される
+3. **profile / lease** の設定 — 用途ごとの寿命(preview / ci / sandbox)
+
+「設定 3 行で完成」ではなく「1 日で組めるフレームワーク」と考えてほしい。
+
+## 対応状況(v0.2)
+
+| | 状態 |
+|---|---|
+| MySQL + GitHub PR プレビュー | ✅ 実機検証済み(create / reset / recreate / delete / lazy create / proxy / baseline 更新 / スキーマ比較) |
+| PostgreSQL | 🔶 engine 対応。接続は**直接ポートのみ**(proxy / lazy create は MySQL のみ) |
+| EBS-ZFS バックエンド | ✅ default。単一ホスト |
+| FSx-ZFS / multi-host / Spot | 🔶 実装済み・**本番運用実績なし**。必要になったら(§FAQ) |
+| API / config の安定性 | ⚠️ 未固定。v0.x の間はマイナー版で破壊的変更があり得る |
 
 ## 向かない用途
 
