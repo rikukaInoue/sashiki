@@ -311,13 +311,14 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 }
 
 type createReq struct {
-	Name    string          `json:"name"`
-	Port    int             `json:"port,omitempty"`
-	Profile string          `json:"profile,omitempty"`
-	Owner   string          `json:"owner,omitempty"`
-	Purpose string          `json:"purpose,omitempty"`
-	Source  json.RawMessage `json:"source,omitempty"`
-	TTL     string          `json:"ttl,omitempty"` // 初期 lease 期限(例 "7d","1h"）。空なら無期限
+	Name     string          `json:"name"`
+	Port     int             `json:"port,omitempty"`
+	Profile  string          `json:"profile,omitempty"`
+	Owner    string          `json:"owner,omitempty"`
+	Purpose  string          `json:"purpose,omitempty"`
+	Source   json.RawMessage `json:"source,omitempty"`
+	TTL      string          `json:"ttl,omitempty"`      // 初期 lease 期限(例 "7d","1h"）。空なら無期限
+	Baseline string          `json:"baseline,omitempty"` // 作成元 baseline snapshot。空なら current(#82)
 }
 
 func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -353,7 +354,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	// 新規作成は非同期(fsx で数分)。202 + operation_id を返し、CLI が --wait で追う。
 	meta := state.Meta{Profile: req.Profile, Owner: req.Owner, Purpose: req.Purpose, Source: string(req.Source)}
 	s.accepted(w, "create", req.Name, func(ctx context.Context) error {
-		if _, e := s.mgr.CreateWithMeta(ctx, req.Name, req.Port, meta); e != nil {
+		if _, e := s.mgr.CreateWithMetaFrom(ctx, req.Name, req.Port, meta, req.Baseline); e != nil {
 			return e
 		}
 		if ttl > 0 {
@@ -611,6 +612,8 @@ func (s *Server) writeError(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusBadRequest, "invalid_name", err.Error())
 	case errors.Is(err, workspace.ErrExists):
 		writeErr(w, http.StatusConflict, "branch_exists", err.Error())
+	case errors.Is(err, workspace.ErrBaselineNotFound):
+		writeErr(w, http.StatusNotFound, "baseline_not_found", err.Error())
 	case errors.Is(err, state.ErrNotFound):
 		writeErr(w, http.StatusNotFound, "branch_not_found", err.Error())
 	case errors.Is(err, workspace.ErrLimitReached), errors.Is(err, workspace.ErrNoFreePort):

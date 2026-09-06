@@ -222,7 +222,7 @@ func parseFlagsKV(args []string) (pos []string, port int, jsonOut bool, kv map[s
 			if err != nil {
 				return nil, 0, false, nil, fmt.Errorf("--port: %w", err)
 			}
-		case "--owner", "--purpose", "--source", "--profile", "--ttl":
+		case "--owner", "--purpose", "--source", "--profile", "--ttl", "--baseline":
 			if i+1 >= len(args) {
 				return nil, 0, false, nil, fmt.Errorf("%s requires a value", a)
 			}
@@ -242,7 +242,7 @@ func cmdCreate(args []string) int {
 		return usage()
 	}
 	body := map[string]any{"name": pos[0], "port": port}
-	for _, k := range []string{"owner", "purpose", "profile", "ttl"} {
+	for _, k := range []string{"owner", "purpose", "profile", "ttl", "baseline"} {
 		if v := kv[k]; v != "" {
 			body[k] = v
 		}
