@@ -69,6 +69,8 @@ func run(args []string) int {
 		return cmdSimpleBranch(rest, "recreate")
 	case "retry":
 		return cmdSimpleBranch(rest, "retry")
+	case "lease":
+		return cmdLease(rest)
 	case "hooks":
 		return cmdHooks(rest)
 	case "list":
@@ -182,8 +184,10 @@ type branchView struct {
 	Port         int      `json:"port"`
 	Host         string   `json:"host"`
 	User         string   `json:"user"`
+	Profile      string   `json:"profile"`
 	CreatedAt    string   `json:"created_at"`
 	LastConnAt   *string  `json:"last_conn_at"`
+	ExpiresAt    *string  `json:"expires_at"`
 	UsedBytes    int64    `json:"used_bytes"`
 	LogicalBytes int64    `json:"logical_bytes"`
 	Error        string   `json:"error"`
@@ -217,7 +221,7 @@ func parseFlagsKV(args []string) (pos []string, port int, jsonOut bool, kv map[s
 			if err != nil {
 				return nil, 0, false, nil, fmt.Errorf("--port: %w", err)
 			}
-		case "--owner", "--purpose", "--source", "--profile":
+		case "--owner", "--purpose", "--source", "--profile", "--ttl":
 			if i+1 >= len(args) {
 				return nil, 0, false, nil, fmt.Errorf("%s requires a value", a)
 			}
@@ -236,7 +240,7 @@ func cmdCreate(args []string) int {
 		return usage()
 	}
 	body := map[string]any{"name": pos[0], "port": port}
-	for _, k := range []string{"owner", "purpose", "profile"} {
+	for _, k := range []string{"owner", "purpose", "profile", "ttl"} {
 		if v := kv[k]; v != "" {
 			body[k] = v
 		}
@@ -277,6 +281,57 @@ func cmdDelete(args []string) int {
 		return statusToExit(code)
 	}
 	fmt.Printf("branch '%s' deleted\n", args[0])
+	return exitOK
+}
+
+// cmdLease は `sashiki lease renew <name> --for 7d`。expires_at を now+for に設定する。
+func cmdLease(args []string) int {
+	if len(args) < 1 || args[0] != "renew" {
+		fmt.Fprintln(os.Stderr, "usage: sashiki lease renew <name> --for <dur>  (例 7d, 1h)")
+		return usage()
+	}
+	rest := args[1:]
+	var name, dur string
+	var jsonOut bool
+	for i := 0; i < len(rest); i++ {
+		switch rest[i] {
+		case "--for":
+			if i+1 >= len(rest) {
+				fmt.Fprintln(os.Stderr, "sashiki: --for requires a value")
+				return exitError
+			}
+			i++
+			dur = rest[i]
+		case "--json":
+			jsonOut = true
+		default:
+			name = rest[i]
+		}
+	}
+	if name == "" || dur == "" {
+		fmt.Fprintln(os.Stderr, "usage: sashiki lease renew <name> --for <dur>  (例 7d, 1h)")
+		return usage()
+	}
+	code, data, err := call("POST", "/v1/branches/"+name+"/lease", map[string]any{"for": dur})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sashiki:", err)
+		return exitError
+	}
+	if code != http.StatusOK {
+		fmt.Fprintln(os.Stderr, "sashiki:", apiError(data))
+		return statusToExit(code)
+	}
+	if jsonOut {
+		fmt.Println(string(data))
+		return exitOK
+	}
+	var b branchView
+	_ = json.Unmarshal(data, &b)
+	exp := "(none)"
+	if b.ExpiresAt != nil {
+		exp = *b.ExpiresAt
+	}
+	fmt.Printf("branch '%s' lease renewed: expires_at=%s\n", name, exp)
 	return exitOK
 }
 

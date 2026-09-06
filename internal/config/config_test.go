@@ -74,3 +74,39 @@ storage:
 		t.Errorf("parent_volume_id should be optional: %v", err)
 	}
 }
+
+func TestDefaultProfilesSeeded(t *testing.T) {
+	cfg := Default()
+	if cfg.Branches.DefaultProfile != "preview" {
+		t.Errorf("default_profile = %q, want preview", cfg.Branches.DefaultProfile)
+	}
+	for _, name := range []string{"preview", "ci", "sandbox"} {
+		if _, ok := cfg.Branches.Profiles[name]; !ok {
+			t.Errorf("profile %q not seeded", name)
+		}
+	}
+	if cfg.Branches.Profiles["ci"].IdleStopAfter == 0 {
+		t.Error("ci profile idle_stop_after should be set")
+	}
+}
+
+func TestDefaultProfileMustExist(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	// profiles を上書きしつつ default_profile が存在しない → Validate エラー
+	yaml := `
+storage:
+  backend: ebs-zfs
+  ebs-zfs:
+    pool: p
+branches:
+  default_profile: nonexistent
+  profiles:
+    ci: { idle_stop_after: 5m }
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Error("Load should fail when default_profile is not in profiles")
+	}
+}

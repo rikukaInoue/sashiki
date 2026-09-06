@@ -28,12 +28,20 @@ func IsReserved(name string) bool {
 
 // エラー種別(API 層で HTTP ステータスに写像する)。
 var (
-	ErrInvalidName  = errors.New("invalid branch name")
-	ErrExists       = errors.New("branch already exists")
-	ErrNotFound     = state.ErrNotFound
-	ErrLimitReached = errors.New("branch limit reached")
-	ErrNoFreePort   = errors.New("no free port in range")
+	ErrInvalidName    = errors.New("invalid branch name")
+	ErrExists         = errors.New("branch already exists")
+	ErrNotFound       = state.ErrNotFound
+	ErrLimitReached   = errors.New("branch limit reached")
+	ErrNoFreePort     = errors.New("no free port in range")
+	ErrUnknownProfile = errors.New("unknown profile")
 )
+
+// ProfilePolicy は profile ごとの idle lifecycle(仕様 11-3)。0 のフィールドは
+// global(Config.IdleStopAfter/DeleteAfterIdle)にフォールバックする。
+type ProfilePolicy struct {
+	IdleStopAfter   time.Duration
+	DeleteAfterIdle time.Duration
+}
 
 // BaselineProvider は現在のベースライン snapshot を返す。
 type BaselineProvider interface {
@@ -54,9 +62,16 @@ type Config struct {
 	LazyCreate  bool
 	LazyMaxWait time.Duration
 
-	// リーパー(reaper.go)
+	// リーパー(reaper.go)。profile 未指定 branch と、profile で未設定の
+	// フィールドのフォールバックに使う。
 	IdleStopAfter   time.Duration // 0 = アイドル停止しない
 	DeleteAfterIdle time.Duration // 0 = 自動削除しない
+
+	// profile(仕様 11-3): 名前 → idle lifecycle。branch は create 時に
+	// profile を1つ持ち、reaper はその profile の閾値を使う。空なら全 branch が
+	// global(上の IdleStopAfter/DeleteAfterIdle)を使う。
+	Profiles       map[string]ProfilePolicy
+	DefaultProfile string
 
 	// ActiveConns はブランチの現在の接続数(プロキシが提供)。nil なら常に 0 扱い。
 	// last_conn_at は接続開始時刻しか進まないため、長寿命接続を張ったまま
@@ -195,6 +210,12 @@ func (m *Manager) CreateWithMeta(ctx context.Context, name string, port int, met
 	if !m.nameRe.MatchString(name) {
 		return Info{}, ErrInvalidName
 	}
+	// profile を確定(空→DefaultProfile、未知→ErrUnknownProfile)して永続化する。
+	pname, err := m.resolveProfileName(meta.Profile)
+	if err != nil {
+		return Info{}, err
+	}
+	meta.Profile = pname
 	unlock := m.lock(name)
 	defer unlock()
 
@@ -496,6 +517,55 @@ func (m *Manager) activeConns(name string) int {
 		return 0
 	}
 	return m.cfg.ActiveConns(name)
+}
+
+// resolveProfileName は create 時の profile 名を確定する。空なら DefaultProfile。
+// profiles が定義されているのに未知の名前なら ErrUnknownProfile。
+func (m *Manager) resolveProfileName(name string) (string, error) {
+	if name == "" {
+		name = m.cfg.DefaultProfile
+	}
+	if name == "" || len(m.cfg.Profiles) == 0 {
+		return name, nil // profile 機能未使用(global のみ)
+	}
+	if _, ok := m.cfg.Profiles[name]; !ok {
+		return "", fmt.Errorf("%w: %q", ErrUnknownProfile, name)
+	}
+	return name, nil
+}
+
+// resolveProfile は branch の profile 名から reaper 用の idle 閾値を返す。
+// profile 未定義・未設定フィールドは global へフォールバックする。
+func (m *Manager) resolveProfile(name string) ProfilePolicy {
+	pol := ProfilePolicy{
+		IdleStopAfter:   m.cfg.IdleStopAfter,
+		DeleteAfterIdle: m.cfg.DeleteAfterIdle,
+	}
+	if p, ok := m.cfg.Profiles[name]; ok {
+		if p.IdleStopAfter > 0 {
+			pol.IdleStopAfter = p.IdleStopAfter
+		}
+		if p.DeleteAfterIdle > 0 {
+			pol.DeleteAfterIdle = p.DeleteAfterIdle
+		}
+	}
+	return pol
+}
+
+// Lease は branch の lease 期限(expires_at)を now+d に設定する(仕様 13-6)。
+// create --ttl と lease renew の実体。d<=0 は無効。返り値は確定した期限。
+func (m *Manager) Lease(ctx context.Context, name string, d time.Duration) (time.Time, error) {
+	if d <= 0 {
+		return time.Time{}, fmt.Errorf("lease duration must be > 0")
+	}
+	if _, err := m.db.GetBranch(name); err != nil {
+		return time.Time{}, err
+	}
+	exp := time.Now().UTC().Add(d)
+	if err := m.db.SetExpiresAt(name, exp); err != nil {
+		return time.Time{}, err
+	}
+	return exp, nil
 }
 
 // RouteBranch はプロキシ用: ブランチのポートを返す。

@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -68,6 +69,7 @@ func New(mgr *workspace.Manager, domain, engineType, proxyUser, proxyPass, token
 	s.mux.HandleFunc("POST /v1/branches/{name}/recreate", s.handleRecreate)
 	s.mux.HandleFunc("POST /v1/branches/{name}/wake", s.handleWake)
 	s.mux.HandleFunc("POST /v1/branches/{name}/retry", s.handleRetry)
+	s.mux.HandleFunc("POST /v1/branches/{name}/lease", s.handleLease)
 	s.mux.HandleFunc("POST /v1/branches/{name}/hooks/{event}", s.handleRunHook)
 	s.mux.HandleFunc("GET /v1/branches/{name}/schema", s.handleSchema)
 	s.mux.HandleFunc("POST /v1/branches/{name}/query", s.handleQuery)
@@ -293,6 +295,7 @@ type createReq struct {
 	Owner   string          `json:"owner,omitempty"`
 	Purpose string          `json:"purpose,omitempty"`
 	Source  json.RawMessage `json:"source,omitempty"`
+	TTL     string          `json:"ttl,omitempty"` // 初期 lease 期限(例 "7d","1h"）。空なら無期限
 }
 
 func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -302,11 +305,28 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	existOK := r.URL.Query().Get("exist_ok") == "true"
+	var ttl time.Duration
+	if req.TTL != "" {
+		var perr error
+		if ttl, perr = parseDur(req.TTL); perr != nil {
+			writeErr(w, http.StatusBadRequest, "invalid_name", "invalid ttl: "+perr.Error())
+			return
+		}
+	}
 	var info workspace.Info
 	meta := state.Meta{Profile: req.Profile, Owner: req.Owner, Purpose: req.Purpose, Source: string(req.Source)}
 	opID, err := s.track("create", req.Name, func() error {
 		var e error
 		info, e = s.mgr.CreateWithMeta(r.Context(), req.Name, req.Port, meta)
+		if e != nil {
+			return e
+		}
+		if ttl > 0 {
+			if _, e = s.mgr.Lease(r.Context(), req.Name, ttl); e != nil {
+				return e
+			}
+			info, e = s.mgr.Get(r.Context(), req.Name) // expires_at を反映
+		}
 		return e
 	})
 	if errors.Is(err, workspace.ErrExists) && existOK {
@@ -321,6 +341,61 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	setOpID(w, opID)
 	writeJSON(w, http.StatusCreated, s.toJSON(info))
+}
+
+type leaseReq struct {
+	For string `json:"for"` // 追加する期間(例 "7d")。now からの新しい expires_at を設定
+}
+
+// handleLease は lease を renew する(POST /v1/branches/{name}/lease)。
+// expires_at を now+for に(再)設定する。冪等ではなく「今から for 後まで延長」。
+func (s *Server) handleLease(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var req leaseReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.For == "" {
+		writeErr(w, http.StatusBadRequest, "invalid_name", "invalid request body (need {\"for\":\"7d\"})")
+		return
+	}
+	d, perr := parseDur(req.For)
+	if perr != nil {
+		writeErr(w, http.StatusBadRequest, "invalid_name", "invalid for: "+perr.Error())
+		return
+	}
+	var info workspace.Info
+	opID, err := s.track("lease", name, func() error {
+		if _, e := s.mgr.Lease(r.Context(), name, d); e != nil {
+			return e
+		}
+		var e error
+		info, e = s.mgr.Get(r.Context(), name)
+		return e
+	})
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	setOpID(w, opID)
+	writeJSON(w, http.StatusOK, s.toJSON(info))
+}
+
+// parseDur は time.ParseDuration に加えて末尾 d(日)/w(週)を許す。
+func parseDur(s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	if n := len(s); n >= 2 {
+		switch s[n-1] {
+		case 'd', 'w':
+			num, err := strconv.ParseFloat(s[:n-1], 64)
+			if err != nil {
+				return 0, fmt.Errorf("invalid duration %q", s)
+			}
+			base := 24 * time.Hour
+			if s[n-1] == 'w' {
+				base = 7 * 24 * time.Hour
+			}
+			return time.Duration(num * float64(base)), nil
+		}
+	}
+	return time.ParseDuration(s)
 }
 
 func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {

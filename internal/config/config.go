@@ -112,6 +112,20 @@ type Branches struct {
 	IdleStopAfter     time.Duration `yaml:"idle_stop_after"`
 	DeleteAfterIdle   time.Duration `yaml:"delete_after_idle"`
 	ReaperInterval    time.Duration `yaml:"reaper_interval"`
+
+	// profile: 用途ごとに idle lifecycle を変える(仕様 11-3)。
+	// branch は create 時に profile を1つ持ち、reaper はその profile の
+	// idle_stop_after / delete_after_idle を使う。未設定フィールドは上の
+	// global 値にフォールバックする。lease(expires_at)は profile ではなく
+	// create --ttl / lease renew で明示的に付ける絶対期限(仕様 13-6)。
+	Profiles       map[string]ProfilePolicy `yaml:"profiles"`
+	DefaultProfile string                   `yaml:"default_profile"`
+}
+
+// ProfilePolicy は profile ごとの idle lifecycle。0 のフィールドは global にフォールバック。
+type ProfilePolicy struct {
+	IdleStopAfter   time.Duration `yaml:"idle_stop_after"`
+	DeleteAfterIdle time.Duration `yaml:"delete_after_idle"`
 }
 
 // Baseline は baseline publish のポリシー(仕様 12-3/12-4)。
@@ -177,6 +191,12 @@ func Default() Config {
 			IdleStopAfter:     30 * time.Minute,
 			DeleteAfterIdle:   168 * time.Hour,
 			ReaperInterval:    time.Minute,
+			Profiles: map[string]ProfilePolicy{
+				"preview": {IdleStopAfter: 30 * time.Minute, DeleteAfterIdle: 168 * time.Hour},
+				"ci":      {IdleStopAfter: 5 * time.Minute, DeleteAfterIdle: time.Hour},
+				"sandbox": {IdleStopAfter: time.Hour, DeleteAfterIdle: 720 * time.Hour},
+			},
+			DefaultProfile: "preview",
 		},
 		Baseline: Baseline{ValidatePort: 3999, MaskedSentinel: "/run/sashiki/baseline-masked"},
 		Hooks: Hooks{
@@ -242,6 +262,11 @@ func (c Config) Validate() error {
 	}
 	if _, err := regexp.Compile(c.Branches.NamePattern); err != nil {
 		return fmt.Errorf("branches.name_pattern: %w", err)
+	}
+	if len(c.Branches.Profiles) > 0 && c.Branches.DefaultProfile != "" {
+		if _, ok := c.Branches.Profiles[c.Branches.DefaultProfile]; !ok {
+			return fmt.Errorf("branches.default_profile %q is not defined in branches.profiles", c.Branches.DefaultProfile)
+		}
 	}
 	if c.Engine.Mysql.PortRange[0] <= 0 || c.Engine.Mysql.PortRange[1] < c.Engine.Mysql.PortRange[0] {
 		return fmt.Errorf("engine.mysql.port_range must be [low, high]")
