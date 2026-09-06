@@ -226,3 +226,40 @@ func TestOperationErrorJSONAndPrune(t *testing.T) {
 		t.Errorf("running op must NOT be pruned: %v", err)
 	}
 }
+
+func TestProvisionAndEngineState(t *testing.T) {
+	db := openTest(t)
+	if err := db.CreateBranch("pr-1", 3401, "p/base@baseline"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 実体参照の記録(#90)
+	if err := db.SetProvision("pr-1", "p/branches/pr-1", "p/branches/pr-1@init"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := db.GetBranch("pr-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.VolumeRef != "p/branches/pr-1" || b.InitSnapshot != "p/branches/pr-1@init" {
+		t.Errorf("provision = %q / %q", b.VolumeRef, b.InitSnapshot)
+	}
+	if err := db.SetProvision("nope", "x", "y"); err != ErrNotFound {
+		t.Errorf("missing branch should be ErrNotFound, got %v", err)
+	}
+
+	// engine_state は lifecycle state から導出(running→running / sleeping→stopped、
+	// 遷移中は前回値を保持)
+	_ = db.SetState("pr-1", StateRunning, "")
+	if b, _ = db.GetBranch("pr-1"); b.EngineState != "running" {
+		t.Errorf("engine_state after running = %q", b.EngineState)
+	}
+	_ = db.SetState("pr-1", StateResetting, "")
+	if b, _ = db.GetBranch("pr-1"); b.EngineState != "running" {
+		t.Errorf("engine_state should be kept during resetting, got %q", b.EngineState)
+	}
+	_ = db.SetState("pr-1", StateSleeping, "")
+	if b, _ = db.GetBranch("pr-1"); b.EngineState != "stopped" {
+		t.Errorf("engine_state after sleeping = %q", b.EngineState)
+	}
+}

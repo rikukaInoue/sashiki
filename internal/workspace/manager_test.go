@@ -1296,3 +1296,39 @@ func TestCreateFromBaseline(t *testing.T) {
 		t.Error("failed create must not leave a branch row")
 	}
 }
+
+func TestCreateRecordsProvision(t *testing.T) {
+	st := &mockStorage{}
+	m := newTestManager(t, st, &mockEngine{}, "")
+	if _, err := m.Create(context.Background(), "pr-p", 0); err != nil {
+		t.Fatal(err)
+	}
+	b, err := m.db.GetBranch("pr-p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.VolumeRef == "" || b.InitSnapshot == "" {
+		t.Errorf("provision should be recorded: volume_ref=%q init_snapshot=%q", b.VolumeRef, b.InitSnapshot)
+	}
+	if b.EngineState != "running" {
+		t.Errorf("engine_state = %q, want running", b.EngineState)
+	}
+}
+
+func TestResetPrefersStoredInitSnapshot(t *testing.T) {
+	st := &mockStorage{caps: storage.Capabilities{FastRollback: true}}
+	m := newTestManager(t, st, &mockEngine{}, "")
+	if _, err := m.Create(context.Background(), "pr-r", 0); err != nil {
+		t.Fatal(err)
+	}
+	// 記録済み @init を差し替えて、Reset がそれを使うことを確認(#90)
+	if err := m.db.SetProvision("pr-r", "p/b/pr-r", "p/b/pr-r@init-gen2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Reset(context.Background(), "pr-r"); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.rollbacks) == 0 || st.rollbacks[len(st.rollbacks)-1] != "p/b/pr-r@init-gen2" {
+		t.Errorf("rollback should use stored init snapshot, got %v", st.rollbacks)
+	}
+}

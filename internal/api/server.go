@@ -548,6 +548,7 @@ func toOpJSON(o state.Operation) opJSON {
 type branchJSON struct {
 	Name           string            `json:"name"`
 	State          string            `json:"state"`
+	EngineState    string            `json:"engine_state"`
 	Port           int               `json:"port"`
 	Host           string            `json:"host"`
 	User           string            `json:"user"`
@@ -573,6 +574,7 @@ func (s *Server) toJSON(i workspace.Info) branchJSON {
 	b := branchJSON{
 		Name:           i.Name,
 		State:          i.State,
+		EngineState:    i.EngineState,
 		Port:           i.Port,
 		Host:           s.domain,
 		User:           s.user + "@" + i.Name,
