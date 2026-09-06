@@ -185,3 +185,35 @@ func (b *Backend) UsedBytes(ctx context.Context, vol storage.Volume) (int64, err
 	}
 	return strconv.ParseInt(out, 10, 64)
 }
+
+// LogicalBytes は volume の referenced(論理サイズ)。CoW の Private delta とは別。
+func (b *Backend) LogicalBytes(ctx context.Context, vol storage.Volume) (int64, error) {
+	out, err := b.run(ctx, "get", "-H", "-p", "-o", "value", "referenced", vol.Dataset)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseInt(out, 10, 64)
+}
+
+// PoolCapacity は zpool の alloc / size(watermark 判定用)。zpool は zfs とは
+// 別バイナリのため専用に実行する。
+func (b *Backend) PoolCapacity(ctx context.Context) (used, total int64, err error) {
+	args := []string{"list", "-Hp", "-o", "alloc,size", b.cfg.Pool}
+	var cmd *exec.Cmd
+	if b.cfg.Sudo {
+		cmd = exec.CommandContext(ctx, "sudo", append([]string{"-n", "zpool"}, args...)...)
+	} else {
+		cmd = exec.CommandContext(ctx, "zpool", args...)
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return 0, 0, fmt.Errorf("zpool list: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) != 2 {
+		return 0, 0, fmt.Errorf("unexpected zpool output: %q", string(out))
+	}
+	used, _ = strconv.ParseInt(fields[0], 10, 64)
+	total, _ = strconv.ParseInt(fields[1], 10, 64)
+	return used, total, nil
+}

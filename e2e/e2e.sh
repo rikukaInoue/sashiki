@@ -56,6 +56,7 @@ pkill -f "sashikid --config" 2>/dev/null || true
 zpool destroy $POOL 2>/dev/null || true
 rm -f "$POOL_IMG"
 rm -rf /var/lib/sashiki /var/log/sashiki /etc/sashiki
+rm -f /tmp/sashiki-hook-fixed /tmp/sashiki-action-out
 mkdir -p /var/lib/sashiki/branches /var/log/sashiki/hooks /etc/sashiki/hooks
 
 # --- 2. sashiki init (zpool/データセット/unit/config を作る) ---
@@ -232,6 +233,12 @@ SASHIKI_EVENT=closed bash "$AE" || fail "action: closed should delete"
 SASHIKI_EVENT=closed bash "$AE" || fail "action: closed should be idempotent (404 OK)"
 unset SASHIKI_API_URL SASHIKI_BRANCH
 
+log "capacity / logical size (#40)"
+curl -sf http://127.0.0.1:8080/v1/capacity | grep -q '"pool_used_ratio"' || fail "capacity should report pool ratio"
+sashiki capacity | grep -q 'pool_total_bytes' || fail "capacity CLI"
+# CoW: logical(referenced)は private(used)より大きい
+sashiki show pr-1 --json | grep -q '"logical_bytes"' || fail "should report logical size"
+
 log "provenance / metadata (#35)"
 sashiki create prov-test --owner alice --purpose review --source '{"type":"github_pr","ref":"42"}' > /dev/null || fail "create with provenance"
 sashiki show prov-test --json | grep -q '"owner":"alice"' || fail "owner should be stored"
@@ -240,6 +247,7 @@ sashiki show prov-test --json | grep -q 'github_pr' || fail "source (opaque) sho
 sashiki delete prov-test > /dev/null
 
 log "error model + retry (hook失敗→修正→retry)"
+rm -f /tmp/sashiki-hook-fixed   # VM 使い回しの残骸を排除
 # 失敗する on-create フックを置く
 cat > /etc/sashiki/hooks/on-create.sh <<'HOOK'
 #!/bin/sh
@@ -254,7 +262,7 @@ sashiki show err-test --json | grep -q '"recoverable":true' || fail "hook_failed
 # フックを直して retry
 touch /tmp/sashiki-hook-fixed
 sashiki retry err-test > /dev/null || fail "retry should succeed after fixing hook"
-sashiki show err-test | grep -q "state: running" || fail "err-test should be running after retry"
+sashiki show err-test | grep -qE "state: +running" || fail "err-test should be running after retry"
 sashiki delete err-test > /dev/null
 rm -f /etc/sashiki/hooks/on-create.sh /tmp/sashiki-hook-fixed
 

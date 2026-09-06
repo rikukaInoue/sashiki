@@ -34,9 +34,11 @@ type Listen struct {
 
 // Storage はバックエンド設定。
 type Storage struct {
-	Backend string     `yaml:"backend"` // ebs-zfs | fsx-zfs
-	Zfs     ZfsStorage `yaml:"ebs-zfs"`
-	Fsx     FsxStorage `yaml:"fsx-zfs"`
+	Backend           string     `yaml:"backend"` // ebs-zfs | fsx-zfs
+	HighWatermark     float64    `yaml:"high_watermark"`
+	CriticalWatermark float64    `yaml:"critical_watermark"`
+	Zfs               ZfsStorage `yaml:"ebs-zfs"`
+	Fsx               FsxStorage `yaml:"fsx-zfs"`
 
 	// 旧キー(v0.1 互換)。Load で新フィールドへ移す。
 	LegacyZfs *ZfsStorage `yaml:"zfs"`
