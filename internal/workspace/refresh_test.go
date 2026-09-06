@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/rikukaInoue/sashiki/internal/storage"
 )
 
 func writeRefreshScript(t *testing.T, body string) string {
@@ -31,6 +33,76 @@ func waitRefreshDone(t *testing.T) {
 
 func quiesceOK(ctx context.Context) error   { return nil }
 func quiesceBusy(ctx context.Context) error { return errors.New("mysqld still running") }
+
+// mockStorageWithBase は BasePath を提供する mock(ebszfs 相当)。
+// SnapshotBase 時点で auto.cnf が残っていたかを記録し、
+// 「削除は snapshot 取得前」の順序を検証できるようにする(#80)。
+type mockStorageWithBase struct {
+	mockStorage
+	base              string
+	autoCnfAtSnapshot bool
+}
+
+func (m *mockStorageWithBase) BasePath(ctx context.Context) (string, error) {
+	return m.base, nil
+}
+
+func (m *mockStorageWithBase) SnapshotBase(ctx context.Context, tag string) (storage.SnapshotRef, error) {
+	m.autoCnfAtSnapshot = fileExists(filepath.Join(m.base, "data", "auto.cnf"))
+	return m.mockStorage.SnapshotBase(ctx, tag)
+}
+
+// refresh は snapshot 取得前に base の auto.cnf を削除する(#80)。
+func TestRefreshRemovesAutoCnfBeforeSnapshot(t *testing.T) {
+	base := t.TempDir()
+	dataDir := filepath.Join(base, "data")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	autoCnf := filepath.Join(dataDir, "auto.cnf")
+	if err := os.WriteFile(autoCnf, []byte("[auto]\nserver-uuid=deadbeef\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st := &mockStorageWithBase{base: base}
+	m := newTestManager(t, st, &mockEngine{}, "")
+	script := writeRefreshScript(t, "exit 0")
+	if _, err := m.RefreshBaseline(context.Background(), RefreshConfig{
+		Script: script, CheckQuiesced: quiesceOK, SkipValidate: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitRefreshDone(t)
+	if RefreshLastError() != "" {
+		t.Fatalf("refresh error: %s", RefreshLastError())
+	}
+	if _, err := os.Stat(autoCnf); !os.IsNotExist(err) {
+		t.Error("auto.cnf should be removed")
+	}
+	if st.autoCnfAtSnapshot {
+		t.Error("auto.cnf must be removed before SnapshotBase (snapshot 取得前)")
+	}
+}
+
+// auto.cnf が最初から無くても refresh は成功する(削除はベストエフォートでなく
+// 冪等: 不存在はエラーにしない)。
+func TestRefreshSucceedsWhenAutoCnfAbsent(t *testing.T) {
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st := &mockStorageWithBase{base: base}
+	m := newTestManager(t, st, &mockEngine{}, "")
+	script := writeRefreshScript(t, "exit 0")
+	if _, err := m.RefreshBaseline(context.Background(), RefreshConfig{
+		Script: script, CheckQuiesced: quiesceOK, SkipValidate: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitRefreshDone(t)
+	if RefreshLastError() != "" {
+		t.Fatalf("refresh error: %s", RefreshLastError())
+	}
+}
 
 func TestRefreshSuccessRotatesBaseline(t *testing.T) {
 	m := newTestManager(t, &mockStorage{}, &mockEngine{}, "")

@@ -33,6 +33,13 @@ type Env struct {
 	AdminUser      string
 	OriginSnapshot string
 	StateDir       string
+	// provenance(仕様 11-2 / #81): core は source の中身を解釈せず、
+	// adapter が書いた値をそのまま hook へ素通しする。
+	SourceJSON             string // branch の source(opaque JSON)。空なら環境変数自体を設定しない
+	Owner                  string
+	Purpose                string
+	Profile                string
+	BaselineSchemaRevision string // origin baseline の schema_revision。空なら環境変数自体を設定しない
 }
 
 // Result はフック実行結果。
@@ -125,7 +132,18 @@ func (r *Runner) Run(ctx context.Context, event Event, env Env) (Result, error) 
 		"SASHIKI_ADMIN_USER="+env.AdminUser,
 		"SASHIKI_ORIGIN_SNAPSHOT="+env.OriginSnapshot,
 		"SASHIKI_STATE_DIR="+env.StateDir,
+		"SASHIKI_OWNER="+env.Owner,
+		"SASHIKI_PURPOSE="+env.Purpose,
+		"SASHIKI_PROFILE="+env.Profile,
 	)
+	// source_json / schema_revision は「値が無い」と「空文字」を hook 側で
+	// 区別できるように、値があるときだけ設定する(#81)。
+	if env.SourceJSON != "" {
+		cmd.Env = append(cmd.Env, "SASHIKI_SOURCE_JSON="+env.SourceJSON)
+	}
+	if env.BaselineSchemaRevision != "" {
+		cmd.Env = append(cmd.Env, "SASHIKI_BASELINE_SCHEMA_REVISION="+env.BaselineSchemaRevision)
+	}
 
 	runErr := cmd.Run()
 	res := Result{Ran: true, LogPath: logPath}

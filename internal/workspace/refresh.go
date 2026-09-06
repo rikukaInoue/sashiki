@@ -14,6 +14,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -131,6 +132,12 @@ func (m *Manager) runRefresh(ctx context.Context, rc RefreshConfig, tag string) 
 		}
 		log.Printf("baseline refresh: leftover mysqld was terminated before snapshot")
 	}
+	// server_uuid の重複対策(#80 / 仕様 12-3): mysqld 正常終了の確認後・
+	// snapshot 取得前に auto.cnf を削除する。quiesce 検証と同じく、
+	// 失敗したら snapshot は取得しない(不完全な baseline を publish しない)。
+	if err := m.removeBaseAutoCnf(ctx); err != nil {
+		return fmt.Errorf("auto.cnf removal failed (snapshot aborted): %w", err)
+	}
 	// --- build: script が投入/マスク/migration/正常終了を済ませた candidate を snapshot ---
 	snap, err := m.st.SnapshotBase(ctx, tag)
 	if err != nil {
@@ -224,6 +231,28 @@ func (m *Manager) validateCandidate(ctx context.Context, snap storage.SnapshotRe
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
+}
+
+// removeBaseAutoCnf は base datadir の auto.cnf を snapshot 取得前に削除する。
+// datadir をクローンすると auto.cnf の server_uuid まで複製され、全ブランチが
+// 同一 UUID になる。削除しておけば各ブランチの初回起動時に mysqld が固有の
+// UUID を再生成する(#80)。mysqld の正常終了(quiesce 検証)後にのみ呼ぶこと。
+// 削除には base datadir への書き込み権限(root 相当)が必要。
+// BasePath を提供しないバックエンド(fsx)ではスキップ。
+func (m *Manager) removeBaseAutoCnf(ctx context.Context) error {
+	bp, ok := m.st.(basePathProvider)
+	if !ok {
+		return nil
+	}
+	path, err := bp.BasePath(ctx)
+	if err != nil || path == "" {
+		return nil
+	}
+	autoCnf := filepath.Join(path, "data", "auto.cnf")
+	if err := os.Remove(autoCnf); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove %s: %w", autoCnf, err)
+	}
+	return nil
 }
 
 // defaultQuiesceCheck は base の datadir を引数に持つプロセスが残っていないか

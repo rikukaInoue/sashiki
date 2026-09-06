@@ -110,6 +110,10 @@ sashiki create pr-2
 q 3401 "DELETE FROM app.items; DROP TABLE app.items" || fail "break pr-1"
 [ "$(q 3402 'SELECT COUNT(*) FROM app.items')" = "3" ] || fail "pr-2 must be isolated"
 
+log "server_uuid must differ (#80: auto.cnf は baseline に含めない)"
+uuid1=$(q 3401 'SELECT @@server_uuid'); uuid2=$(q 3402 'SELECT @@server_uuid')
+[ -n "$uuid1" ] && [ "$uuid1" != "$uuid2" ] || fail "server_uuid duplicated: pr-1=$uuid1 pr-2=$uuid2"
+
 log "reset pr-1"
 time sashiki reset pr-1
 [ "$(q 3401 'SELECT COUNT(*) FROM app.items')" = "3" ] || fail "reset should restore 3 items"

@@ -49,6 +49,56 @@ func TestRunPassesEnvAndLogs(t *testing.T) {
 	}
 }
 
+// provenance(#81)が環境変数として素通しされること。
+func TestRunPassesProvenanceEnv(t *testing.T) {
+	dir, logDir := t.TempDir(), t.TempDir()
+	writeScript(t, dir, "on-create.sh",
+		"#!/bin/sh\necho \"source=${SASHIKI_SOURCE_JSON-unset} owner=$SASHIKI_OWNER purpose=$SASHIKI_PURPOSE profile=$SASHIKI_PROFILE rev=${SASHIKI_BASELINE_SCHEMA_REVISION-unset}\"\n")
+	r := NewRunner(dir, logDir, time.Minute)
+
+	res, err := r.Run(context.Background(), OnCreate, Env{
+		Branch:                 "pr-1",
+		SourceJSON:             `{"type":"github_pr","ref":"42"}`,
+		Owner:                  "alice",
+		Purpose:                "review",
+		Profile:                "preview",
+		BaselineSchemaRevision: "20260905_042",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	log, err := os.ReadFile(res.LogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.TrimSpace(string(log))
+	want := `source={"type":"github_pr","ref":"42"} owner=alice purpose=review profile=preview rev=20260905_042`
+	if got != want {
+		t.Errorf("log = %q, want %q", got, want)
+	}
+}
+
+// source_json / schema_revision が空のときは環境変数自体が未設定であること。
+func TestRunOmitsEmptySourceJSONAndSchemaRevision(t *testing.T) {
+	dir, logDir := t.TempDir(), t.TempDir()
+	writeScript(t, dir, "on-create.sh",
+		"#!/bin/sh\necho \"source=${SASHIKI_SOURCE_JSON-unset} rev=${SASHIKI_BASELINE_SCHEMA_REVISION-unset}\"\n")
+	r := NewRunner(dir, logDir, time.Minute)
+
+	res, err := r.Run(context.Background(), OnCreate, Env{Branch: "pr-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	log, err := os.ReadFile(res.LogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.TrimSpace(string(log))
+	if got != "source=unset rev=unset" {
+		t.Errorf("log = %q, want unset markers", got)
+	}
+}
+
 func TestRunNonZeroExit(t *testing.T) {
 	dir := t.TempDir()
 	writeScript(t, dir, "on-create", "#!/bin/sh\nexit 3\n") // 拡張子なしでも拾う
