@@ -101,6 +101,11 @@ func New(mgr *workspace.Manager, domain, engineType, proxyUser, proxyPass, token
 	s.mux.HandleFunc("GET /v1/baselines", s.handleListBaselines)
 	s.mux.HandleFunc("POST /v1/baseline/set", s.handleSetBaseline)
 	s.mux.HandleFunc("POST /v1/baseline/gc", s.handleGCBaselines)
+	// 段階 API(#84): build → validate → publish → delete。refresh(一括)は互換維持。
+	s.mux.HandleFunc("POST /v1/baseline/build", s.handleBaselineBuild)
+	s.mux.HandleFunc("POST /v1/baseline/validate", s.handleBaselineValidate)
+	s.mux.HandleFunc("POST /v1/baseline/publish", s.handleSetBaseline) // publish == set(policy 検査つき)
+	s.mux.HandleFunc("POST /v1/baseline/delete", s.handleBaselineDelete)
 	s.mux.HandleFunc("GET /v1/capacity", s.handleCapacity)
 	s.mux.HandleFunc("GET /v1/doctor", s.handleDoctor)
 	s.mux.HandleFunc("POST /v1/gc/orphans", s.handleGCOrphans)
@@ -204,6 +209,62 @@ func (s *Server) handleListBaselines(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"baselines": out})
+}
+
+// handleBaselineBuild は build 段階を非同期実行し、202 + {operation_id, tag, snapshot} を返す(#84)。
+func (s *Server) handleBaselineBuild(w http.ResponseWriter, r *http.Request) {
+	tag, snap := s.mgr.PrepareBuild()
+	body := map[string]any{"tag": tag, "snapshot": snap}
+	if s.ops == nil {
+		if _, err := s.mgr.BuildBaseline(r.Context(), tag); err != nil {
+			s.writeError(w, err)
+			return
+		}
+		body["operation_id"] = ""
+		writeJSON(w, http.StatusAccepted, body)
+		return
+	}
+	opID, err := s.ops.Start("baseline-build", tag, func(ctx context.Context) error {
+		_, e := s.mgr.BuildBaseline(ctx, tag)
+		return e
+	})
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	setOpID(w, opID)
+	body["operation_id"] = opID
+	writeJSON(w, http.StatusAccepted, body)
+}
+
+// handleBaselineValidate は candidate を検証する(非同期、#84)。body {snapshot}。
+func (s *Server) handleBaselineValidate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Snapshot string `json:"snapshot"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Snapshot == "" {
+		writeErr(w, http.StatusBadRequest, "invalid_name", "body must be {\"snapshot\": \"...\"}")
+		return
+	}
+	s.accepted(w, "baseline-validate", req.Snapshot, func(ctx context.Context) error {
+		return s.mgr.ValidateBaseline(ctx, req.Snapshot)
+	})
+}
+
+// handleBaselineDelete は candidate を削除する(#84)。current・参照中は 412。body {snapshot}。
+func (s *Server) handleBaselineDelete(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Snapshot string `json:"snapshot"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Snapshot == "" {
+		writeErr(w, http.StatusBadRequest, "invalid_name", "body must be {\"snapshot\": \"...\"}")
+		return
+	}
+	if err := s.mgr.DeleteBaseline(r.Context(), req.Snapshot); err != nil {
+		s.writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"deleted": req.Snapshot})
 }
 
 func (s *Server) handleSetBaseline(w http.ResponseWriter, r *http.Request) {

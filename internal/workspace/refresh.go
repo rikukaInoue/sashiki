@@ -73,9 +73,9 @@ func RefreshLastError() string {
 	return ""
 }
 
-// RefreshBaseline は refresh を非同期で開始する(API は 202 を返す)。
-// tag には baseline-YYYYMMDDHHMMSS を使う。
-func (m *Manager) RefreshBaseline(ctx context.Context, rc RefreshConfig) (tag string, err error) {
+// resolveRefreshConfig は RefreshConfig の未設定フィールドを Manager 既定で埋める
+// (refresh 一括 / build / validate 共通)。
+func (m *Manager) resolveRefreshConfig(rc RefreshConfig) RefreshConfig {
 	if rc.Script == "" {
 		rc.Script = m.baselinePolicy.Script
 	}
@@ -94,7 +94,6 @@ func (m *Manager) RefreshBaseline(ctx context.Context, rc RefreshConfig) (tag st
 	if rc.SourceDB == "" {
 		rc.SourceDB = m.baselinePolicy.SourceDB
 	}
-	// ポリシー未指定なら Manager 既定を使う。
 	if !rc.RequireMasked && m.baselinePolicy.RequireMasked {
 		rc.RequireMasked = true
 	}
@@ -107,26 +106,47 @@ func (m *Manager) RefreshBaseline(ctx context.Context, rc RefreshConfig) (tag st
 	if rc.MaskedSentinel == "" {
 		rc.MaskedSentinel = m.baselinePolicy.MaskedSentinel
 	}
-	// SourceDir モード判定: script が無く source_dir がある場合は組み込みローダー。
-	useLoader := rc.RunSource != nil
-	if !useLoader && rc.SourceDir != "" {
+	// SourceDir モード判定: script が無く source_dir があれば組み込みローダー(#101)。
+	// 実在チェック(script も source_dir も無い)は呼び出し側で行う。
+	rc.useLoader = rc.RunSource != nil
+	if !rc.useLoader && rc.SourceDir != "" {
 		if _, err := os.Stat(rc.Script); err != nil {
-			useLoader = true
+			rc.useLoader = true
 		}
 	}
-	if !useLoader {
-		if _, err := os.Stat(rc.Script); err != nil {
-			return "", fmt.Errorf("refresh script %s(source_dir も未設定): %w", rc.Script, err)
-		}
-	}
-	rc.useLoader = useLoader
 	if rc.CheckQuiesced == nil {
 		rc.CheckQuiesced = m.defaultQuiesceCheck
+	}
+	return rc
+}
+
+// newBaselineTag は baseline-YYYYMMDDTHHMMSSZ 形式のタグを返す。
+func newBaselineTag() string {
+	return "baseline-" + time.Now().UTC().Format("20060102T150405Z")
+}
+
+// baseSnapshotRef は tag に対応する base の snapshot 完全修飾名を返す
+// (current の "@" 手前を base dataset とみなす)。build の応答に使う。
+func (m *Manager) baseSnapshotRef(tag string) string {
+	cur := string(m.currentBaseline())
+	if i := strings.LastIndex(cur, "@"); i >= 0 {
+		return cur[:i+1] + tag
+	}
+	return tag
+}
+
+// RefreshBaseline は refresh(build→validate→publish 一括)を非同期で開始する。
+func (m *Manager) RefreshBaseline(ctx context.Context, rc RefreshConfig) (tag string, err error) {
+	rc = m.resolveRefreshConfig(rc)
+	if !rc.useLoader { // source loader モードでは script は不要(#101)
+		if _, err := os.Stat(rc.Script); err != nil {
+			return "", fmt.Errorf("refresh script %s: %w", rc.Script, err)
+		}
 	}
 	if !refreshRunning.CompareAndSwap(false, true) {
 		return "", ErrRefreshRunning
 	}
-	tag = "baseline-" + time.Now().UTC().Format("20060102T150405Z")
+	tag = newBaselineTag()
 
 	go func() {
 		defer refreshRunning.Store(false)
@@ -142,19 +162,22 @@ func (m *Manager) RefreshBaseline(ctx context.Context, rc RefreshConfig) (tag st
 	return tag, nil
 }
 
-func (m *Manager) runRefresh(ctx context.Context, rc RefreshConfig, tag string) error {
+// buildCandidate は source loader(#101)または refresh script を実行し、正常終了・
+// quiesce・auto.cnf 削除を確認してから base の snapshot を取得し candidate として
+// 登録する(#84 build 段階)。返り値は candidate の snapshot と masked フラグ。
+func (m *Manager) buildCandidate(ctx context.Context, rc RefreshConfig, tag string) (storage.SnapshotRef, bool, error) {
 	if rc.useLoader {
 		if err := m.runSourceLoader(ctx, rc); err != nil {
 			// ローダー失敗時も mysqld が残っていれば回収を試みる(自己修復)
 			if qerr := rc.CheckQuiesced(ctx); qerr != nil {
 				m.reclaimBase(ctx)
 			}
-			return fmt.Errorf("source loader: %w", err)
+			return "", false, fmt.Errorf("source loader: %w", err)
 		}
 	} else {
 		cmd := exec.CommandContext(ctx, rc.Script)
 		cmd.Env = append(os.Environ(),
-			"SASHIKI_EVENT=baseline-refresh",
+			"SASHIKI_EVENT=baseline-build",
 			"SASHIKI_BASELINE_TAG="+tag,
 		)
 		out, scriptErr := cmd.CombinedOutput()
@@ -163,46 +186,45 @@ func (m *Manager) runRefresh(ctx context.Context, rc RefreshConfig, tag string) 
 			if qerr := rc.CheckQuiesced(ctx); qerr != nil {
 				m.reclaimBase(ctx)
 			}
-			return fmt.Errorf("script failed: %w: %s", scriptErr, tail(out, 500))
+			return "", false, fmt.Errorf("script failed: %w: %s", scriptErr, tail(out, 500))
 		}
 	}
 	// exit 0 でも信用せず、snapshot 取得前に quiesce を検証する
 	if err := rc.CheckQuiesced(ctx); err != nil {
 		m.reclaimBase(ctx)
 		if err2 := rc.CheckQuiesced(ctx); err2 != nil {
-			return fmt.Errorf("base is not quiesced after script (snapshot aborted): %w", err2)
+			return "", false, fmt.Errorf("base is not quiesced after script (snapshot aborted): %w", err2)
 		}
-		log.Printf("baseline refresh: leftover mysqld was terminated before snapshot")
+		log.Printf("baseline build: leftover mysqld was terminated before snapshot")
 	}
-	// server_uuid の重複対策(#80 / 仕様 12-3): mysqld 正常終了の確認後・
-	// snapshot 取得前に auto.cnf を削除する。quiesce 検証と同じく、
-	// 失敗したら snapshot は取得しない(不完全な baseline を publish しない)。
+	// server_uuid の重複対策(#80 / 仕様 12-3): 正常終了確認後・snapshot 前に auto.cnf 削除。
 	if err := m.removeBaseAutoCnf(ctx); err != nil {
-		return fmt.Errorf("auto.cnf removal failed (snapshot aborted): %w", err)
+		return "", false, fmt.Errorf("auto.cnf removal failed (snapshot aborted): %w", err)
 	}
-	// --- build: script が投入/マスク/migration/正常終了を済ませた candidate を snapshot ---
 	snap, err := m.st.SnapshotBase(ctx, tag)
 	if err != nil {
-		return fmt.Errorf("snapshot: %w", err)
+		return "", false, fmt.Errorf("snapshot: %w", err)
 	}
 	masked := rc.MaskedSentinel != "" && fileExists(rc.MaskedSentinel)
-	prov := state.BaselineProvenance{DataAsOf: tag, Masked: masked}
-	if err := m.db.RegisterBaseline(string(snap), prov); err != nil {
-		return fmt.Errorf("register candidate: %w", err)
+	if err := m.db.RegisterBaseline(string(snap), state.BaselineProvenance{DataAsOf: tag, Masked: masked}); err != nil {
+		return "", false, fmt.Errorf("register candidate: %w", err)
 	}
+	return snap, masked, nil
+}
 
-	// --- validate: candidate を一時 branch で起動して検証 → 破棄 ---
+func (m *Manager) runRefresh(ctx context.Context, rc RefreshConfig, tag string) error {
+	snap, masked, err := m.buildCandidate(ctx, rc, tag)
+	if err != nil {
+		return err
+	}
 	validated := false
 	if !rc.SkipValidate {
 		if err := m.validateCandidate(ctx, snap, rc); err != nil {
 			return fmt.Errorf("validate: %w (candidate %s は publish しない)", err, snap)
 		}
 		validated = true
-		prov.Validated = true
-		_ = m.db.RegisterBaseline(string(snap), prov)
+		_ = m.db.RegisterBaseline(string(snap), state.BaselineProvenance{DataAsOf: tag, Masked: masked, Validated: true})
 	}
-
-	// --- publish: ポリシーを満たせば current pointer を candidate へ ---
 	if rc.RequireMasked && !masked {
 		return fmt.Errorf("publish rejected: baseline is not masked (require_masked)")
 	}
@@ -217,6 +239,48 @@ func (m *Manager) runRefresh(ctx context.Context, rc RefreshConfig, tag string) 
 	}
 	log.Printf("baseline refresh: published %s (masked=%v validated=%v)", snap, masked, validated)
 	return nil
+}
+
+// PrepareBuild は build 用の tag と、その candidate が取得される snapshot 完全修飾名を
+// 事前に返す(#84)。API は build を非同期実行しつつ応答でこの値を返す。
+func (m *Manager) PrepareBuild() (tag, snapshot string) {
+	tag = newBaselineTag()
+	return tag, m.baseSnapshotRef(tag)
+}
+
+// BuildBaseline は build 段階だけを実行し candidate を作る(#84)。tag が空なら自動生成。
+// refresh と排他(refreshRunning)。API はこれを ops で非同期実行し、応答に snapshot を返す。
+func (m *Manager) BuildBaseline(ctx context.Context, tag string) (storage.SnapshotRef, error) {
+	rc := m.resolveRefreshConfig(RefreshConfig{})
+	if !rc.useLoader { // source loader モードでは script は不要(#101)
+		if _, err := os.Stat(rc.Script); err != nil {
+			return "", fmt.Errorf("refresh script %s: %w", rc.Script, err)
+		}
+	}
+	if tag == "" {
+		tag = newBaselineTag()
+	}
+	if !refreshRunning.CompareAndSwap(false, true) {
+		return "", ErrRefreshRunning
+	}
+	defer refreshRunning.Store(false)
+	snap, _, err := m.buildCandidate(ctx, rc, tag)
+	return snap, err
+}
+
+// ValidateBaseline は candidate を一時 branch で起動して検証し、validated=true にする(#84)。
+func (m *Manager) ValidateBaseline(ctx context.Context, snapshot string) error {
+	b, err := m.db.GetBaseline(snapshot)
+	if err != nil {
+		return fmt.Errorf("%w: %s", ErrBaselineNotFound, snapshot)
+	}
+	rc := m.resolveRefreshConfig(RefreshConfig{})
+	if err := m.validateCandidate(ctx, storage.SnapshotRef(snapshot), rc); err != nil {
+		return fmt.Errorf("validate: %w", err)
+	}
+	prov := b.Prov
+	prov.Validated = true
+	return m.db.RegisterBaseline(snapshot, prov)
 }
 
 // validateCandidate は candidate snapshot を一時 branch で起動し、

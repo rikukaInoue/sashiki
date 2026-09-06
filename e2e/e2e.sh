@@ -229,6 +229,23 @@ sashiki baseline gc --keep-last 5 > /dev/null || fail "baseline gc"
 # current baseline はまだ存在
 sashiki baseline list | grep -q '\*' || fail "current baseline should remain after gc"
 
+log "baseline 段階 API: build → validate → publish → delete (#84)"
+# 検証後に元の current へ戻す(後続テストは current baseline の行数に依存するため)
+prev=$(curl -sf http://127.0.0.1:8080/v1/baseline | python3 -c 'import json,sys;print(json.load(sys.stdin)["current"])')
+snap=$(sashiki baseline build | sed -n 's/^baseline built: //p')
+[ -n "$snap" ] || { sashiki baseline build; fail "baseline build should return a candidate snapshot"; }
+sashiki baseline validate "$snap" > /dev/null || fail "baseline validate"
+sashiki baseline publish "$snap" > /dev/null || fail "baseline publish"
+# publish 後、その snapshot が current(*)であること
+sashiki baseline list | grep -F "$snap" | grep -q '\*' || { sashiki baseline list; fail "published baseline should be current"; }
+# current の delete は 412 で拒否
+sashiki baseline delete "$snap" 2>/dev/null && fail "deleting the current baseline should be rejected"
+# 元の current へ戻す
+sashiki baseline publish "$prev" > /dev/null || fail "restore previous current baseline"
+# 未 publish の candidate($snap)を delete できること
+sashiki baseline delete "$snap" > /dev/null || fail "should delete an unpublished candidate"
+grep -qF "$snap" <<<"$(sashiki baseline list)" && fail "deleted candidate should be gone"
+
 log "recreate (最新baselineから作り直し)"
 # refresh 済みなので current は新baseline(4行)。既存 pr-1 は旧(3行)
 val=$(mysql -udev@pr-1 -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.items" 2>/dev/null)
