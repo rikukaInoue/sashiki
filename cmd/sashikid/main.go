@@ -132,6 +132,7 @@ func main() {
 		LazyMaxWait:         cfg.Branches.LazyCreateMaxWait,
 		IdleStopAfter:       cfg.Branches.IdleStopAfter,
 		DeleteAfterIdle:     cfg.Branches.DeleteAfterIdle,
+		OperationRetention:  cfg.Branches.OperationRetention,
 		Profiles:            profilePolicies(cfg.Branches.Profiles),
 		DefaultProfile:      cfg.Branches.DefaultProfile,
 		AvailableMem:        availableMem,

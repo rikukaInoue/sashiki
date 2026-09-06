@@ -21,6 +21,7 @@ const (
 	exitUsage    = 2
 	exitNotFound = 3
 	exitExists   = 4
+	exitTimeout  = 5 // op wait のタイムアウト(operation 失敗とは区別する, #83)
 )
 
 var version = "dev" // -ldflags で埋め込む

@@ -315,6 +315,10 @@ curl -sf "http://127.0.0.1:8080/v1/operations/$opid" | grep -q '"target":"op-tes
   || fail "operation should be queryable by id"
 curl -sf "http://127.0.0.1:8080/v1/operations/$opid" | grep -q '"type":"create"' \
   || fail "operation type should be create"
+# op wait の --timeout フラグ(#83)。create は完了済みなので即 0 で返る
+sashiki op wait "$opid" --timeout 30s --interval 100ms > /dev/null || fail "op wait --timeout should succeed for a finished op"
+# 不正な timeout 書式は usage エラー(exit 2)
+sashiki op wait "$opid" --timeout nonsense 2>/dev/null && fail "op wait should reject a bad --timeout"
 sashiki delete op-test > /dev/null
 
 log "reconciliation + doctor (#42)"

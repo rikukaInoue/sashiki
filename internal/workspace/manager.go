@@ -67,6 +67,10 @@ type Config struct {
 	IdleStopAfter   time.Duration // 0 = アイドル停止しない
 	DeleteAfterIdle time.Duration // 0 = 自動削除しない
 
+	// OperationRetention: 完了/失敗した operation を finished 後この期間で削除する
+	// (operations テーブルの無限成長を防ぐ、#83)。0 = 削除しない。
+	OperationRetention time.Duration
+
 	// profile(仕様 11-3): 名前 → idle lifecycle。branch は create 時に
 	// profile を1つ持ち、reaper はその profile の閾値を使う。空なら全 branch が
 	// global(上の IdleStopAfter/DeleteAfterIdle)を使う。

@@ -107,13 +107,14 @@ type Proxy struct {
 
 // Branches はブランチのポリシー。
 type Branches struct {
-	NamePattern       string        `yaml:"name_pattern"`
-	MaxBranches       int           `yaml:"max_branches"`
-	LazyCreate        bool          `yaml:"lazy_create"`
-	LazyCreateMaxWait time.Duration `yaml:"lazy_create_max_wait"`
-	IdleStopAfter     time.Duration `yaml:"idle_stop_after"`
-	DeleteAfterIdle   time.Duration `yaml:"delete_after_idle"`
-	ReaperInterval    time.Duration `yaml:"reaper_interval"`
+	NamePattern        string        `yaml:"name_pattern"`
+	MaxBranches        int           `yaml:"max_branches"`
+	LazyCreate         bool          `yaml:"lazy_create"`
+	LazyCreateMaxWait  time.Duration `yaml:"lazy_create_max_wait"`
+	IdleStopAfter      time.Duration `yaml:"idle_stop_after"`
+	DeleteAfterIdle    time.Duration `yaml:"delete_after_idle"`
+	ReaperInterval     time.Duration `yaml:"reaper_interval"`
+	OperationRetention time.Duration `yaml:"operation_retention"` // 完了 operation の保持期間(#83)。0=無期限
 
 	// profile: 用途ごとに idle lifecycle を変える(仕様 11-3)。
 	// branch は create 時に profile を1つ持ち、reaper はその profile の
@@ -186,13 +187,15 @@ func Default() Config {
 		},
 		Proxy: Proxy{MaxConnPerBranch: 50},
 		Branches: Branches{
-			NamePattern:       `^[a-z0-9-]{1,32}$`,
-			MaxBranches:       50,
-			LazyCreate:        true,
-			LazyCreateMaxWait: 20 * time.Second,
-			IdleStopAfter:     30 * time.Minute,
-			DeleteAfterIdle:   168 * time.Hour,
-			ReaperInterval:    time.Minute,
+			NamePattern:        `^[a-z0-9-]{1,32}$`,
+			MaxBranches:        50,
+			LazyCreate:         true,
+			LazyCreateMaxWait:  20 * time.Second,
+			IdleStopAfter:      30 * time.Minute,
+			DeleteAfterIdle:    168 * time.Hour,
+			ReaperInterval:     time.Minute,
+			OperationRetention: 168 * time.Hour, // 7日
+
 			Profiles: map[string]ProfilePolicy{
 				"preview": {IdleStopAfter: 30 * time.Minute, DeleteAfterIdle: 168 * time.Hour},
 				"ci":      {IdleStopAfter: 5 * time.Minute, DeleteAfterIdle: time.Hour},

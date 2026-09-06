@@ -530,12 +530,13 @@ type opJSON struct {
 	StartedAt  string  `json:"started_at"`
 	FinishedAt *string `json:"finished_at,omitempty"`
 	Error      string  `json:"error,omitempty"`
+	ErrorCode  string  `json:"error_code,omitempty"`
 }
 
 func toOpJSON(o state.Operation) opJSON {
 	j := opJSON{
 		ID: o.ID, Type: o.Type, Target: o.Target, State: o.State,
-		StartedAt: o.StartedAt.UTC().Format(time.RFC3339), Error: o.Error,
+		StartedAt: o.StartedAt.UTC().Format(time.RFC3339), Error: o.Error, ErrorCode: o.ErrorCode,
 	}
 	if o.FinishedAt != nil {
 		f := o.FinishedAt.UTC().Format(time.RFC3339)
