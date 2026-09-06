@@ -236,6 +236,7 @@ func parseFlagsKV(args []string) (pos []string, port int, jsonOut bool, kv map[s
 }
 
 func cmdCreate(args []string) int {
+	args, noWait, timeout, interval := extractWaitFlags(args)
 	pos, port, jsonOut, kv, err := parseFlagsKV(args)
 	if err != nil || len(pos) != 1 {
 		return usage()
@@ -254,10 +255,27 @@ func cmdCreate(args []string) int {
 		fmt.Fprintln(os.Stderr, "sashiki:", err)
 		return exitError
 	}
-	if code != http.StatusCreated && code != http.StatusOK {
+	switch code {
+	case http.StatusOK: // exist_ok で既存 → branch がそのまま返る
+		return printCreatedBranch(data, jsonOut)
+	case http.StatusAccepted: // 非同期。既定で完了を待ってから branch を取得して表示
+		done, exit := awaitMutation(data, noWait, timeout, interval)
+		if !done {
+			return exit
+		}
+		bcode, bdata, berr := call("GET", "/v1/branches/"+pos[0], nil)
+		if berr != nil || bcode != http.StatusOK {
+			fmt.Printf("branch '%s' ready\n", pos[0])
+			return exitOK
+		}
+		return printCreatedBranch(bdata, jsonOut)
+	default:
 		fmt.Fprintln(os.Stderr, "sashiki:", apiError(data))
 		return statusToExit(code)
 	}
+}
+
+func printCreatedBranch(data []byte, jsonOut bool) int {
 	if jsonOut {
 		fmt.Println(string(data))
 		return exitOK
@@ -269,19 +287,25 @@ func cmdCreate(args []string) int {
 }
 
 func cmdDelete(args []string) int {
+	args, noWait, timeout, interval := extractWaitFlags(args)
 	if len(args) != 1 {
 		return usage()
 	}
-	code, data, err := call("DELETE", "/v1/branches/"+args[0], nil)
+	name := args[0]
+	code, data, err := call("DELETE", "/v1/branches/"+name, nil)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sashiki:", err)
 		return exitError
 	}
-	if code != http.StatusNoContent {
+	if code != http.StatusAccepted {
 		fmt.Fprintln(os.Stderr, "sashiki:", apiError(data))
 		return statusToExit(code)
 	}
-	fmt.Printf("branch '%s' deleted\n", args[0])
+	done, exit := awaitMutation(data, noWait, timeout, interval)
+	if !done {
+		return exit
+	}
+	fmt.Printf("branch '%s' deleted\n", name)
 	return exitOK
 }
 
@@ -337,6 +361,7 @@ func cmdLease(args []string) int {
 }
 
 func cmdSimpleBranch(args []string, action string) int {
+	args, noWait, timeout, interval := extractWaitFlags(args)
 	pos, _, jsonOut, err := parseFlags(args)
 	if err != nil || len(pos) != 1 {
 		return usage()
@@ -346,12 +371,18 @@ func cmdSimpleBranch(args []string, action string) int {
 		fmt.Fprintln(os.Stderr, "sashiki:", err)
 		return exitError
 	}
-	if code != http.StatusOK {
+	if code != http.StatusAccepted {
 		fmt.Fprintln(os.Stderr, "sashiki:", apiError(data))
 		return statusToExit(code)
 	}
+	done, exit := awaitMutation(data, noWait, timeout, interval)
+	if !done {
+		return exit
+	}
 	if jsonOut {
-		fmt.Println(string(data))
+		if _, bdata, e := call("GET", "/v1/branches/"+pos[0], nil); e == nil {
+			fmt.Println(string(bdata))
+		}
 	} else {
 		fmt.Printf("branch '%s' %s\n", pos[0], action)
 	}

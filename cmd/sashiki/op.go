@@ -38,7 +38,7 @@ func usageOp() int {
 }
 
 type opView struct {
-	ID         string  `json:"id"`
+	ID         string  `json:"operation_id"`
 	Type       string  `json:"type"`
 	Target     string  `json:"target"`
 	State      string  `json:"state"`

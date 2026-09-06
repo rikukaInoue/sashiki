@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -67,8 +68,17 @@ func (r *Runner) Start(typ, target string, fn func(ctx context.Context) error) (
 	go func() {
 		// operation はリクエストのライフサイクルから切り離す(fsx は数分かかる)。
 		ctx := context.Background()
+		var runErr error
+		// 非同期 op 内の panic でデーモンを落とさない(#53/#82)。
+		func() {
+			defer func() {
+				if p := recover(); p != nil {
+					runErr = fmt.Errorf("panic: %v", p)
+				}
+			}()
+			runErr = fn(ctx)
+		}()
 		errMsg := ""
-		runErr := fn(ctx)
 		if runErr != nil {
 			errMsg = runErr.Error()
 		}

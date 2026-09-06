@@ -43,6 +43,25 @@ emit() {
   echo "  $1: $2"
 }
 
+# 応答($RESP)から JSON フィールドを読む
+resp_field() { RESP="$RESP" python3 -c "import json,os;print(json.load(open(os.environ['RESP'])).get('$1',''))"; }
+
+# poll_op <operation_id>: operation が completed になれば 0、failed/timeout で 1。
+# 変更操作は 202 + operation_id を返す(#82)。fsx-zfs では数分かかる。
+poll_op() {
+  local id=$1 i state
+  for i in $(seq 1 1200); do  # 最大 ~10 分(1200 * 0.5s)
+    api GET "/v1/operations/${id}" >/dev/null || true
+    state=$(resp_field state)
+    case "$state" in
+      completed) return 0 ;;
+      failed)    echo "sashiki: operation failed: $(resp_field error)" >&2; return 1 ;;
+    esac
+    sleep 0.5
+  done
+  echo "sashiki: operation ${id} timed out" >&2; return 1
+}
+
 # create の body を組み立てる。source は JSON として埋め込むため python で安全に構築する
 build_body() {
   python3 - <<'PY'
@@ -75,7 +94,11 @@ case "$SASHIKI_EVENT" in
     fi
     code=$(api DELETE "/v1/branches/${SASHIKI_BRANCH}")
     case "$code" in
-      204) echo "sashiki: branch '${SASHIKI_BRANCH}' deleted" ;;
+      202)  # 非同期削除。operation の完了を待つ
+        opid=$(resp_field operation_id)
+        poll_op "$opid" || exit 1
+        echo "sashiki: branch '${SASHIKI_BRANCH}' deleted"
+        ;;
       404) echo "sashiki: branch '${SASHIKI_BRANCH}' not found (already deleted)" ;;  # 冪等
       *)   echo "sashiki: delete failed (HTTP $code)"; cat "$RESP"; exit 1 ;;
     esac
@@ -88,13 +111,19 @@ case "$SASHIKI_EVENT" in
     body=$(build_body) || exit 1
     code=$(api POST "/v1/branches?exist_ok=true" "$body")
     case "$code" in
-      201) created=true ;;
-      200) created=false ;;
+      200) created=false ;;  # exist_ok で既存。$RESP に branch がそのまま入る
+      202)                    # 新規作成(非同期)。operation を待って branch を取得
+        created=true
+        opid=$(resp_field operation_id)
+        poll_op "$opid" || { echo "sashiki: create failed"; exit 1; }
+        code=$(api GET "/v1/branches/${SASHIKI_BRANCH}")
+        [ "$code" = "200" ] || { echo "sashiki: fetch branch failed (HTTP $code)"; cat "$RESP"; exit 1; }
+        ;;
       *)   echo "sashiki: create failed (HTTP $code)"; cat "$RESP"; exit 1 ;;
     esac
-    host=$(RESP="$RESP" python3 -c 'import json,os;print(json.load(open(os.environ["RESP"]))["host"])')
-    port=$(RESP="$RESP" python3 -c 'import json,os;print(json.load(open(os.environ["RESP"]))["port"])')
-    user=$(RESP="$RESP" python3 -c 'import json,os;print(json.load(open(os.environ["RESP"]))["user"])')
+    host=$(resp_field host)
+    port=$(resp_field port)
+    user=$(resp_field user)
     echo "sashiki: branch '${SASHIKI_BRANCH}' ready (created=${created})"
     emit host "$host"
     emit port "$port"

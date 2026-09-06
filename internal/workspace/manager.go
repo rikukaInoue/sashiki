@@ -227,6 +227,9 @@ func (m *Manager) Create(ctx context.Context, name string, port int) (Info, erro
 	return m.CreateWithMeta(ctx, name, port, state.Meta{})
 }
 
+// ValidName は branch 名が name_pattern に合致するかを返す(API の同期事前検証用)。
+func (m *Manager) ValidName(name string) bool { return m.nameRe.MatchString(name) }
+
 // CreateWithMeta は provenance 付きで branch を作成する(仕様 11-2)。
 func (m *Manager) CreateWithMeta(ctx context.Context, name string, port int, meta state.Meta) (Info, error) {
 	if !m.nameRe.MatchString(name) {

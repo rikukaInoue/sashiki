@@ -50,12 +50,34 @@ func (s *Server) SetOps(r *ops.Runner) {
 }
 
 // track は typ/target の operation を記録しつつ fn を同期実行する。
-// operation_id を返す(ops 未配線なら空)。
+// operation_id を返す(ops 未配線なら空)。同期のまま残す操作(wake 等)で使う。
 func (s *Server) track(typ, target string, fn func() error) (string, error) {
 	if s.ops == nil {
 		return "", fn()
 	}
 	return s.ops.RunSync(typ, target, func(context.Context) error { return fn() })
+}
+
+// accepted は変更操作を非同期 operation として開始し、202 + operation_id を返す
+// (仕様 17章 / #82)。fsx-zfs で数分かかる操作でも HTTP を待たせない。CLI は
+// 既定で --wait し、operation の完了をポーリングして結果を取得する。
+// ops 未配線(テスト等)のときは同期実行して 202 を返す。
+func (s *Server) accepted(w http.ResponseWriter, typ, target string, fn func(context.Context) error) {
+	if s.ops == nil {
+		if err := fn(context.Background()); err != nil {
+			s.writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{"operation_id": "", "status": "accepted"})
+		return
+	}
+	opID, err := s.ops.Start(typ, target, fn)
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	setOpID(w, opID)
+	writeJSON(w, http.StatusAccepted, map[string]any{"operation_id": opID, "status": "accepted"})
 }
 
 // New は Server を作る。tokens は nil 可(env トークンのみ)。
@@ -304,6 +326,11 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid_name", "invalid request body")
 		return
 	}
+	// 名前は同期で検証して即 400(非同期 op に落とさない)。
+	if !s.mgr.ValidName(req.Name) {
+		s.writeError(w, workspace.ErrInvalidName)
+		return
+	}
 	existOK := r.URL.Query().Get("exist_ok") == "true"
 	var ttl time.Duration
 	if req.TTL != "" {
@@ -313,34 +340,29 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	var info workspace.Info
-	meta := state.Meta{Profile: req.Profile, Owner: req.Owner, Purpose: req.Purpose, Source: string(req.Source)}
-	opID, err := s.track("create", req.Name, func() error {
-		var e error
-		info, e = s.mgr.CreateWithMeta(r.Context(), req.Name, req.Port, meta)
-		if e != nil {
-			return e
-		}
-		if ttl > 0 {
-			if _, e = s.mgr.Lease(r.Context(), req.Name, ttl); e != nil {
-				return e
-			}
-			info, e = s.mgr.Get(r.Context(), req.Name) // expires_at を反映
-		}
-		return e
-	})
-	if errors.Is(err, workspace.ErrExists) && existOK {
-		if info, err = s.mgr.Get(r.Context(), req.Name); err == nil {
+	// 既存チェック(#82: 非同期化の前段)。既にあれば同期で返す:
+	// exist_ok なら 200+branch(冪等)、そうでなければ 409。
+	if info, gerr := s.mgr.Get(r.Context(), req.Name); gerr == nil {
+		if existOK {
 			writeJSON(w, http.StatusOK, s.toJSON(info))
 			return
 		}
-	}
-	if err != nil {
-		s.writeError(w, err)
+		s.writeError(w, workspace.ErrExists)
 		return
 	}
-	setOpID(w, opID)
-	writeJSON(w, http.StatusCreated, s.toJSON(info))
+	// 新規作成は非同期(fsx で数分)。202 + operation_id を返し、CLI が --wait で追う。
+	meta := state.Meta{Profile: req.Profile, Owner: req.Owner, Purpose: req.Purpose, Source: string(req.Source)}
+	s.accepted(w, "create", req.Name, func(ctx context.Context) error {
+		if _, e := s.mgr.CreateWithMeta(ctx, req.Name, req.Port, meta); e != nil {
+			return e
+		}
+		if ttl > 0 {
+			if _, e := s.mgr.Lease(ctx, req.Name, ttl); e != nil {
+				return e
+			}
+		}
+		return nil
+	})
 }
 
 type leaseReq struct {
@@ -409,34 +431,18 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleReset(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	var info workspace.Info
-	opID, err := s.track("reset", name, func() error {
-		var e error
-		info, e = s.mgr.Reset(r.Context(), name)
+	s.accepted(w, "reset", name, func(ctx context.Context) error {
+		_, e := s.mgr.Reset(ctx, name)
 		return e
 	})
-	if err != nil {
-		s.writeError(w, err)
-		return
-	}
-	setOpID(w, opID)
-	writeJSON(w, http.StatusOK, s.toJSON(info))
 }
 
 func (s *Server) handleRecreate(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	var info workspace.Info
-	opID, err := s.track("recreate", name, func() error {
-		var e error
-		info, e = s.mgr.Recreate(r.Context(), name)
+	s.accepted(w, "recreate", name, func(ctx context.Context) error {
+		_, e := s.mgr.Recreate(ctx, name)
 		return e
 	})
-	if err != nil {
-		s.writeError(w, err)
-		return
-	}
-	setOpID(w, opID)
-	writeJSON(w, http.StatusOK, s.toJSON(info))
 }
 
 func (s *Server) handleWake(w http.ResponseWriter, r *http.Request) {
@@ -457,18 +463,10 @@ func (s *Server) handleWake(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	var info workspace.Info
-	opID, err := s.track("retry", name, func() error {
-		var e error
-		info, e = s.mgr.Retry(r.Context(), name)
+	s.accepted(w, "retry", name, func(ctx context.Context) error {
+		_, e := s.mgr.Retry(ctx, name)
 		return e
 	})
-	if err != nil {
-		s.writeError(w, err)
-		return
-	}
-	setOpID(w, opID)
-	writeJSON(w, http.StatusOK, s.toJSON(info))
 }
 
 func (s *Server) handleRunHook(w http.ResponseWriter, r *http.Request) {
@@ -483,15 +481,14 @@ func (s *Server) handleRunHook(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	opID, err := s.track("delete", name, func() error {
-		return s.mgr.Delete(r.Context(), name)
-	})
-	if err != nil {
+	// 冪等: 存在しなければ 404(Action / CLI はこれを「既に削除済み」と扱う)。
+	if _, err := s.mgr.Get(r.Context(), name); errors.Is(err, workspace.ErrNotFound) {
 		s.writeError(w, err)
 		return
 	}
-	setOpID(w, opID)
-	w.WriteHeader(http.StatusNoContent)
+	s.accepted(w, "delete", name, func(ctx context.Context) error {
+		return s.mgr.Delete(ctx, name)
+	})
 }
 
 func setOpID(w http.ResponseWriter, id string) {
@@ -523,7 +520,7 @@ func (s *Server) handleGetOp(w http.ResponseWriter, r *http.Request) {
 }
 
 type opJSON struct {
-	ID         string  `json:"id"`
+	ID         string  `json:"operation_id"`
 	Type       string  `json:"type"`
 	Target     string  `json:"target"`
 	State      string  `json:"state"`
