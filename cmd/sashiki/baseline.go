@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/user"
@@ -316,7 +317,25 @@ func cmdBaselineSet(args []string) int {
 }
 
 func cmdBaselineGC(args []string) int {
-	code, data, err := call("POST", "/v1/baseline/gc", nil)
+	q := url.Values{}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--keep-last":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "sashiki: --keep-last requires a value")
+				return exitUsage
+			}
+			i++
+			q.Set("keep_last", args[i])
+		case "--dry-run":
+			q.Set("dry_run", "true")
+		}
+	}
+	path := "/v1/baseline/gc"
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+	code, data, err := call("POST", path, nil)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sashiki:", err)
 		return exitError

@@ -61,6 +61,8 @@ baseline:
   require_validated: false   # true にすると validate 未通過の publish を拒否
   validate_port: 3999
   masked_sentinel: /run/sashiki/baseline-masked
+  keep_last: 3               # baseline GC で残す直近 N
+  retention: 0s              # baseline GC で残す期間(0=無期限)
 
 hooks:
   dir: /etc/sashiki/hooks

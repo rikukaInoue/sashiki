@@ -142,6 +142,8 @@ func main() {
 		MaxRunning:          cfg.Engine.Mysql.MaxRunning,
 		HighWatermark:       cfg.Storage.HighWatermark,
 		CriticalWatermark:   cfg.Storage.CriticalWatermark,
+		BaselineKeepLast:    cfg.Baseline.KeepLast,
+		BaselineRetention:   cfg.Baseline.Retention,
 	}, st, bp, eng, hr, db)
 	if err != nil {
 		log.Fatalf("manager: %v", err)

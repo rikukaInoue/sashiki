@@ -102,6 +102,15 @@ type Config struct {
 	// create/wake/recreate を拒否。high は warning(メトリクス)。
 	HighWatermark     float64 // 0.0-1.0(0=無効)
 	CriticalWatermark float64
+
+	// baseline GC(仕様 12-5, #86)。keep_last=直近 N を残す、retention=期間で残す。
+	BaselineKeepLast  int
+	BaselineRetention time.Duration
+}
+
+// BaselineGCConfig は config 由来の GC 既定を返す(API/CLI が override する)。
+func (m *Manager) BaselineGCConfig() GCConfig {
+	return GCConfig{KeepLast: m.cfg.BaselineKeepLast, Retention: m.cfg.BaselineRetention}
 }
 
 // Manager はブランチライフサイクルの実装。
