@@ -174,7 +174,8 @@ func (s *Server) handleBaseline(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleBaselineRefresh(w http.ResponseWriter, r *http.Request) {
 	tag, err := s.mgr.RefreshBaseline(r.Context(), workspace.RefreshConfig{})
 	if errors.Is(err, workspace.ErrRefreshRunning) {
-		writeErr(w, http.StatusConflict, "refresh_running", err.Error())
+		// 仕様 17章のコード名に統一(旧 refresh_running)
+		writeErr(w, http.StatusConflict, "operation_in_progress", err.Error())
 		return
 	}
 	if err != nil {
@@ -620,8 +621,12 @@ func (s *Server) writeError(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusNotFound, "branch_not_found", err.Error())
 	case errors.Is(err, workspace.ErrLimitReached), errors.Is(err, workspace.ErrNoFreePort):
 		writeErr(w, http.StatusInsufficientStorage, "limit_reached", err.Error())
-	case strings.Contains(err.Error(), "hook"):
+	case errors.Is(err, workspace.ErrPreconditionFailed):
+		writeErr(w, http.StatusPreconditionFailed, "precondition_failed", err.Error())
+	case errors.Is(err, workspace.ErrHookFailed):
 		writeErr(w, http.StatusInternalServerError, "hook_failed", err.Error())
+	case errors.Is(err, workspace.ErrEngineFailed):
+		writeErr(w, http.StatusInternalServerError, "engine_error", err.Error())
 	default:
 		writeErr(w, http.StatusInternalServerError, "storage_error", err.Error())
 	}

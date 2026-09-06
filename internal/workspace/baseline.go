@@ -21,14 +21,14 @@ func (m *Manager) SetBaseline(ctx context.Context, snapshot string) error {
 	defer m.baselineMu.Unlock()
 	b, err := m.db.GetBaseline(snapshot)
 	if err != nil {
-		return fmt.Errorf("baseline %s is not registered", snapshot)
+		return fmt.Errorf("baseline %s is not registered: %w", snapshot, ErrBaselineNotFound)
 	}
 	// publish ポリシー(refresh と同じ)を set にも課す(抜け道を塞ぐ)。
 	if m.baselinePolicy.RequireMasked && !b.Prov.Masked {
-		return fmt.Errorf("cannot set baseline %s: not masked (require_masked)", snapshot)
+		return fmt.Errorf("cannot set baseline %s: not masked (require_masked): %w", snapshot, ErrPreconditionFailed)
 	}
 	if m.baselinePolicy.RequireValidated && !b.Prov.Validated {
-		return fmt.Errorf("cannot set baseline %s: not validated (require_validated)", snapshot)
+		return fmt.Errorf("cannot set baseline %s: not validated (require_validated): %w", snapshot, ErrPreconditionFailed)
 	}
 	return m.db.SetCurrentBaseline(snapshot)
 }

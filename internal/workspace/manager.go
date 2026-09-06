@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,6 +36,11 @@ var (
 	ErrNoFreePort       = errors.New("no free port in range")
 	ErrUnknownProfile   = errors.New("unknown profile")
 	ErrBaselineNotFound = errors.New("baseline not found")
+	// ErrHookFailed / ErrEngineFailed は failStage の分類(#89)。errors.Is で判定する。
+	ErrHookFailed   = errors.New("hook failed")
+	ErrEngineFailed = errors.New("engine failed")
+	// ErrPreconditionFailed はポリシー未達(未 masked / 未 validated)の操作(#89)。
+	ErrPreconditionFailed = errors.New("precondition failed")
 )
 
 // ProfilePolicy は profile ごとの idle lifecycle(仕様 11-3)。0 のフィールドは
@@ -288,7 +294,9 @@ func (m *Manager) CreateWithMetaFrom(ctx context.Context, name string, port int,
 	failStage := func(stage string, cause error) (Info, error) {
 		// error 状態+診断で残す(ログ確認のため自動削除しない)。仕様 11-1/14-2。
 		_ = m.failOp(name, "create", stage, cause)
-		return Info{}, cause
+		// ステージを保ったまま返し、API 層が hook_failed / engine_error に分類
+		// できるようにする(#89。従来のメッセージ文字列マッチを置き換える)。
+		return Info{}, &stageErr{stage: stage, err: cause}
 	}
 
 	vol, err := m.st.Clone(ctx, origin, name)
@@ -926,3 +934,25 @@ func (m *Manager) runHook(ctx context.Context, event hooks.Event, b state.Branch
 	}
 	return nil
 }
+
+// stageErr は失敗ステージを保持するエラー(#89)。errors.Is(err, ErrHookFailed)
+// / errors.Is(err, ErrEngineFailed) で分類できる。メッセージは元エラーのまま。
+type stageErr struct {
+	stage string
+	err   error
+}
+
+func (e *stageErr) Error() string { return e.err.Error() }
+func (e *stageErr) Unwrap() error { return e.err }
+func (e *stageErr) Is(target error) bool {
+	switch target {
+	case ErrHookFailed:
+		return e.stage == "hook"
+	case ErrEngineFailed:
+		return strings.HasPrefix(e.stage, "engine-")
+	}
+	return false
+}
+
+// StageError はテスト・他層からステージ付きエラーを作るための公開コンストラクタ。
+func StageError(stage string, err error) error { return &stageErr{stage: stage, err: err} }

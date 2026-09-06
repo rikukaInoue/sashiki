@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -436,5 +438,33 @@ func TestAPICreateWithProvenance(t *testing.T) {
 	}
 	if len(b.Source) == 0 || !strings.Contains(string(b.Source), "github_pr") {
 		t.Errorf("source round-trip failed: %s", b.Source)
+	}
+}
+
+func TestWriteErrorClassification(t *testing.T) {
+	db, _ := state.Open(filepath.Join(t.TempDir(), "s.db"))
+	defer func() { _ = db.Close() }()
+	fs := fakeStorage{}
+	mgr, _ := workspace.New(workspace.Config{NamePattern: `^.+$`, PortLow: 1, PortHigh: 2, EngineType: "mysql"}, fs, fs, fakeEngine{}, nil, db)
+	s := New(mgr, "d", "mysql", "dev", "dev", "", nil)
+
+	cases := []struct {
+		err  error
+		code int
+		id   string
+	}{
+		{workspace.StageError("hook", errors.New("on-create exited 1")), 500, "hook_failed"},
+		{workspace.StageError("engine-start", errors.New("start failed")), 500, "engine_error"},
+		{workspace.StageError("engine-ready", errors.New("timeout")), 500, "engine_error"},
+		{workspace.StageError("clone", errors.New("zfs clone failed")), 500, "storage_error"},
+		{fmt.Errorf("not masked: %w", workspace.ErrPreconditionFailed), 412, "precondition_failed"},
+		{fmt.Errorf("x: %w", workspace.ErrBaselineNotFound), 404, "baseline_not_found"},
+	}
+	for _, c := range cases {
+		w := httptest.NewRecorder()
+		s.writeError(w, c.err)
+		if w.Code != c.code || !strings.Contains(w.Body.String(), c.id) {
+			t.Errorf("err=%v → status=%d body=%s (want %d %s)", c.err, w.Code, w.Body.String(), c.code, c.id)
+		}
 	}
 }

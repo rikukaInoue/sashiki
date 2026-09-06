@@ -21,6 +21,7 @@ const (
 	exitUsage    = 2
 	exitNotFound = 3
 	exitExists   = 4
+	exitCapacity = 5 // 507: capacity 不足(仕様 18章)
 	exitTimeout  = 5 // op wait のタイムアウト(operation 失敗とは区別する, #83)
 )
 
@@ -174,6 +175,8 @@ func statusToExit(code int) int {
 		return exitNotFound
 	case http.StatusConflict:
 		return exitExists
+	case http.StatusInsufficientStorage:
+		return exitCapacity
 	default:
 		return exitError
 	}

@@ -1332,3 +1332,16 @@ func TestResetPrefersStoredInitSnapshot(t *testing.T) {
 		t.Errorf("rollback should use stored init snapshot, got %v", st.rollbacks)
 	}
 }
+
+func TestSetBaselineErrorClassification(t *testing.T) {
+	m := newTestManager(t, &mockStorage{}, &mockEngine{}, "")
+	m.SetBaselinePolicy(RefreshConfig{RequireMasked: true})
+
+	if err := m.SetBaseline(context.Background(), "pool/base@nope"); !errors.Is(err, ErrBaselineNotFound) {
+		t.Errorf("unregistered should wrap ErrBaselineNotFound, got %v", err)
+	}
+	_ = m.db.RegisterBaseline("pool/base@x", state.BaselineProvenance{})
+	if err := m.SetBaseline(context.Background(), "pool/base@x"); !errors.Is(err, ErrPreconditionFailed) {
+		t.Errorf("unmasked should wrap ErrPreconditionFailed, got %v", err)
+	}
+}
