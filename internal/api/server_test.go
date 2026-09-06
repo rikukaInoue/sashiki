@@ -289,6 +289,52 @@ func TestMetricsHandler(t *testing.T) {
 	if !strings.Contains(out, `sashiki_branch_used_bytes{branch="pr-1"} 42`) {
 		t.Errorf("metrics missing used bytes:\n%s", out)
 	}
+	// capacity 系(仕様 20-5)。mock は PoolCapacity 未設定(total=0)なので
+	// pool 系は出ず、watermark / memory / ports は常に出る
+	for _, want := range []string{
+		`sashiki_storage_watermark{level="critical"}`,
+		"sashiki_memory_available_bytes",
+		"sashiki_max_running",
+		"sashiki_ports_total 10",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("metrics missing %q:\n%s", want, out)
+		}
+	}
+	if !strings.Contains(out, "sashiki_hook_failures_total 0") {
+		t.Errorf("metrics missing hook failures:\n%s", out)
+	}
+}
+
+func TestMetricsOperationStats(t *testing.T) {
+	db, _ := state.Open(filepath.Join(t.TempDir(), "s.db"))
+	defer func() { _ = db.Close() }()
+	fs := fakeStorage{}
+	mgr, _ := workspace.New(workspace.Config{NamePattern: `^.+$`, PortLow: 3401, PortHigh: 3410, EngineType: "mysql", StateDir: t.TempDir()}, fs, fs, fakeEngine{}, nil, db)
+	_ = db.CreateOperation("op_1", "create", "pr-1")
+	_ = db.FinishOperation("op_1", "")
+	_ = db.CreateOperation("op_2", "reset", "pr-1")
+	_ = db.FinishOperation("op_2", "boom")
+
+	ms := httptest.NewServer(MetricsHandler(mgr))
+	defer ms.Close()
+	resp, err := http.Get(ms.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body := new(strings.Builder)
+	_, _ = io.Copy(body, resp.Body)
+	out := body.String()
+	for _, want := range []string{
+		`sashiki_operations_total{type="create",state="completed"} 1`,
+		`sashiki_operations_total{type="reset",state="failed"} 1`,
+		`sashiki_operation_duration_seconds_count{type="create",state="completed"} 1`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("metrics missing %q:\n%s", want, out)
+		}
+	}
 }
 
 func TestAPIOperationsTracking(t *testing.T) {

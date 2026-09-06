@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"log/slog"
 	"time"
 
 	"github.com/rikukaInoue/sashiki/internal/state"
@@ -39,6 +40,22 @@ func randomID() string {
 	return "op_" + hex.EncodeToString(b)
 }
 
+// logOperation は operation の完了を構造化ログに残す(仕様 20-5:
+// operation_id と branch を必ず含める)。
+func (r *Runner) logOperation(id, typ, target string, start time.Time, err error) {
+	attrs := []any{
+		"operation_id", id,
+		"type", typ,
+		"branch", target,
+		"duration_ms", r.now().Sub(start).Milliseconds(),
+	}
+	if err != nil {
+		slog.Error("operation failed", append(attrs, "error", err.Error())...)
+		return
+	}
+	slog.Info("operation completed", attrs...)
+}
+
 // Start は typ/target の operation を作り、fn をバックグラウンドで実行する。
 // operation id を即座に返す(呼び出し側は 202 で返す)。
 func (r *Runner) Start(typ, target string, fn func(ctx context.Context) error) (string, error) {
@@ -46,14 +63,17 @@ func (r *Runner) Start(typ, target string, fn func(ctx context.Context) error) (
 	if err := r.store.CreateOperation(id, typ, target); err != nil {
 		return "", err
 	}
+	start := r.now()
 	go func() {
 		// operation はリクエストのライフサイクルから切り離す(fsx は数分かかる)。
 		ctx := context.Background()
 		errMsg := ""
-		if err := fn(ctx); err != nil {
-			errMsg = err.Error()
+		runErr := fn(ctx)
+		if runErr != nil {
+			errMsg = runErr.Error()
 		}
 		_ = r.store.FinishOperation(id, errMsg)
+		r.logOperation(id, typ, target, start, runErr)
 	}()
 	return id, nil
 }
@@ -65,12 +85,14 @@ func (r *Runner) RunSync(typ, target string, fn func(ctx context.Context) error)
 	if err := r.store.CreateOperation(id, typ, target); err != nil {
 		return "", err
 	}
+	start := r.now()
 	runErr := fn(context.Background())
 	errMsg := ""
 	if runErr != nil {
 		errMsg = runErr.Error()
 	}
 	_ = r.store.FinishOperation(id, errMsg)
+	r.logOperation(id, typ, target, start, runErr)
 	return id, runErr
 }
 

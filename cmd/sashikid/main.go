@@ -5,9 +5,11 @@ import (
 	"context"
 	"flag"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -39,6 +41,13 @@ func main() {
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("config: %v", err)
+	}
+
+	// 構造化ログ(仕様 20-5)。json では既存の log.Printf も slog 経由で JSON になる
+	if cfg.LogFormat == "json" {
+		slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
+		log.SetFlags(0)
+		log.SetOutput(slogWriter{})
 	}
 
 	db, err := state.Open(cfg.StateDB)
@@ -189,4 +198,12 @@ func main() {
 	if err := srv.Listen(ctx, cfg.Listen.API); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// slogWriter は既存の log.Printf 出力を slog(JSON)へ橋渡しする。
+type slogWriter struct{}
+
+func (slogWriter) Write(p []byte) (int, error) {
+	slog.Info(strings.TrimSuffix(string(p), "\n"))
+	return len(p), nil
 }

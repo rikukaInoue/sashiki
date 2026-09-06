@@ -13,16 +13,17 @@ import (
 
 // Config は sashikid 全体の設定。
 type Config struct {
-	Listen   Listen   `yaml:"listen"`
-	Domain   string   `yaml:"domain"`
-	StateDB  string   `yaml:"state_db"`
-	Storage  Storage  `yaml:"storage"`
-	Engine   Engine   `yaml:"engine"`
-	Proxy    Proxy    `yaml:"proxy"`
-	Branches Branches `yaml:"branches"`
-	Baseline Baseline `yaml:"baseline"`
-	Hooks    Hooks    `yaml:"hooks"`
-	Auth     Auth     `yaml:"auth"`
+	Listen    Listen   `yaml:"listen"`
+	Domain    string   `yaml:"domain"`
+	StateDB   string   `yaml:"state_db"`
+	LogFormat string   `yaml:"log_format"` // text | json(構造化ログ)
+	Storage   Storage  `yaml:"storage"`
+	Engine    Engine   `yaml:"engine"`
+	Proxy     Proxy    `yaml:"proxy"`
+	Branches  Branches `yaml:"branches"`
+	Baseline  Baseline `yaml:"baseline"`
+	Hooks     Hooks    `yaml:"hooks"`
+	Auth      Auth     `yaml:"auth"`
 }
 
 // Listen は各リスナーのアドレス。
@@ -136,9 +137,10 @@ type Auth struct {
 // Default は既定値。
 func Default() Config {
 	return Config{
-		Listen:  Listen{API: "127.0.0.1:8080", Proxy: "0.0.0.0:3306", Metrics: "127.0.0.1:9100"},
-		Domain:  "sashiki.internal",
-		StateDB: "/var/lib/sashiki/state.db",
+		Listen:    Listen{API: "127.0.0.1:8080", Proxy: "0.0.0.0:3306", Metrics: "127.0.0.1:9100"},
+		Domain:    "sashiki.internal",
+		StateDB:   "/var/lib/sashiki/state.db",
+		LogFormat: "text",
 		Storage: Storage{
 			Backend: "ebs-zfs",
 			Zfs: ZfsStorage{
@@ -231,6 +233,9 @@ func (c Config) Validate() error {
 		if f.Region == "" || f.FilesystemID == "" || f.BaseVolumeID == "" || f.DNSName == "" {
 			return fmt.Errorf("storage.fsx-zfs requires region, filesystem_id, base_volume_id, dns_name")
 		}
+	}
+	if c.LogFormat != "text" && c.LogFormat != "json" {
+		return fmt.Errorf("log_format %q is not supported (text | json)", c.LogFormat)
 	}
 	if c.Engine.Type != "mysql" && c.Engine.Type != "postgres" {
 		return fmt.Errorf("engine.type %q is not supported (mysql | postgres)", c.Engine.Type)
