@@ -80,6 +80,7 @@ func New(mgr *workspace.Manager, domain, engineType, proxyUser, proxyPass, token
 	s.mux.HandleFunc("GET /v1/capacity", s.handleCapacity)
 	s.mux.HandleFunc("GET /v1/doctor", s.handleDoctor)
 	s.mux.HandleFunc("POST /v1/gc/orphans", s.handleGCOrphans)
+	s.mux.HandleFunc("POST /v1/drain", s.handleDrain)
 	s.mux.HandleFunc("GET /v1/healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /", s.handleWebUI)
 	return s
@@ -253,6 +254,19 @@ func (s *Server) handleGCOrphans(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
+}
+
+// handleDrain は全 running branch を sleeping にする(POST /v1/drain, 仕様17章)。
+// instance_class 変更前などに mysqld を安全に落とすのに使う。
+func (s *Server) handleDrain(w http.ResponseWriter, r *http.Request) {
+	res, err := s.mgr.Drain(r.Context())
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"slept": res.Slept, "skipped": res.Skipped, "failed": res.Failed,
+	})
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {

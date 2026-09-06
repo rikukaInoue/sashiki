@@ -303,6 +303,15 @@ st=$(sashiki show recon-test --json | python3 -c 'import json,sys;print(json.loa
 [ "$st" = "sleeping" ] || fail "recon-test should be reconciled to sleeping (got $st)"
 sashiki delete recon-test > /dev/null
 
+log "drain (#28: instance_class 変更前に全 branch を sleeping)"
+# pr-1/pr-2 は running。drain で両方 sleeping になる。
+sashiki show pr-1 --json | grep -q '"state":"running"' || fail "pr-1 should be running before drain"
+sashiki drain > /dev/null || fail "drain should succeed"
+sashiki show pr-1 --json | grep -q '"state":"sleeping"' || fail "drain: pr-1 should be sleeping"
+sashiki show pr-2 --json | grep -q '"state":"sleeping"' || fail "drain: pr-2 should be sleeping"
+# 再接続で復帰する(データは残っている)
+mysql -udev@pr-1 -pdev -h127.0.0.1 -P3306 -N -e "SELECT 1" >/dev/null 2>&1 || fail "drain: pr-1 should wake on reconnect"
+
 log "delete"
 sashiki delete pr-1
 sashiki delete pr-2

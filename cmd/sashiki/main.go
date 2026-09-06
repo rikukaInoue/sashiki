@@ -47,6 +47,7 @@ func usage() int {
   sashiki capacity
   sashiki doctor
   sashiki gc --orphans
+  sashiki drain
   sashiki version
 `)
 	return exitUsage
@@ -90,6 +91,8 @@ func run(args []string) int {
 		return cmdDoctor(rest)
 	case "gc":
 		return cmdGC(rest)
+	case "drain":
+		return cmdDrain(rest)
 	case "version":
 		fmt.Println("sashiki", version)
 		return exitOK

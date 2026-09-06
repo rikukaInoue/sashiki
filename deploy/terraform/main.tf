@@ -1,0 +1,198 @@
+# sashiki を「1 apply」で立てるモジュール(仕様17章)。
+# EC2 + データ EBS(prevent_destroy)+ SG + IAM + Route53 + Secrets Manager
+# (dev パスワード)+ SSM(API トークン)。user-data で install.sh →
+# sashiki init --yes まで走らせ、apply 完了時点で sashikid が稼働している。
+
+data "aws_ami" "ubuntu" {
+  count       = var.ami_id == "" ? 1 : 0
+  most_recent = true
+  owners      = ["099720109477"] # Canonical
+
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"]
+  }
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+}
+
+locals {
+  ami_id = var.ami_id != "" ? var.ami_id : data.aws_ami.ubuntu[0].id
+  # endpoint: Route53 を作るならその FQDN、無ければ private IP。
+  endpoint = var.route53_zone_id != "" && var.dns_name != "" ? var.dns_name : aws_instance.this.private_ip
+  tags     = merge(var.tags, { "app" = "sashiki", "Name" = var.name })
+}
+
+# --- secrets: dev パスワード(Secrets Manager)/ API トークン(SSM SecureString) ---
+
+resource "random_password" "dev" {
+  length  = 24
+  special = false
+}
+
+resource "random_password" "api_token" {
+  length  = 40
+  special = false
+}
+
+resource "aws_secretsmanager_secret" "dev_password" {
+  name = "${var.name}/sashiki/dev-password"
+  tags = local.tags
+}
+
+resource "aws_secretsmanager_secret_version" "dev_password" {
+  secret_id     = aws_secretsmanager_secret.dev_password.id
+  secret_string = random_password.dev.result
+}
+
+resource "aws_ssm_parameter" "api_token" {
+  name  = "/${var.name}/sashiki/api-token"
+  type  = "SecureString"
+  value = random_password.api_token.result
+  tags  = local.tags
+}
+
+# --- security group: DB(3306)と API(8080)を allowed_sg_ids からのみ許可 ---
+
+resource "aws_security_group" "this" {
+  name        = "${var.name}-sashiki"
+  description = "sashiki: MySQL branches (3306) + API (8080)"
+  vpc_id      = var.vpc_id
+  tags        = local.tags
+
+  egress {
+    description = "all outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_security_group_rule" "mysql" {
+  count                    = length(var.allowed_sg_ids)
+  type                     = "ingress"
+  from_port                = 3306
+  to_port                  = 3306
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.this.id
+  source_security_group_id = var.allowed_sg_ids[count.index]
+  description              = "MySQL from allowed sg"
+}
+
+resource "aws_security_group_rule" "api" {
+  count                    = length(var.allowed_sg_ids)
+  type                     = "ingress"
+  from_port                = 8080
+  to_port                  = 8080
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.this.id
+  source_security_group_id = var.allowed_sg_ids[count.index]
+  description              = "sashiki API from allowed sg"
+}
+
+# --- IAM: instance が secret / ssm を読めるだけの最小権限 ---
+
+data "aws_iam_policy_document" "assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["ec2.amazonaws.com"]
+    }
+  }
+}
+
+data "aws_iam_policy_document" "secrets" {
+  statement {
+    sid       = "ReadDevPassword"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [aws_secretsmanager_secret.dev_password.arn]
+  }
+  statement {
+    sid       = "ReadApiToken"
+    actions   = ["ssm:GetParameter"]
+    resources = [aws_ssm_parameter.api_token.arn]
+  }
+}
+
+resource "aws_iam_role" "this" {
+  name               = "${var.name}-sashiki"
+  assume_role_policy = data.aws_iam_policy_document.assume.json
+  tags               = local.tags
+}
+
+resource "aws_iam_role_policy" "secrets" {
+  name   = "read-secrets"
+  role   = aws_iam_role.this.id
+  policy = data.aws_iam_policy_document.secrets.json
+}
+
+# SSM 経由の運用(SSH レス)を可能にする。
+resource "aws_iam_role_policy_attachment" "ssm" {
+  role       = aws_iam_role.this.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+resource "aws_iam_instance_profile" "this" {
+  name = "${var.name}-sashiki"
+  role = aws_iam_role.this.name
+  tags = local.tags
+}
+
+# --- データ EBS: prevent_destroy でブランチデータを守る ---
+
+resource "aws_ebs_volume" "data" {
+  availability_zone = data.aws_subnet.selected.availability_zone
+  size              = var.allocated_storage
+  type              = var.ebs_type
+  tags              = merge(local.tags, { "Name" = "${var.name}-data" })
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+data "aws_subnet" "selected" {
+  id = var.subnet_ids[0]
+}
+
+resource "aws_volume_attachment" "data" {
+  device_name = var.data_device_name
+  volume_id   = aws_ebs_volume.data.id
+  instance_id = aws_instance.this.id
+
+  # データを消さずにインスタンスだけ入れ替えられるように force detach はしない。
+  stop_instance_before_detaching = true
+}
+
+# --- EC2: user-data で install.sh → sashiki init --yes まで ---
+
+resource "aws_instance" "this" {
+  ami                    = local.ami_id
+  instance_type          = var.instance_class
+  subnet_id              = var.subnet_ids[0]
+  vpc_security_group_ids = [aws_security_group.this.id]
+  iam_instance_profile   = aws_iam_instance_profile.this.name
+  key_name               = var.key_name != "" ? var.key_name : null
+  tags                   = local.tags
+
+  user_data = templatefile("${path.module}/user-data.sh.tftpl", {
+    name               = var.name
+    data_device        = var.data_device_name
+    pool               = "tank"
+    engine_version     = var.engine_version
+    proxy_user         = var.proxy_user
+    github_token       = var.github_token
+    sashiki_ref        = var.sashiki_ref
+    dev_secret_arn     = aws_secretsmanager_secret.dev_password.arn
+    api_token_ssm_path = aws_ssm_parameter.api_token.name
+  })
+
+  # user-data と device 名が変わってもデータ EBS は作り直さない。
+  lifecycle {
+    ignore_changes = [ami]
+  }
+}
