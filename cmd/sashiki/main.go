@@ -38,6 +38,8 @@ func usage() int {
   sashiki reset  <name> [--json]
   sashiki recreate <name> [--json]
   sashiki retry <name> [--json]
+  sashiki sleep  <name> [--json]
+  sashiki wake   <name> [--json]
   sashiki hooks run <name> <event>
   sashiki list   [--json]
   sashiki show   <name> [--json]
@@ -71,6 +73,10 @@ func run(args []string) int {
 		return cmdSimpleBranch(rest, "recreate")
 	case "retry":
 		return cmdSimpleBranch(rest, "retry")
+	case "sleep":
+		return cmdSyncBranch(rest, "sleep")
+	case "wake":
+		return cmdSyncBranch(rest, "wake")
 	case "lease":
 		return cmdLease(rest)
 	case "hooks":
@@ -360,6 +366,29 @@ func cmdLease(args []string) int {
 		exp = *b.ExpiresAt
 	}
 	fmt.Printf("branch '%s' lease renewed: expires_at=%s\n", name, exp)
+	return exitOK
+}
+
+// cmdSyncBranch は同期の変更操作(sleep / wake)を実行し branch を表示する(#87)。
+func cmdSyncBranch(args []string, action string) int {
+	pos, _, jsonOut, err := parseFlags(args)
+	if err != nil || len(pos) != 1 {
+		return usage()
+	}
+	code, data, err := call("POST", "/v1/branches/"+pos[0]+"/"+action, nil)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sashiki:", err)
+		return exitError
+	}
+	if code != http.StatusOK {
+		fmt.Fprintln(os.Stderr, "sashiki:", apiError(data))
+		return statusToExit(code)
+	}
+	if jsonOut {
+		fmt.Println(string(data))
+	} else {
+		fmt.Printf("branch '%s' %s\n", pos[0], action)
+	}
 	return exitOK
 }
 

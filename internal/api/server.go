@@ -90,6 +90,7 @@ func New(mgr *workspace.Manager, domain, engineType, proxyUser, proxyPass, token
 	s.mux.HandleFunc("POST /v1/branches/{name}/reset", s.handleReset)
 	s.mux.HandleFunc("POST /v1/branches/{name}/recreate", s.handleRecreate)
 	s.mux.HandleFunc("POST /v1/branches/{name}/wake", s.handleWake)
+	s.mux.HandleFunc("POST /v1/branches/{name}/sleep", s.handleSleep)
 	s.mux.HandleFunc("POST /v1/branches/{name}/retry", s.handleRetry)
 	s.mux.HandleFunc("POST /v1/branches/{name}/lease", s.handleLease)
 	s.mux.HandleFunc("POST /v1/branches/{name}/hooks/{event}", s.handleRunHook)
@@ -522,6 +523,26 @@ func (s *Server) handleWake(w http.ResponseWriter, r *http.Request) {
 	opID, err := s.track("wake", name, func() error {
 		var e error
 		info, e = s.mgr.Wake(r.Context(), name)
+		return e
+	})
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	setOpID(w, opID)
+	writeJSON(w, http.StatusOK, s.toJSON(info))
+}
+
+// handleSleep は running → sleeping(mysqld を正常終了)。高速なので同期(#87)。
+func (s *Server) handleSleep(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var info workspace.Info
+	opID, err := s.track("sleep", name, func() error {
+		if e := s.mgr.Sleep(r.Context(), name); e != nil {
+			return e
+		}
+		var e error
+		info, e = s.mgr.Get(r.Context(), name)
 		return e
 	})
 	if err != nil {
