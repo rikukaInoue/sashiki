@@ -613,7 +613,8 @@ type Operation struct {
 	State      string // running|completed|failed
 	StartedAt  time.Time
 	FinishedAt *time.Time
-	Error      string
+	Error      string // 人間可読メッセージ(error_json の message)
+	ErrorCode  string // error_json の code(将来の機械判定用。現状は空)
 }
 
 // Operation の state 値。
@@ -632,17 +633,32 @@ func (d *DB) CreateOperation(id, typ, target string) error {
 }
 
 // FinishOperation は operation を completed/failed にする。errMsg が空なら completed。
+// error_json 列には列名どおり JSON({"code","message"})を入れる(#83)。
 func (d *DB) FinishOperation(id, errMsg string) error {
 	st := OpCompleted
 	var e any
 	if errMsg != "" {
 		st = OpFailed
-		e = errMsg
+		b, _ := json.Marshal(map[string]string{"code": "", "message": errMsg})
+		e = string(b)
 	}
 	_, err := d.sql.Exec(
 		`UPDATE operations SET state = ?, finished_at = ?, error_json = ? WHERE id = ?`,
 		st, time.Now().UTC().Format(timeFmt), e, id)
 	return err
+}
+
+// PruneOperations は finished_at が before より古い完了/失敗 operation を削除し、
+// 削除件数を返す(operations テーブルの無限成長を防ぐ。reaper から呼ぶ #83)。
+func (d *DB) PruneOperations(before time.Time) (int64, error) {
+	res, err := d.sql.Exec(
+		`DELETE FROM operations WHERE state != ? AND finished_at IS NOT NULL AND finished_at < ?`,
+		OpRunning, before.UTC().Format(timeFmt))
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
 }
 
 // GetOperation は 1 件取得。
@@ -680,12 +696,25 @@ func scanOperation(row scannable) (Operation, error) {
 	var o Operation
 	var started string
 	var finished sql.NullString
-	err := row.Scan(&o.ID, &o.Type, &o.Target, &o.State, &started, &finished, &o.Error)
+	var errJSON string
+	err := row.Scan(&o.ID, &o.Type, &o.Target, &o.State, &started, &finished, &errJSON)
 	if errors.Is(err, sql.ErrNoRows) {
 		return o, ErrNotFound
 	}
 	if err != nil {
 		return o, err
+	}
+	// error_json は {"code","message"} JSON。旧データ(生文字列)は message として扱う。
+	if errJSON != "" {
+		var e struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal([]byte(errJSON), &e) == nil && (e.Message != "" || e.Code != "") {
+			o.Error, o.ErrorCode = e.Message, e.Code
+		} else {
+			o.Error = errJSON
+		}
 	}
 	if t, err := time.Parse(timeFmt, started); err == nil {
 		o.StartedAt = t

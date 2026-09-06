@@ -26,14 +26,14 @@ func cmdOp(args []string) int {
 		if len(args) < 2 {
 			return usageOp()
 		}
-		return opWait(args[1])
+		return opWait(args[1:])
 	default:
 		return usageOp()
 	}
 }
 
 func usageOp() int {
-	fmt.Fprint(os.Stderr, "Usage:\n  sashiki op list\n  sashiki op show <id>\n  sashiki op wait <id>\n")
+	fmt.Fprint(os.Stderr, "Usage:\n  sashiki op list\n  sashiki op show <id>\n  sashiki op wait <id> [--timeout <dur>] [--interval <dur>]\n")
 	return exitUsage
 }
 
@@ -45,6 +45,7 @@ type opView struct {
 	StartedAt  string  `json:"started_at"`
 	FinishedAt *string `json:"finished_at"`
 	Error      string  `json:"error"`
+	ErrorCode  string  `json:"error_code"`
 }
 
 func opList() int {
@@ -84,8 +85,46 @@ func opShow(id string) int {
 	return exitOK
 }
 
-func opWait(id string) int {
-	for i := 0; i < 3000; i++ { // 最大 ~10 分
+// opWait は operation の完了を待つ。exit code は
+//
+//	0=completed / 1(exitError)=operation 失敗 / 5(exitTimeout)=タイムアウト。
+func opWait(args []string) int {
+	timeout := 10 * time.Minute
+	interval := 200 * time.Millisecond
+	var id string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--timeout":
+			if i+1 >= len(args) {
+				return usageOp()
+			}
+			i++
+			d, err := time.ParseDuration(args[i])
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "sashiki: --timeout:", err)
+				return exitUsage
+			}
+			timeout = d
+		case "--interval":
+			if i+1 >= len(args) {
+				return usageOp()
+			}
+			i++
+			d, err := time.ParseDuration(args[i])
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "sashiki: --interval:", err)
+				return exitUsage
+			}
+			interval = d
+		default:
+			id = args[i]
+		}
+	}
+	if id == "" {
+		return usageOp()
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
 		code, data, err := call("GET", "/v1/operations/"+id, nil)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "sashiki:", err)
@@ -105,8 +144,8 @@ func opWait(id string) int {
 			}
 			return exitOK
 		}
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(interval)
 	}
-	fmt.Fprintln(os.Stderr, "sashiki: wait timed out")
-	return exitError
+	fmt.Fprintf(os.Stderr, "sashiki: wait timed out after %s (operation still running)\n", timeout)
+	return exitTimeout
 }

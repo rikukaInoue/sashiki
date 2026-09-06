@@ -80,6 +80,14 @@ func (m *Manager) Reap(ctx context.Context) error {
 			}
 		}
 	}
+	// 完了/失敗した古い operation を掃除する(operations テーブルの無限成長防止, #83)。
+	if m.cfg.OperationRetention > 0 {
+		if n, err := m.db.PruneOperations(now.Add(-m.cfg.OperationRetention)); err != nil {
+			log.Printf("reaper: prune operations: %v", err)
+		} else if n > 0 {
+			log.Printf("reaper: pruned %d old operations", n)
+		}
+	}
 	return nil
 }
 

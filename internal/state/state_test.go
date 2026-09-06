@@ -3,7 +3,9 @@ package state
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func openTest(t *testing.T) *DB {
@@ -169,5 +171,58 @@ func TestOperationStatsAndHookFailureCount(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("hook failures = %d, want 1", n)
+	}
+}
+
+func TestOperationErrorJSONAndPrune(t *testing.T) {
+	db := openTest(t)
+	if err := db.CreateOperation("op-ok", "create", "pr-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishOperation("op-ok", ""); err != nil {
+		t.Fatal(err)
+	}
+	// 失敗 op: error_json は JSON、Error は message
+	if err := db.CreateOperation("op-bad", "create", "pr-2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishOperation("op-bad", "clone failed: boom"); err != nil {
+		t.Fatal(err)
+	}
+	bad, _ := db.GetOperation("op-bad")
+	if bad.State != OpFailed || bad.Error != "clone failed: boom" {
+		t.Errorf("op-bad = %+v", bad)
+	}
+	var raw string
+	if err := db.sql.QueryRow(`SELECT error_json FROM operations WHERE id='op-bad'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(strings.TrimSpace(raw), "{") {
+		t.Errorf("error_json should be JSON, got %q", raw)
+	}
+	// 旧データ(生文字列)も message として読めること(後方互換)
+	if _, err := db.sql.Exec(`UPDATE operations SET error_json='legacy raw' WHERE id='op-bad'`); err != nil {
+		t.Fatal(err)
+	}
+	if leg, _ := db.GetOperation("op-bad"); leg.Error != "legacy raw" {
+		t.Errorf("legacy error = %q, want 'legacy raw'", leg.Error)
+	}
+
+	// running op は prune 対象外
+	if err := db.CreateOperation("op-run", "reset", "pr-3"); err != nil {
+		t.Fatal(err)
+	}
+	n, err := db.PruneOperations(time.Now().Add(time.Hour)) // 未来 cutoff → finished 済みは全部
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n < 2 {
+		t.Errorf("pruned = %d, want >= 2 (op-ok, op-bad)", n)
+	}
+	if _, err := db.GetOperation("op-ok"); !errors.Is(err, ErrNotFound) {
+		t.Error("finished op-ok should be pruned")
+	}
+	if _, err := db.GetOperation("op-run"); err != nil {
+		t.Errorf("running op must NOT be pruned: %v", err)
 	}
 }
