@@ -1028,3 +1028,35 @@ func TestResetWorksAfterRecreate(t *testing.T) {
 		t.Fatalf("reset after recreate should work (valid @init): %v", err)
 	}
 }
+
+// --- #28 drain ---
+
+func TestDrainSleepsRunningBranches(t *testing.T) {
+	m := newTestManager(t, &mockStorage{}, &mockEngine{}, "")
+	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Create(context.Background(), "pr-2", 0); err != nil {
+		t.Fatal(err)
+	}
+	// pr-2 は既に sleeping
+	_ = m.db.SetState("pr-2", state.StateSleeping, "")
+
+	res, err := m.Drain(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Slept) != 1 || res.Slept[0] != "pr-1" {
+		t.Errorf("slept = %v, want [pr-1]", res.Slept)
+	}
+	if len(res.Skipped) != 1 || res.Skipped[0] != "pr-2" {
+		t.Errorf("skipped = %v, want [pr-2]", res.Skipped)
+	}
+	if len(res.Failed) != 0 {
+		t.Errorf("failed = %v", res.Failed)
+	}
+	info, _ := m.Get(context.Background(), "pr-1")
+	if info.State != state.StateSleeping {
+		t.Errorf("pr-1 state = %s, want sleeping", info.State)
+	}
+}

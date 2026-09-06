@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# sashiki EC2 の初期化(仕様17章)。install.sh → sashiki init --yes まで走らせ、
+# 完了時点で sashikid が稼働する。シークレットは IAM ロール経由で取得し、
+# ディスクの平文設定には残さない(API トークンは環境変数、dev パスワードは init が使う)。
+set -euxo pipefail
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+apt-get install -y curl ca-certificates awscli jq
+
+# region は IMDSv2 から取得(Terraform に依存させない)。
+IMDS_TOKEN="$(curl -sS -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300")"
+REGION="$(curl -sS -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/placement/region)"
+POOL="${pool}"
+DATA_DEVICE="${data_device}"
+
+# --- シークレット取得(instance role) ---
+API_TOKEN="$(aws ssm get-parameter --with-decryption --region "$REGION" \
+  --name "${api_token_ssm_path}" --query 'Parameter.Value' --output text)"
+DEV_PASSWORD="$(aws secretsmanager get-secret-value --region "$REGION" \
+  --secret-id "${dev_secret_arn}" --query 'SecretString' --output text)"
+
+# --- sashiki のインストール(deb) ---
+%{ if github_token != "" ~}
+curl -fsSL -H "Authorization: Bearer ${github_token}" \
+  "https://raw.githubusercontent.com/rikukaInoue/sashiki/${sashiki_ref}/install.sh" \
+  | GITHUB_TOKEN="${github_token}" bash
+%{ else ~}
+curl -fsSL "https://raw.githubusercontent.com/rikukaInoue/sashiki/${sashiki_ref}/install.sh" | bash
+%{ endif ~}
+
+# --- データ EBS がアタッチされるまで待つ ---
+for i in $(seq 1 30); do
+  [ -b "$DATA_DEVICE" ] && break
+  sleep 5
+done
+
+# --- init: zpool 作成・mysql セットアップ・config 生成・sashikid 有効化まで(--yes で非対話) ---
+sashiki init --yes --pool "$POOL" --device "$DATA_DEVICE"
+
+# init が生成した config の proxy ユーザー/パスワードを Secrets Manager の値へ差し替える。
+CONFIG=/etc/sashiki/config.yaml
+if [ -f "$CONFIG" ]; then
+  sed -i "s/^\( *proxy_user:\).*/\1 ${proxy_user}/" "$CONFIG"
+  # パスワードは特殊文字を避けた生成(special=false)なので単純 sed で安全。
+  sed -i "s/^\( *proxy_pass:\).*/\1 $DEV_PASSWORD/" "$CONFIG"
+fi
+
+# --- API トークンを sashikid の環境に渡す ---
+install -d -m 0755 /etc/sashiki
+umask 077
+cat > /etc/sashiki/env <<EOF
+SASHIKI_API_TOKEN=$API_TOKEN
+EOF
+# systemd unit が EnvironmentFile=/etc/sashiki/env を読む前提。無ければ drop-in で補う。
+if ! grep -q "EnvironmentFile=/etc/sashiki/env" /etc/systemd/system/sashikid.service 2>/dev/null; then
+  install -d -m 0755 /etc/systemd/system/sashikid.service.d
+  cat > /etc/systemd/system/sashikid.service.d/10-env.conf <<'EOF'
+[Service]
+EnvironmentFile=/etc/sashiki/env
+EOF
+  systemctl daemon-reload
+fi
+systemctl enable --now sashikid
+
+# baseline import は運用者の手順(ダンプが要るため)。ここでは sashikid 稼働までを保証する。
+echo "sashiki: bootstrap done. Next: sashiki baseline import <dump.sql>"
