@@ -171,3 +171,29 @@ func TestErrPacket(t *testing.T) {
 		t.Error("bad code")
 	}
 }
+
+// クライアントに広告した capDeprecateEOF は backend にも申告される(#proxy-eof)。
+// これが欠けると go-sql-driver など DeprecateEOF 前提のクライアントで
+// 複数カラムの結果セットがずれて panic する。
+func TestBackendHandshakeAdvertisesDeprecateEOF(t *testing.T) {
+	hr := handshakeResponse{
+		caps:    capProtocol41 | capSecureConn | capPluginAuth | capDeprecateEOF,
+		maxLen:  1 << 24,
+		charset: 0xff,
+	}
+	// backend も DeprecateEOF 対応(mysql 8.0)
+	body := buildBackendHandshakeResponse(hr, hr.caps, "dev", bytes.Repeat([]byte{1}, 20), nativePlugin)
+	parsed, err := parseHandshakeResponse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.caps&capDeprecateEOF == 0 {
+		t.Error("backend handshake must advertise capDeprecateEOF when the client uses it")
+	}
+	// backend が DeprecateEOF 非対応なら申告しない(過剰申告を避ける)
+	body2 := buildBackendHandshakeResponse(hr, hr.caps&^capDeprecateEOF, "dev", bytes.Repeat([]byte{1}, 20), nativePlugin)
+	parsed2, _ := parseHandshakeResponse(body2)
+	if parsed2.caps&capDeprecateEOF != 0 {
+		t.Error("must not advertise capDeprecateEOF when backend does not support it")
+	}
+}

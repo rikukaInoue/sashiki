@@ -210,7 +210,7 @@ func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
 		return authErr(client, seq+1, 2003, "HY000", "backend unavailable")
 	}
 	defer func() { _ = backend.Close() }()
-	if berr := s.authenticateBackend(backend); berr != nil {
+	if berr := s.authenticateBackend(backend, hr.database); berr != nil {
 		log.Printf("proxy: backend auth for %s@%s: %v", user, branch, berr)
 		return authErr(client, seq+1, 2003, "HY000", "backend auth failed")
 	}
@@ -232,7 +232,7 @@ func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
 
 // authenticateBackend は sashiki がクライアントとして backend mysqld へ
 // mysql_native_password で認証する(方式A)。backend の dev は native_password。
-func (s *Server) authenticateBackend(backend net.Conn) error {
+func (s *Server) authenticateBackend(backend net.Conn, database string) error {
 	bhs, err := readPacket(backend)
 	if err != nil {
 		return fmt.Errorf("read backend handshake: %w", err)
@@ -241,10 +241,18 @@ func (s *Server) authenticateBackend(backend net.Conn) error {
 	if err != nil {
 		return err
 	}
-	// backend 認証では DB を選ばない(接続後にクライアントが USE する)。
-	// capConnectWithDB を広告すると db フィールドが必須になり、省くと backend が
-	// 後続の plugin 名を DB 名と誤読するため、そもそも広告しない。
-	hr := handshakeResponse{caps: synthCaps &^ capConnectWithDB, maxLen: 16 * 1024 * 1024, charset: 0xff}
+	// クライアントが接続時に指定した DB(DSN の /dbname)を backend にも引き継ぐ。
+	// go-sql-driver 等は handshake の database フィールドでのみ DB を選択し、
+	// 明示的な USE を送らないため、ここで転送しないと backend が DB 未選択のまま
+	// になり "No database selected"(1046)になる。DB 指定が無ければ従来どおり
+	// capConnectWithDB を落として何も選択しない。
+	hr := handshakeResponse{maxLen: 16 * 1024 * 1024, charset: 0xff}
+	if database != "" {
+		hr.caps = synthCaps
+		hr.database = database
+	} else {
+		hr.caps = synthCaps &^ capConnectWithDB
+	}
 	token := nativeToken(s.cfg.AppPassword, salt)
 	resp := buildBackendHandshakeResponse(hr, backendCaps, s.cfg.AppUser, token, nativePlugin)
 	if err := writePacket(backend, packet{seq: bhs.seq + 1, body: resp}); err != nil {
