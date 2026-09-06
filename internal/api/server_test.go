@@ -328,3 +328,25 @@ func TestAPIOperationsTracking(t *testing.T) {
 	}
 	_ = db
 }
+
+func TestAPICreateWithProvenance(t *testing.T) {
+	srv, _ := newTestServerWithDB(t)
+	body := `{"name":"pr-1","owner":"bob","purpose":"qa","source":{"type":"github_pr","ref":"7"}}`
+	resp, err := http.Post(srv.URL+"/v1/branches", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var b struct {
+		Owner   string          `json:"owner"`
+		Purpose string          `json:"purpose"`
+		Source  json.RawMessage `json:"source"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&b)
+	if b.Owner != "bob" || b.Purpose != "qa" {
+		t.Errorf("provenance = %+v", b)
+	}
+	if len(b.Source) == 0 || !strings.Contains(string(b.Source), "github_pr") {
+		t.Errorf("source round-trip failed: %s", b.Source)
+	}
+}

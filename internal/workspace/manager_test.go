@@ -759,3 +759,25 @@ func TestRetryRejectsNonErrorState(t *testing.T) {
 		t.Error("retry on running branch should fail")
 	}
 }
+
+func TestCreateWithMetaStoresProvenance(t *testing.T) {
+	m := newTestManager(t, &mockStorage{}, &mockEngine{}, "")
+	meta := state.Meta{
+		Profile: "preview", Owner: "alice", Purpose: "review",
+		Source: `{"type":"github_pr","repository":"shop","ref":"123"}`,
+	}
+	if _, err := m.CreateWithMeta(context.Background(), "pr-1", 0, meta); err != nil {
+		t.Fatal(err)
+	}
+	b, err := m.db.GetBranch("pr-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Profile != "preview" || b.Owner != "alice" || b.Purpose != "review" {
+		t.Errorf("provenance = %+v", b)
+	}
+	// core は source を解釈しない(そのまま保持)
+	if b.Source != meta.Source {
+		t.Errorf("source = %q, want opaque passthrough", b.Source)
+	}
+}

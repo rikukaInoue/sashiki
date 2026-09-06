@@ -156,7 +156,13 @@ func (m *Manager) allocPort(requested int) (int, error) {
 // @init snapshot → 再起動。hook の結果(マイグレーション適用済み)を
 // reset の戻り先にしつつ、@init を必ずクリーンな状態でのみ取得するため。
 // hook がない場合: clone → @init snapshot → 起動(最速経路)。
+// Create は provenance なしで作成する(後方互換)。
 func (m *Manager) Create(ctx context.Context, name string, port int) (Info, error) {
+	return m.CreateWithMeta(ctx, name, port, state.Meta{})
+}
+
+// CreateWithMeta は provenance 付きで branch を作成する(仕様 11-2)。
+func (m *Manager) CreateWithMeta(ctx context.Context, name string, port int, meta state.Meta) (Info, error) {
 	if !m.nameRe.MatchString(name) {
 		return Info{}, ErrInvalidName
 	}
@@ -184,6 +190,9 @@ func (m *Manager) Create(ctx context.Context, name string, port int) (Info, erro
 	origin := m.currentBaseline()
 	if err := m.db.CreateBranch(name, p, string(origin)); err != nil {
 		return Info{}, err
+	}
+	if meta != (state.Meta{}) {
+		_ = m.db.SetMeta(name, meta)
 	}
 	failStage := func(stage string, cause error) (Info, error) {
 		// error 状態+診断で残す(ログ確認のため自動削除しない)。仕様 11-1/14-2。
