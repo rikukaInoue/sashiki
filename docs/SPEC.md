@@ -502,7 +502,7 @@ hook 側がやること: Git clone、PR checkout、依存インストール、mi
 |`GET`   |`/capacity`                 |memory / storage / ports の空き                               |200            |                                 |
 |`GET`   |`/healthz`                  |                                                           |200            |                                 |
 
-> **実装ノート(v1.x 現在)**: 表の baseline 系は実装では `GET /v1/baseline`(current)/ `GET /v1/baselines` / `POST /v1/baseline/set|gc|refresh`(build→validate→publish の一括)。段階 API 化は #84。
+> **実装ノート(v1.x 現在)**: 表の baseline 系は実装では `GET /v1/baseline`(current)/ `GET /v1/baselines` / `POST /v1/baseline/set|gc|refresh`(build→validate→publish の一括)。段階 API(build/validate/publish/delete)は #84 で実装済み(`POST /v1/baseline/{build,validate,publish,delete}`、build/validate は 202 非同期)。refresh(一括)は互換維持。
 > また表にない実装済みエンドポイントとして `GET /v1/doctor`、`POST /v1/gc/orphans`、`POST /v1/drain`、`GET /v1/branches/{name}/schema`、`POST /v1/branches/{name}/query`(データブラウザ)、`POST /v1/branches/{name}/hooks/{event}`、Web UI(`GET /`)がある。
 > **202 + operation 非同期化は実装済み(#82)**。`create` / `reset` / `recreate` / `retry` / `delete` は **202 + `{operation_id}`**(+ `Sashiki-Operation-Id` ヘッダ)を返し、本体はバックグラウンド実行される(fsx-zfs で数分かかるため)。名前の妥当性・存在チェック・`exist_ok` 短絡は同期で先に評価して即 4xx/200 を返す。`wake` / `lease` は高速なので同期のまま(200)。**CLI は既定で `--wait`**(operation の完了までポーリングし、体感を同期に保つ。`--no-wait` で `operation_id` だけ返す。`--timeout` / `--interval` 可)。GitHub Action も 202 を検知して poll する。
 

@@ -37,8 +37,75 @@ func cmdBaseline(args []string) int {
 		return cmdBaselineGC(args[1:])
 	case "refresh":
 		return cmdBaselineRefresh(args[1:])
+	case "build":
+		return cmdBaselineBuild(args[1:])
+	case "validate":
+		return cmdBaselineStage(args[1:], "validate")
+	case "publish":
+		return cmdBaselineStage(args[1:], "publish")
+	case "delete":
+		return cmdBaselineStage(args[1:], "delete")
 	default:
 		return usageBaseline()
+	}
+}
+
+// cmdBaselineBuild は build 段階を実行し(既定 --wait)、candidate の snapshot を表示する(#84)。
+func cmdBaselineBuild(args []string) int {
+	_, noWait, timeout, interval := extractWaitFlags(args)
+	code, data, err := call("POST", "/v1/baseline/build", nil)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sashiki:", err)
+		return exitError
+	}
+	if code != http.StatusAccepted {
+		fmt.Fprintln(os.Stderr, "sashiki:", apiError(data))
+		return statusToExit(code)
+	}
+	var b struct {
+		OperationID string `json:"operation_id"`
+		Snapshot    string `json:"snapshot"`
+	}
+	_ = json.Unmarshal(data, &b)
+	done, exit := awaitMutation(data, noWait, timeout, interval)
+	if !done {
+		if !noWait {
+			return exit
+		}
+		fmt.Printf("baseline build started: %s (operation %s)\n", b.Snapshot, b.OperationID)
+		return exitOK
+	}
+	fmt.Printf("baseline built: %s\n  次: sashiki baseline validate %s / publish %s\n", b.Snapshot, b.Snapshot, b.Snapshot)
+	return exitOK
+}
+
+// cmdBaselineStage は validate / publish / delete を実行する(#84)。
+func cmdBaselineStage(args []string, stage string) int {
+	rest, noWait, timeout, interval := extractWaitFlags(args)
+	if len(rest) != 1 {
+		fmt.Fprintf(os.Stderr, "usage: sashiki baseline %s <snapshot>\n", stage)
+		return exitUsage
+	}
+	snap := rest[0]
+	code, data, err := call("POST", "/v1/baseline/"+stage, map[string]any{"snapshot": snap})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sashiki:", err)
+		return exitError
+	}
+	switch code {
+	case http.StatusOK: // publish / delete は同期
+		fmt.Printf("baseline %s: %s\n", stage, snap)
+		return exitOK
+	case http.StatusAccepted: // validate は非同期
+		done, exit := awaitMutation(data, noWait, timeout, interval)
+		if !done {
+			return exit
+		}
+		fmt.Printf("baseline %s: %s\n", stage, snap)
+		return exitOK
+	default:
+		fmt.Fprintln(os.Stderr, "sashiki:", apiError(data))
+		return statusToExit(code)
 	}
 }
 

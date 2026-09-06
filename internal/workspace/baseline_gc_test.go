@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -37,5 +38,44 @@ func TestGCBaselinesKeepLastRetentionDryRun(t *testing.T) {
 	}
 	if rows, _ := m.ListBaselineRows(); len(rows) != 1 {
 		t.Errorf("after gc keep_last=1: %d rows, want 1", len(rows))
+	}
+}
+
+func TestValidateAndDeleteBaseline(t *testing.T) {
+	m := newTestManager(t, &mockStorage{}, &mockEngine{}, "")
+	snap := "pool/base@bl-1"
+	if err := m.db.RegisterBaseline(snap, state.BaselineProvenance{}); err != nil {
+		t.Fatal(err)
+	}
+	// validate → validated=true
+	if err := m.ValidateBaseline(context.Background(), snap); err != nil {
+		t.Fatal(err)
+	}
+	validated := false
+	rows, _ := m.ListBaselineRows()
+	for _, r := range rows {
+		if r.Snapshot == snap {
+			validated = r.Prov.Validated
+		}
+	}
+	if !validated {
+		t.Error("baseline should be marked validated")
+	}
+	if err := m.ValidateBaseline(context.Background(), "nope"); !errors.Is(err, ErrBaselineNotFound) {
+		t.Errorf("validate unknown err = %v, want ErrBaselineNotFound", err)
+	}
+	// delete candidate(current でない・参照なし)
+	if err := m.DeleteBaseline(context.Background(), snap); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.db.GetBaseline(snap); err == nil {
+		t.Error("baseline should be deleted")
+	}
+	// current は削除拒否(precondition failed)
+	cur := string(m.currentBaseline())
+	_ = m.db.RegisterBaseline(cur, state.BaselineProvenance{})
+	_ = m.db.SetCurrentBaseline(cur)
+	if err := m.DeleteBaseline(context.Background(), cur); !errors.Is(err, ErrPreconditionFailed) {
+		t.Errorf("deleting current should be precondition-failed, got %v", err)
 	}
 }

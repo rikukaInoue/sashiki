@@ -114,6 +114,32 @@ type baselineDeleter interface {
 	DeleteBaselineSnapshot(ctx context.Context, snap storage.SnapshotRef) error
 }
 
+// DeleteBaseline は指定 candidate baseline を削除する(#84)。current・branch から
+// 参照中は 412(ErrPreconditionFailed)で拒否する。
+func (m *Manager) DeleteBaseline(ctx context.Context, snapshot string) error {
+	m.baselineMu.Lock()
+	defer m.baselineMu.Unlock()
+	if _, err := m.db.GetBaseline(snapshot); err != nil {
+		return fmt.Errorf("%w: %s", ErrBaselineNotFound, snapshot)
+	}
+	if string(m.currentBaseline()) == snapshot {
+		return fmt.Errorf("%w: baseline %s is current", ErrPreconditionFailed, snapshot)
+	}
+	refs, err := m.db.BaselineRefCounts()
+	if err != nil {
+		return err
+	}
+	if refs[snapshot] > 0 {
+		return fmt.Errorf("%w: baseline %s is referenced by %d branch(es)", ErrPreconditionFailed, snapshot, refs[snapshot])
+	}
+	if bd, ok := m.st.(baselineDeleter); ok {
+		if err := bd.DeleteBaselineSnapshot(ctx, storage.SnapshotRef(snapshot)); err != nil {
+			return err
+		}
+	}
+	return m.db.DeleteBaseline(snapshot)
+}
+
 // ListBaselineRows は API 用に provenance 付きで baseline を返す。
 func (m *Manager) ListBaselineRows() ([]state.BaselineRow, error) {
 	return m.db.ListBaselines()
