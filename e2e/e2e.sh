@@ -411,11 +411,21 @@ grep -q pr-idle <<<"$(sashiki list)" && fail "reaper: pr-idle should be TTL-dele
 log "reaper: 直接接続は idle stop を防ぐ (#41)"
 sashiki create pr-hold > /dev/null
 holdport=$(sashiki show pr-hold --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["port"])')
-mysql -udev -pdev -h127.0.0.1 -P"$holdport" -e "SELECT SLEEP(12)" >/dev/null 2>&1 &
+# proxy を通さず branch 実ポートへ直接、長い接続を張る(SLEEP は余裕をもって 30s)
+mysql -udev -pdev -h127.0.0.1 -P"$holdport" -e "SELECT SLEEP(30)" >/dev/null 2>&1 &
 holdpid=$!
-sleep 7   # idle_stop_after(3s)を十分超える
+# 接続が確立して SLEEP が走り始めるまで待つ(これを待たずに idle 判定へ入ると
+# connpoll がまだ接続を観測できておらず reaper に寝かされて flaky になる)。
+for _ in $(seq 1 30); do
+  n=$(mysql -udev -pdev -h127.0.0.1 -P"$holdport" -N -e \
+    "SELECT COUNT(*) FROM information_schema.processlist WHERE info LIKE 'SELECT SLEEP%'" 2>/dev/null)
+  [ "${n:-0}" -ge 1 ] && break
+  sleep 0.3
+done
+sleep 6   # idle_stop_after(3s)+ connpoll(1s周期)を十分に跨ぐ
 grep -q "pr-hold.*running" <<<"$(sashiki list)" \
   || { sashiki list; fail "reaper: 直接接続中の pr-hold は running のままであるべき (#41)"; }
+kill "$holdpid" 2>/dev/null || true
 wait "$holdpid" 2>/dev/null || true
 sashiki delete pr-hold > /dev/null
 
