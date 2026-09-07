@@ -148,3 +148,26 @@ process モードは `sashikid` を動かしているユーザーで `mysqld` �
 - **root 実行(Linux コンテナで PID1=root 等)**: mysqld は root では起動を拒むため、
   `run_user`(既定 `mysql`)へ降格して `--user=<run_user>` を渡す。この場合は
   **datadir の所有権を `run_user` に合わせておく**(でないと mysqld が書けない)。
+
+### 接続ユーザー(#131)
+
+- クライアントは **`<user>@<branch>`** の形で `:3306` プロキシに接続し、パスワードは
+  `engine.mysql.app_pass`(既定 `dev`)。例: `mysql -udev@pr-1 -pdev -h127.0.0.1 -P3306`。
+- 既定では **app_user(既定 `dev`)のみ**が許可される。プロキシは `@<branch>` の
+  branch 部でルーティングし、パスワードは `app_pass` で検証する。
+- **任意のユーザー名を許可**したいときは `proxy.allowed_user: ""`(空文字)を設定する。
+  特定名だけ許可したいなら `proxy.allowed_user: <name>`。未設定なら app_user のみ。
+- **管理者権限が要る操作**(migration 等、authense の migrationdb は root 固定)は
+  app_user では権限不足になりうる。`proxy.allowed_user: ""` にした上で baseline に
+  管理ユーザーを用意し、`<admin>@<branch>` で接続する(パスワードは `app_pass` で検証)。
+
+### macOS の警告と compose 定型(#132)
+
+- **`lower_case_table_names=2` の警告**: APFS は大小非区別のため mysqld が起動時に
+  自動で 2 を選び警告を出す。**無害**(datadir 初期化時に確定し一貫している)。気に
+  なる場合は baseline を作る環境で明示しておく。
+- **docker compose から sashiki の DB を使う**(worktree ごとに PR プレビュー):
+  - compose の DB サービスは使わない(`depends_on` から外す)
+  - アプリの接続先を `DB_HOST=host.docker.internal`(OrbStack/Docker Desktop が Mac host に解決)、`DB_PORT=3306`、`DB_USER=dev@pr-<n>`、`DB_PASSWORD=dev`
+  - worktree ごとに `COMPOSE_PROJECT_NAME` を分けてコンテナ名の衝突を避ける(`.envrc` で
+    worktree 名から設定すると楽)

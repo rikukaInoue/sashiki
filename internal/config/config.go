@@ -125,6 +125,10 @@ type Proxy struct {
 	MaxConnPerBranch int    `yaml:"max_conn_per_branch"`
 	TLSCert          string `yaml:"tls_cert"` // 空なら TLS 終端しない(平文)。方式A #51
 	TLSKey           string `yaml:"tls_key"`
+	// AllowedUser は `<user>@<branch>` の user 部の許可。未設定(nil)なら
+	// app_user のみ許可(既定)。空文字 "" を明示すると任意のユーザー名を許可する
+	// (管理ユーザーで接続したい場合など、#131)。特定名を入れればその名前だけ許可。
+	AllowedUser *string `yaml:"allowed_user"`
 }
 
 // Branches はブランチのポリシー。
