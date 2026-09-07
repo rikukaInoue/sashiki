@@ -42,6 +42,25 @@ func TestStartArgs(t *testing.T) {
 	}
 }
 
+func TestStartArgsExtraCnf(t *testing.T) {
+	e := New(Config{Mode: ModeProcess, ExtraCnf: "/etc/sashiki/server.80.cnf"})
+	ins := engine.Instance{Branch: "pr-1", DataDir: "/data/pr-1", Port: 3401}
+	args := e.startArgs(ins)
+	if args[0] != "--defaults-extra-file=/etc/sashiki/server.80.cnf" {
+		t.Errorf("args[0] = %q, want --defaults-extra-file=...", args[0])
+	}
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "--no-defaults") {
+		t.Error("--no-defaults must not coexist with --defaults-extra-file")
+	}
+	// sashiki が制御する項目は後続で必ず渡る(cnf を上書きできる)
+	for _, want := range []string{"--datadir=/data/pr-1", "--port=3401", "--pid-file=/data/pr-1/mysqld.pid"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+}
+
 // spawnFake は SIGTERM/SIGKILL で死ぬ実プロセスを起動し、その pid を pidfile に書く。
 // mysqld の代わりにライフサイクル制御(pidfile + シグナル)を検証するためのもの。
 func spawnFake(t *testing.T, e *Engine, ins engine.Instance) *exec.Cmd {

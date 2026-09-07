@@ -34,6 +34,11 @@ type Config struct {
 	// RunUser は root で動かすとき mysqld に渡す --user(既定 "mysql")。
 	// root でなければ無視する。
 	RunUser string
+	// ExtraCnf はプロジェクト固有の my.cnf(例: authense の server.80.cnf)。
+	// 指定時は process モードで --no-defaults の代わりに --defaults-extra-file=<path>
+	// を先頭に置く。datadir/port/socket/pid-file/log-error は sashiki が後続の
+	// 引数で必ず上書きする(コマンドライン優先)。
+	ExtraCnf string
 }
 
 const (
