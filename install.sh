@@ -16,6 +16,21 @@ if [ -n "${GITHUB_TOKEN:-}" ]; then
 fi
 api="https://api.github.com/repos/${REPO}/releases/latest"
 
+# SASHIKI_RELEASE がタグ(例 v0.4.1)なら releases/download の直リンクで取得する。
+# latest API 経由の JSON パースで非 deb を掴む事故を避ける(#166)。
+# "latest" / "main" / 空 のときは従来どおり latest API を使う。
+REL="${SASHIKI_RELEASE:-}"
+
+# direct_url SUFFIX : 直リンク URL を返す(タグ未指定なら空を返す)。
+#   SUFFIX 例: "_linux_amd64.deb" / "_darwin_arm64.tar.gz"
+direct_url() {
+  if [ -z "$REL" ] || [ "$REL" = latest ] || [ "$REL" = main ]; then
+    return 0
+  fi
+  local ver="${REL#v}"
+  printf 'https://github.com/%s/releases/download/%s/sashiki_%s%s' "$REPO" "$REL" "$ver" "$1"
+}
+
 # asset_url PATTERN : 最新 release から PATTERN を名前に含む asset の URL を返す。
 asset_url() {
   local pattern="$1"
@@ -36,7 +51,8 @@ Linux)
   esac
   case "$ARCH" in amd64 | arm64) ;; *) echo "install.sh: unsupported arch: $ARCH" >&2; exit 1 ;; esac
 
-  url=$(asset_url "_${ARCH}.deb")
+  url=$(direct_url "_linux_${ARCH}.deb")
+  [ -z "$url" ] && url=$(asset_url "_${ARCH}.deb")
   if [ -z "$url" ]; then
     echo "install.sh: ${ARCH} の deb が見つかりません" >&2
     exit 1
@@ -58,7 +74,8 @@ Darwin)
   esac
   case "$ARCH" in amd64 | arm64) ;; *) echo "install.sh: unsupported arch: $ARCH" >&2; exit 1 ;; esac
 
-  url=$(asset_url "_darwin_${ARCH}.tar.gz")
+  url=$(direct_url "_darwin_${ARCH}.tar.gz")
+  [ -z "$url" ] && url=$(asset_url "_darwin_${ARCH}.tar.gz")
   if [ -z "$url" ]; then
     echo "install.sh: darwin/${ARCH} の tar.gz が見つかりません" >&2
     exit 1
