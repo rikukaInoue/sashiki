@@ -172,6 +172,14 @@ func TestAPILifecycle(t *testing.T) {
 		t.Errorf("get status = %d, want 404", resp.StatusCode)
 	}
 	_ = resp.Body.Close()
+
+	// #180: 存在しないブランチの delete は 404(「deleted」と誤表示しない)。
+	req, _ = http.NewRequest(http.MethodDelete, srv.URL+"/v1/branches/does-not-exist", nil)
+	resp, _ = http.DefaultClient.Do(req)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("delete of missing branch = %d, want 404", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
 }
 
 func TestAPIAuthFromNonLoopback(t *testing.T) {
