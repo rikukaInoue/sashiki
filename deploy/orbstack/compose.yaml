@@ -9,6 +9,10 @@ services:
       context: .
       dockerfile: Dockerfile
     privileged: true
+    # PID 1 を tini(docker-init)にして、daemonize した mysqld を SIGKILL した後の
+    # ゾンビを刈り取る。刈り取られないと socket lock の pid が生存扱いになり、reset の
+    # 再起動が MY-010259 で失敗する(#140)。
+    init: true
     ports:
       - "13306:3306"   # proxy(user@branch ルーティング)
       - "8080:8080"   # REST API / Web UI

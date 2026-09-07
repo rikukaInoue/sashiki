@@ -93,6 +93,13 @@ func (e *Engine) killProcess(ctx context.Context, ins engine.Instance) error {
 		e.waitGone(ins, 5*time.Second)
 	}
 	_ = os.Remove(e.pidPath(ins))
+	// SIGKILL では mysqld が後始末しないため、socket とその lock ファイルが残る。
+	// lock には旧 pid が書かれており、PID 1 が刈り取る前(ゾンビ中)に再 Start すると
+	// 新 mysqld が「pid X が socket 使用中」と誤認して起動拒否する(MY-010259)。
+	// 強制停止時点で lock は必ず stale なので消してよい。
+	sock := e.socketPath(ins)
+	_ = os.Remove(sock)
+	_ = os.Remove(sock + ".lock")
 	return nil
 }
 
