@@ -130,6 +130,8 @@ profile sashiki-mysqld /usr/sbin/mysqld flags=(attach_disconnected) {
   /usr/share/mysql*/** r,
   /etc/mysql/ r,
   /etc/mysql/** r,
+  /etc/sashiki/ r,
+  /etc/sashiki/*.cnf r,
   /etc/hosts.allow r,
   /etc/hosts.deny r,
   /etc/ssl/openssl.cnf r,
