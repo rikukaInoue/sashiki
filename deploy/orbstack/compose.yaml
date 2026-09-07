@@ -1,0 +1,20 @@
+# macOS(OrbStack)で sashiki をフル VM 無しに動かす(#113 候補B / #140)。
+#   1. ホストで:  ./deploy/orbstack/build.sh   # sashiki を linux にクロスビルド
+#   2. docker compose -f deploy/orbstack/compose.yaml up --build
+#   3. mysql -udev@pr-1 -pdev -h 127.0.0.1 -P 3306   # 未知ブランチは lazy create
+# privileged は loopback XFS(reflink)のマウントに必要。
+services:
+  sashiki:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    privileged: true
+    ports:
+      - "13306:3306"   # proxy(user@branch ルーティング)
+      - "8080:8080"   # REST API / Web UI
+    environment:
+      XFS_SIZE_MB: "2048"
+    volumes:
+      - sashiki-xfs:/xfs-store   # XFS イメージの永続化(任意)
+volumes:
+  sashiki-xfs:

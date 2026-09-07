@@ -48,7 +48,7 @@ func usage() int {
   sashiki baseline import|list
   sashiki token create|list|revoke
   sashiki op list | show <id> | wait <id>
-  sashiki capacity
+  sashiki capacity [--json]
   sashiki doctor [--json]
   sashiki gc --orphans
   sashiki drain
@@ -517,6 +517,9 @@ func cmdConnect(args []string) int {
 
 func humanBytes(n int64) string {
 	const unit = 1024
+	if n < 0 {
+		return "-" // 不明(取得できない値。CoW 差分が取れない apfs 等)
+	}
 	if n < unit {
 		return fmt.Sprintf("%dB", n)
 	}
