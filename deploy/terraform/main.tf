@@ -139,7 +139,20 @@ resource "aws_iam_role_policy_attachment" "ssm" {
 resource "aws_iam_instance_profile" "this" {
   name = "${var.name}-sashiki"
   role = aws_iam_role.this.name
-  tags = local.tags
+  # instance profile にはモジュール側でタグを付けない(#160)。iam:TagInstanceProfile が
+  # 要るのはここだけで、PowerUser 相当では弾かれるため。provider の default_tags を
+  # 使っている場合はそちらの適用有無に従う(モジュールからは制御できない)。
+}
+
+# --- Route53 A レコード(route53_zone_id と dns_name の両方が指定されたとき、#161)---
+# endpoint output は dns_name を返すので、その名前を private IP に解決する A レコードを作る。
+resource "aws_route53_record" "this" {
+  count   = var.route53_zone_id != "" && var.dns_name != "" ? 1 : 0
+  zone_id = var.route53_zone_id
+  name    = var.dns_name
+  type    = "A"
+  ttl     = 60
+  records = [aws_instance.this.private_ip]
 }
 
 # --- データ EBS: prevent_destroy でブランチデータを守る ---
@@ -178,6 +191,14 @@ resource "aws_instance" "this" {
   iam_instance_profile   = aws_iam_instance_profile.this.name
   key_name               = var.key_name != "" ? var.key_name : null
   tags                   = local.tags
+
+  # root ボリューム。既定 8GB(AMI 既定)ではダンプ作業や apt で溢れるため広げる(#162)。
+  # ブランチデータ本体は別の data EBS(/tank)に置く。
+  root_block_device {
+    volume_size = var.root_volume_size
+    volume_type = "gp3"
+    encrypted   = true
+  }
 
   user_data = templatefile("${path.module}/user-data.sh.tftpl", {
     name               = var.name
