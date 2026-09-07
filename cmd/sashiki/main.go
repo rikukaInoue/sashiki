@@ -34,19 +34,20 @@ func main() {
 
 func usage() int {
 	fmt.Fprint(os.Stderr, `Usage:
-  sashiki create <name> [--port N] [--owner O] [--purpose P] [--source JSON] [--json]
-  sashiki delete <name>
+  sashiki create <name> [--port N] [--owner O] [--purpose P] [--profile P] [--ttl D] [--baseline B] [--source JSON] [--json]
+  sashiki delete <name> [--json]
   sashiki reset  <name> [--json]
   sashiki recreate <name> [--json]
   sashiki retry <name> [--json]
   sashiki sleep  <name> [--json]
   sashiki wake   <name> [--json]
+  sashiki lease renew <name> --for <dur>   (例 7d, 1h)
   sashiki hooks run <name> <event>
   sashiki list   [--json]
   sashiki show   <name> [--json]
   sashiki connect <name>
   sashiki init   --pool <p> [--device <dev>] [--skip-packages] [--yes]
-  sashiki baseline import|list
+  sashiki baseline import|list|refresh|promote|set|delete|build|validate|publish|gc   (詳細は sashiki baseline)
   sashiki token create|list|revoke
   sashiki op list | show <id> | wait <id>
   sashiki capacity [--json]
@@ -54,6 +55,9 @@ func usage() int {
   sashiki gc --orphans
   sashiki drain
   sashiki version
+
+非同期な変更(create/delete/reset/recreate/retry、baseline refresh|promote)は既定で完了まで待つ。
+  --no-wait で待たずに operation を返す / --timeout <dur> / --interval <dur> で待機を調整。
 `)
 	return exitUsage
 }

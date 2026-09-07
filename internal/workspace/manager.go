@@ -378,9 +378,9 @@ func (m *Manager) CreateWithMetaFrom(ctx context.Context, name string, port int,
 	return m.info(ctx, name)
 }
 
-// Reset はブランチを @init に巻き戻す(FastRollback バックエンド)。
-// 遅いバックエンドでは「新クローン+付け替え」になるが v0.1 では未実装
-// (docs/DECISIONS.md 参照)。
+// Reset はブランチを @init に巻き戻す。FastRollback バックエンド(zfs/apfs/reflink)
+// は snapshot rollback、遅いバックエンド(fsx)は同じ origin からの「作り直し」で
+// @init 相当を再現する(下の recreateFrom 分岐。docs/DECISIONS.md 参照)。
 func (m *Manager) Reset(ctx context.Context, name string) (Info, error) {
 	unlock := m.lock(name)
 	defer unlock()

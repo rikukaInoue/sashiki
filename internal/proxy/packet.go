@@ -237,16 +237,6 @@ func parseHandshakeResponse(body []byte) (handshakeResponse, error) {
 	return r, nil
 }
 
-// buildAuthSwitchRequest はバックエンドの salt でクライアントに認証やり直しを求める。
-func buildAuthSwitchRequest(salt []byte) []byte {
-	b := []byte{0xfe}
-	b = append(b, []byte(nativePlugin)...)
-	b = append(b, 0)
-	b = append(b, salt...)
-	b = append(b, 0)
-	return b
-}
-
 // parseBackendHandshake はバックエンド mysqld のハンドシェイクから salt と caps を取る。
 func parseBackendHandshake(body []byte) (salt []byte, caps uint32, err error) {
 	if len(body) < 1 || body[0] != 10 {

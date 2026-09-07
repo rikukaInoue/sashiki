@@ -80,7 +80,7 @@ Darwin)
     sudo install -m 0755 "$tmp/sashikid" "$dest/sashikid"
   fi
   echo "installed: $(sashiki version)"
-  echo "next: sashiki init --platform darwin  (Homebrew mysql + apfs + launchd。未実装なら docs/LOCAL-DEV.md 参照)"
+  echo "next: sashiki init --platform darwin  (Homebrew mysql + apfs + launchd。詳細は docs/LOCAL-DEV.md)"
   ;;
 
 *)
