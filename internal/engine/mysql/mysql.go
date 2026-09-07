@@ -118,7 +118,14 @@ func (e *Engine) Start(ctx context.Context, ins engine.Instance) error {
 	if e.cfg.Mode == ModeProcess {
 		return e.startProcess(ctx, ins)
 	}
-	env := fmt.Sprintf("PORT=%d\nDATADIR=%s\n", ins.Port, ins.DataDir)
+	// MYSQLD_DEFAULTS: extra_cnf 指定時は --defaults-file=<path> を出し、ユニットの
+	// ExecStart 先頭で使う(branch の mysqld にも extra_cnf を効かせる、#169)。
+	// 未指定なら空(従来どおり既定 my.cnf を読む)。
+	defaults := ""
+	if e.cfg.ExtraCnf != "" {
+		defaults = "--defaults-file=" + e.cfg.ExtraCnf
+	}
+	env := fmt.Sprintf("PORT=%d\nDATADIR=%s\nMYSQLD_DEFAULTS=%s\n", ins.Port, ins.DataDir, defaults)
 	if err := os.WriteFile(e.envPath(ins.Branch), []byte(env), 0o644); err != nil {
 		return fmt.Errorf("write env: %w", err)
 	}
