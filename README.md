@@ -1,14 +1,15 @@
 # sashiki
 
-![status](https://img.shields.io/badge/status-v0.2%20(public%20preview)-orange) ![license](https://img.shields.io/badge/license-Apache--2.0-blue)
+![status](https://img.shields.io/badge/status-v0.4%20(public%20preview)-orange) ![license](https://img.shields.io/badge/license-Apache--2.0-blue)
 
-> **成熟度**: v0.2(public preview)。MySQL + GitHub PR プレビューの経路は実機で検証済み。
+> **成熟度**: v0.4(public preview)。MySQL + GitHub PR プレビューの経路は実機で検証済み。
 > API / config は**まだ固定していない**(マイナー版で破壊的変更があり得る)。本番 DB には使わない。
 
 **開発環境向けの、ブランチできる RDS。**
 
 本番相当のサイズ・中身の MySQL / PostgreSQL を、Git のブランチのように**数秒で作って・壊して・戻せる**。
-ZFS の Copy-on-Write クローンを使うので、何 GB のデータベースでも複製は数百 KB。
+Copy-on-Write クローン(Linux は ZFS、**macOS は APFS `clonefile`**)を使うので、何 GB のデータベースでも複製は数百 KB。
+Linux(EC2 / ZFS)でも **Mac ネイティブ(VM 無し)** でも動く。
 PR プレビュー・CI・開発者 sandbox・マイグレーション検証——非本番で「独立した DB がすぐ欲しい」場面のためのセルフホスト基盤。
 
 ```console
@@ -55,14 +56,18 @@ profile は用途ごとの寿命(idle 停止 / 自動削除)を表す。`create 
 
 ---
 
-## 使ってみる(Ubuntu 24.04)
+## 使ってみる
 
-> **macOS で試す / git worktree ごとに DB を分けたい人は** → [docs/LOCAL-DEV.md](docs/LOCAL-DEV.md)(Lima VM + OrbStack + worktree 連動)。sashiki は ZFS が要るので Mac ではフル VM の中で動かす。
+環境に応じて 2 経路:
+
+- **Linux(Ubuntu 24.04, EC2 等)** — ZFS バックエンド + systemd。本番寄りの構成。以下の手順。
+- **macOS ネイティブ(VM 無し, v0.4〜)** — APFS `clonefile` + mysqld 直起動。下の [macOS ネイティブ](#macos-ネイティブvm-無し) を参照。
+  (Lima VM や git worktree 連動が要る場合は [docs/LOCAL-DEV.md](docs/LOCAL-DEV.md))
 
 ### 1. インストール
 
 ```bash
-# 最新 release を取得して導入(deb)
+# 最新 release を取得して導入(Linux=deb / macOS=tar.gz を自動判別)
 curl -fsSL https://raw.githubusercontent.com/rikukaInoue/sashiki/main/install.sh | sudo bash
 ```
 
@@ -93,6 +98,25 @@ sudo systemctl enable --now sashikid
 sashiki create pr-1
 mysql -udev@pr-1 -pdev -h 127.0.0.1 -P3306   # :3306 固定エンドポイント経由で接続
 ```
+
+### macOS ネイティブ(VM 無し)
+
+フル VM も ZFS カーネル拡張も無しで、Mac 上で直接動かせる(v0.4〜)。
+ストレージは **APFS `clonefile`**、mysqld は **systemd を使わず直接 spawn**(process モード)。
+
+```bash
+brew install mysql@8.0     # 方式A プロキシは mysql_native_password を使うため 8.0 必須
+                           # (MySQL 9.x は native_password を廃止していて接続認証が通らない)
+curl -fsSL https://raw.githubusercontent.com/rikukaInoue/sashiki/main/install.sh | bash
+sashiki init --platform darwin --yes   # mysql@8.0 検出・base 初期化・baseline・config・launchd 常駐
+sashiki create pr-1
+mysql -udev@pr-1 -pdev -h 127.0.0.1 -P3306
+```
+
+`init --platform darwin` は root 不要。既定のルートは `~/Library/Application Support/sashiki`
+(`--root` で変更可)。詳細と Lima/worktree 連動は [docs/LOCAL-DEV.md](docs/LOCAL-DEV.md)。
+
+> 実測(20GB baseline, Apple Silicon): create 1〜3s / reset 1.3〜2.5s / recreate 〜3.5s。
 
 ---
 
@@ -161,7 +185,7 @@ PR open/reopen で create、close で delete。接続情報を出力するので
 
 ```hcl
 module "db" {
-  source = "github.com/rikukaInoue/sashiki//deploy/terraform?ref=v0.2.0"
+  source = "github.com/rikukaInoue/sashiki//deploy/terraform?ref=v0.4.0"
 
   name           = "myapp-preview"
   vpc_id         = var.vpc_id
@@ -189,8 +213,8 @@ apply 完了時点で sashikid が稼働する。詳細は [deploy/terraform/REA
 - **baseline**: build → validate → publish。PII マスキングを必須化できる。`baseline set` で即ロールバック
 - **capacity 管理**: メモリ admission(不足時は新規を拒否して既存 mysqld を OOM から守る)、storage watermark、`sashiki capacity`
 - **運用**: 起動時 reconciliation、`sashiki doctor`、orphan GC、`sashiki drain`、構造化ログ + Prometheus メトリクス、Web UI
-- **engine**: MySQL / PostgreSQL
-- **storage backend**: EBS + ZFS(既定、秒単位の UX)/ FSx for OpenZFS(storage と compute の分離)
+- **engine**: MySQL / PostgreSQL。起動は systemd(既定)または **process モード**(mysqld 直起動、systemd の無い macOS / コンテナ向け)
+- **storage backend**: EBS + ZFS(Linux 既定、秒単位の UX)/ FSx for OpenZFS(storage と compute の分離)/ **APFS clonefile**(macOS ネイティブ)/ **XFS reflink**(コンテナ)
 
 ## アーキテクチャ
 
@@ -221,15 +245,19 @@ sashiki は「汎用エンジン + MySQL/PR の完成した adapter」。コア�
 
 「設定 3 行で完成」ではなく「1 日で組めるフレームワーク」と考えてほしい。
 
-## 対応状況(v0.2)
+## 対応状況(v0.4)
 
 | | 状態 |
 |---|---|
 | MySQL + GitHub PR プレビュー | ✅ 実機検証済み(create / reset / recreate / delete / lazy create / proxy / baseline 更新 / スキーマ比較) |
+| macOS ネイティブ(APFS + process) | ✅ 実機検証済み(VM 無し。要 mysql@8.0)。`sashiki init --platform darwin` |
+| OrbStack コンテナ(XFS reflink) | 🔶 CoW 基盤は実機検証済み。sashikid フルコンテナ化は今後([deploy/orbstack/](deploy/orbstack/)) |
 | PostgreSQL | 🔶 engine 対応。接続は**直接ポートのみ**(proxy / lazy create は MySQL のみ) |
-| EBS-ZFS バックエンド | ✅ default。単一ホスト |
+| EBS-ZFS バックエンド | ✅ default(Linux)。単一ホスト |
 | FSx-ZFS / multi-host / Spot | 🔶 実装済み・**本番運用実績なし**。必要になったら(§FAQ) |
 | API / config の安定性 | ⚠️ 未固定。v0.x の間はマイナー版で破壊的変更があり得る |
+
+> **プロキシとドライバ**: `:3306` プロキシ(方式A)は現状 Go の go-sql-driver で検証。PHP(mysqlnd)/ Node 等 **DEPRECATE_EOF を要求しないドライバで結果セットが空になる既知の不具合**あり([#125](https://github.com/rikukaInoue/sashiki/issues/125))。直接ポート接続は影響を受けない。
 
 ## 向かない用途
 
