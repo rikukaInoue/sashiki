@@ -78,7 +78,6 @@ func (b *Backend) Capabilities() storage.Capabilities {
 	return storage.Capabilities{
 		FastRollback:      false,
 		TypicalCreate:     70 * time.Second,
-		AsyncDelete:       true,
 		ClonesAreDistinct: true, // 世代サフィックス name-g<hex>
 	}
 }

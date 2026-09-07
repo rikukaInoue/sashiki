@@ -318,9 +318,9 @@ func TestMetricsOperationStats(t *testing.T) {
 	fs := fakeStorage{}
 	mgr, _ := workspace.New(workspace.Config{NamePattern: `^.+$`, PortLow: 3401, PortHigh: 3410, EngineType: "mysql", StateDir: t.TempDir()}, fs, fs, fakeEngine{}, nil, db)
 	_ = db.CreateOperation("op_1", "create", "pr-1")
-	_ = db.FinishOperation("op_1", "")
+	_ = db.FinishOperation("op_1", "", "")
 	_ = db.CreateOperation("op_2", "reset", "pr-1")
-	_ = db.FinishOperation("op_2", "boom")
+	_ = db.FinishOperation("op_2", "", "boom")
 
 	ms := httptest.NewServer(MetricsHandler(mgr))
 	defer ms.Close()

@@ -216,9 +216,6 @@ func TestCapabilitiesDeclareSlowControlPlane(t *testing.T) {
 	if c.TypicalCreate < 30*time.Second {
 		t.Error("TypicalCreate should reflect measured ~70s")
 	}
-	if !c.AsyncDelete {
-		t.Error("AsyncDelete should be true")
-	}
 }
 
 func TestResolveVolumePaginates(t *testing.T) {

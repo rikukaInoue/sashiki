@@ -61,7 +61,6 @@ func (b *Backend) Capabilities() storage.Capabilities {
 	return storage.Capabilities{
 		FastRollback:      true,
 		TypicalCreate:     2 * time.Second,
-		AsyncDelete:       false,
 		ClonesAreDistinct: false, // 固定名 branch_parent/<name>
 	}
 }

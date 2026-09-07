@@ -417,7 +417,7 @@ func TestResetRollsBackToInit(t *testing.T) {
 }
 
 func TestResetRecreateOnSlowBackend(t *testing.T) {
-	st := &mockStorage{caps: storage.Capabilities{FastRollback: false, AsyncDelete: true}}
+	st := &mockStorage{caps: storage.Capabilities{FastRollback: false}}
 	eng := &mockEngine{}
 	m := newTestManager(t, st, eng, "")
 	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
@@ -683,7 +683,7 @@ func TestResetRecreateRerunsOnCreateHook(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "on-create.sh"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	st := &mockStorage{caps: storage.Capabilities{FastRollback: false, AsyncDelete: true}}
+	st := &mockStorage{caps: storage.Capabilities{FastRollback: false}}
 	m := newTestManager(t, st, &mockEngine{}, dir)
 	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
 		t.Fatal(err)
@@ -699,7 +699,7 @@ func TestResetRecreateRerunsOnCreateHook(t *testing.T) {
 }
 
 func TestRecreateFromCurrentBaseline(t *testing.T) {
-	st := &mockStorage{caps: storage.Capabilities{FastRollback: true, AsyncDelete: true}}
+	st := &mockStorage{caps: storage.Capabilities{FastRollback: true}}
 	eng := &mockEngine{}
 	m := newTestManager(t, st, eng, "")
 	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
@@ -757,7 +757,7 @@ func TestRecreatePrefersOnRecreateHook(t *testing.T) {
 		[]byte("#!/bin/sh\necho create > "+marker+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	st := &mockStorage{caps: storage.Capabilities{FastRollback: true, AsyncDelete: true}}
+	st := &mockStorage{caps: storage.Capabilities{FastRollback: true}}
 	m := newTestManager(t, st, &mockEngine{}, dir)
 	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
 		t.Fatal(err)
@@ -1098,7 +1098,7 @@ func TestDoctorReportsIssues(t *testing.T) {
 
 func TestResetWorksAfterRecreate(t *testing.T) {
 	// recreate が @init を取っていないと、後続の reset が Rollback 先を失う(Fix 2)。
-	st := &mockStorage{caps: storage.Capabilities{FastRollback: true, AsyncDelete: true}}
+	st := &mockStorage{caps: storage.Capabilities{FastRollback: true}}
 	m := newTestManager(t, st, &mockEngine{}, "")
 	if _, err := m.Create(context.Background(), "pr-1", 0); err != nil {
 		t.Fatal(err)

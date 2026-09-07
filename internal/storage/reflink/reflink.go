@@ -51,7 +51,6 @@ func (b *Backend) Capabilities() storage.Capabilities {
 	return storage.Capabilities{
 		FastRollback:      true,
 		TypicalCreate:     500 * time.Millisecond,
-		AsyncDelete:       false,
 		ClonesAreDistinct: false,
 	}
 }

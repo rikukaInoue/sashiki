@@ -974,7 +974,7 @@ func (m *Manager) runHook(ctx context.Context, event hooks.Event, b state.Branch
 	if _, ok := m.hooks.Find(event); !ok {
 		return nil
 	}
-	id, _ := m.db.RecordHookStart(b.Name, string(event), "")
+	id, _ := m.db.RecordHookStart(b.Name, string(event))
 	res, err := m.hooks.Run(ctx, event, m.hookEnv(b, vol))
 	_ = m.db.RecordHookFinish(id, res.ExitCode)
 	if err != nil {
@@ -992,6 +992,10 @@ type stageErr struct {
 
 func (e *stageErr) Error() string { return e.err.Error() }
 func (e *stageErr) Unwrap() error { return e.err }
+
+// Code は失敗ステージを機械判定用のコードとして返す(operations.error_code、#151)。
+// ops.Runner が interface{ Code() string } で拾う(パッケージ間の import 循環を避ける)。
+func (e *stageErr) Code() string { return e.stage }
 func (e *stageErr) Is(target error) bool {
 	switch target {
 	case ErrHookFailed:
