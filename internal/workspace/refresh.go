@@ -166,6 +166,14 @@ func (m *Manager) RefreshBaseline(ctx context.Context, rc RefreshConfig) (tag st
 // quiesce・auto.cnf 削除を確認してから base の snapshot を取得し candidate として
 // 登録する(#84 build 段階)。返り値は candidate の snapshot と masked フラグ。
 func (m *Manager) buildCandidate(ctx context.Context, rc RefreshConfig, tag string) (storage.SnapshotRef, bool, error) {
+	// masked 判定は sentinel ファイルの「今回の build で作られたか」で行う。
+	// 前回の残留を今回のマスク済み扱いにしないよう、build 実行の前に必ず消す
+	// (これを怠ると require_masked が 2 回目以降で実質無効になる。security invariant)。
+	if rc.MaskedSentinel != "" {
+		if err := os.Remove(rc.MaskedSentinel); err != nil && !os.IsNotExist(err) {
+			return "", false, fmt.Errorf("masked sentinel の事前削除に失敗: %w", err)
+		}
+	}
 	if rc.useLoader {
 		if err := m.runSourceLoader(ctx, rc); err != nil {
 			// ローダー失敗時も mysqld が残っていれば回収を試みる(自己修復)
@@ -309,9 +317,13 @@ func (m *Manager) validateCandidate(ctx context.Context, snap storage.SnapshotRe
 	b := state.Branch{Name: name, Port: port}
 	ins := m.instance(b, vol)
 	cleanup := func() {
-		_ = m.eng.Kill(ctx, ins)
-		if job, derr := m.st.DeleteAsync(ctx, vol); derr == nil {
-			_, _ = m.st.Poll(ctx, job)
+		// 親 ctx が timeout/cancel されていても掃除は必ず完了させる。
+		// 親 ctx を使うと、validate タイムアウト時に canceled ctx で Kill/Delete が
+		// 即失敗し、未マスクかもしれない _validate の mysqld が :3999 に残ってしまう。
+		cctx := context.WithoutCancel(ctx)
+		_ = m.eng.Kill(cctx, ins)
+		if job, derr := m.st.DeleteAsync(cctx, vol); derr == nil {
+			_, _ = m.st.Poll(cctx, job)
 		}
 	}
 	defer cleanup()

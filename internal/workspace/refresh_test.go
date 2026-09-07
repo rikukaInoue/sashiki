@@ -331,3 +331,36 @@ func TestRefreshFailsWithoutScriptAndSourceDir(t *testing.T) {
 		t.Fatal("missing script without source_dir should fail")
 	}
 }
+
+// 前回の build で残った masked sentinel を、今回マスクしていないのに
+// masked 扱いしてはいけない(build 実行前に消す。#58 security invariant)。
+func TestRefreshDoesNotTrustStaleSentinel(t *testing.T) {
+	st := &mockStorage{}
+	m := newTestManager(t, st, &mockEngine{}, "")
+	before, _ := m.Baseline(context.Background())
+
+	// 前回の残留を模して、sentinel を事前に作っておく
+	sentinel := filepath.Join(t.TempDir(), "baseline-masked")
+	if err := os.WriteFile(sentinel, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 今回の build script は sentinel を作らない(= マスクしていない)
+	script := writeRefreshScript(t, "exit 0")
+	if _, err := m.RefreshBaseline(context.Background(), RefreshConfig{
+		Script: script, CheckQuiesced: quiesceOK, RequireMasked: true,
+		MaskedSentinel: sentinel,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitRefreshDone(t)
+	if RefreshLastError() == "" {
+		t.Error("stale sentinel must not be trusted; unmasked publish should be rejected")
+	}
+	after, _ := m.Baseline(context.Background())
+	if after.Current != before.Current {
+		t.Error("baseline must not be published based on a stale sentinel")
+	}
+	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+		t.Error("build should remove the sentinel before running")
+	}
+}
