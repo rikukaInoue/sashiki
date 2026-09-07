@@ -103,6 +103,12 @@ func main() {
 			MountRoot:        cfg.Storage.Fsx.MountRoot,
 		}, awsfsxsdk.NewFromConfig(awsCfg))
 		st, bp = fbe, fbe
+	case "apfs", "reflink":
+		lbe, lbp, err := localBackend(cfg.Storage.Backend, cfg.Storage.Local.Root, cfg.Storage.Local.BaselineSnapshot)
+		if err != nil {
+			log.Fatalf("storage: %v", err)
+		}
+		st, bp = lbe, lbp
 	default:
 		zbe := storageebszfs.New(storageebszfs.Config{
 			Pool:             cfg.Storage.Zfs.Pool,
@@ -139,6 +145,9 @@ func main() {
 			ProxyUser: cfg.Engine.Mysql.ProxyUser,
 			ProxyPass: cfg.Engine.Mysql.ProxyPass,
 			Sudo:      cfg.Engine.Mysql.Sudo,
+			Mode:      cfg.Engine.Mysql.Mode,
+			MysqldBin: cfg.Engine.Mysql.MysqldBin,
+			RunUser:   cfg.Engine.Mysql.RunUser,
 		})
 	}
 
