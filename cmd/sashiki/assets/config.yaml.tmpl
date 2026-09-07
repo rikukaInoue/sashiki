@@ -20,7 +20,10 @@ storage:
     base_dataset: {{.Pool}}/base
     branch_parent: {{.Pool}}/branches
     baseline_snapshot: baseline
-    sudo: false
+    # systemd デプロイでは sashikid は User=sashiki で動き、zfs は sudoers 経由で
+    # 実行する(sashiki init が /etc/sudoers.d/sashiki を生成)。root 直で動かす
+    # 構成(コンテナ等)では false にしてよい。
+    sudo: true
 
 engine:
   type: mysql
@@ -28,8 +31,12 @@ engine:
     port_range: [3401, 3600]
     app_user: dev            # 方式A の app credential(旧名 proxy_user も可)
     app_pass: dev            # 旧名 proxy_pass も可
-    env_dir: /etc/sashiki
-    sudo: false
+    # per-branch の <branch>.env は sashikid(User=sashiki)が書き、mysqld@.service が
+    # 読む。/run/sashiki は sashikid.service の RuntimeDirectory=sashiki で sashiki 所有
+    # として作られる(/etc は root 所有で書けないため #177)。
+    env_dir: /run/sashiki
+    # systemd デプロイでは mysqld を systemctl 経由で起動する(要 root=sudoers)。
+    sudo: true
   # postgres を使う場合(接続はプロキシでなく直接ポート、sashiki show <name> で確認):
   #   - listen.proxy: "" にする(プロキシは MySQL 専用)
   #   - idle_stop_after / delete_after_idle は接続追跡ができないため自動で無効化される
@@ -37,9 +44,9 @@ engine:
   # postgres:
   #   port_range: [5433, 5632]
   #   bin_dir: /usr/lib/postgresql/16/bin
-  #   env_dir: /etc/sashiki
+  #   env_dir: /run/sashiki
   #   listen_addresses: 127.0.0.1
-  #   sudo: false
+  #   sudo: true
 
 branches:
   name_pattern: "^[a-z0-9-]{1,32}$"

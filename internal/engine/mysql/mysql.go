@@ -118,6 +118,11 @@ func (e *Engine) Start(ctx context.Context, ins engine.Instance) error {
 	if e.cfg.Mode == ModeProcess {
 		return e.startProcess(ctx, ins)
 	}
+	// env_dir を確保する。systemd では RuntimeDirectory=sashiki が /run/sashiki を
+	// 先に作るので no-op、root 直起動(コンテナ/e2e)では自前で作る(#177)。
+	if err := os.MkdirAll(e.cfg.EnvDir, 0o755); err != nil {
+		return fmt.Errorf("ensure env_dir %s: %w", e.cfg.EnvDir, err)
+	}
 	// MYSQLD_DEFAULTS: extra_cnf 指定時は --defaults-file=<path> を出し、ユニットの
 	// ExecStart 先頭で使う(branch の mysqld にも extra_cnf を効かせる、#169)。
 	// 未指定なら空(従来どおり既定 my.cnf を読む)。
