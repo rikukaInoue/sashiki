@@ -25,7 +25,7 @@ $ sashiki delete pr-123    # 用が済んだら消す
 - 実データ量でマイグレーションをレビューできる(本番で長時間ロックする ALTER が事前に見つかる)
 - 課金されるのは動いている mysqld だけ。アイドルブランチは自動停止し、再接続で起きる
 
-背景と実測: [EBS 版 PoC](https://rikuka.dev/blog/db-branch-zfs-mysql-poc/) / [FSx 版検証](https://rikuka.dev/blog/db-branch-fsx-openzfs/)
+背景と実測: [EBS 版 PoC](https://rikuka.dev/blog/db-branch-zfs-mysql-poc/) / [FSx 版検証](https://rikuka.dev/blog/db-branch-fsx-openzfs/) / [PoC から OSS へ(設計とアーキテクチャ)](https://rikuka.dev/blog/db-branch-sashiki-oss/)
 
 > **これは本番 DB の置き換えではありません。** 非本番(preview / CI / dev)向けの、使い捨て DB を配る基盤です。単一ノード構成で HA/レプリカは持ちません。詳しくは [向かない用途](#向かない用途)。
 
