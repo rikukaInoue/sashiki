@@ -88,6 +88,10 @@ func (m *mockStorage) SnapshotBase(ctx context.Context, tag string) (storage.Sna
 	return storage.SnapshotRef("pool/base@" + tag), nil
 }
 
+func (m *mockStorage) PromoteBranch(ctx context.Context, vol storage.Volume, tag string) (storage.SnapshotRef, error) {
+	return storage.SnapshotRef(vol.Dataset + "@" + tag), nil
+}
+
 func (m *mockStorage) ListSnapshots(ctx context.Context) ([]storage.SnapshotRef, error) {
 	return nil, nil
 }
@@ -1425,5 +1429,36 @@ func TestInfoStaleAfterBaselineChange(t *testing.T) {
 	}
 	if i, _ := m.Get(ctx, "pr-1"); !i.Stale {
 		t.Error("baseline 更新後は origin が古いので stale=true のはず")
+	}
+}
+
+// #129: promote は branch の datadir を新 baseline にし、current を切り替える。
+func TestPromoteBranch(t *testing.T) {
+	ctx := context.Background()
+	eng := &mockEngine{}
+	st := &mockStorage{caps: storage.Capabilities{FastRollback: true}}
+	m := newTestManager(t, st, eng, "")
+	if _, err := m.Create(ctx, "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := m.PromoteBranch(ctx, "pr-1")
+	if err != nil {
+		t.Fatalf("PromoteBranch: %v", err)
+	}
+	// mockStorage.PromoteBranch は vol.Dataset@tag を返す
+	if snap == "" || !strings.Contains(snap, "pr-1@") {
+		t.Errorf("promoted snapshot = %q", snap)
+	}
+	// current baseline が promote 先に切り替わっている
+	if got := string(m.currentBaseline()); got != snap {
+		t.Errorf("current baseline = %q, want %q", got, snap)
+	}
+	// snapshot 不変条件: 昇格前に graceful stop している
+	if len(eng.stopped) == 0 {
+		t.Error("promote は snapshot 前に branch を停止するはず")
+	}
+	// branch は使用可能な状態へ再起動される
+	if len(eng.started) < 2 {
+		t.Errorf("promote 後に branch を再起動するはず (started=%v)", eng.started)
 	}
 }

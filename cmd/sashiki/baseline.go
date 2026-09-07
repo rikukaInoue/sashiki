@@ -45,9 +45,32 @@ func cmdBaseline(args []string) int {
 		return cmdBaselineStage(args[1:], "publish")
 	case "delete":
 		return cmdBaselineStage(args[1:], "delete")
+	case "promote":
+		return cmdBaselinePromote(args[1:])
 	default:
 		return usageBaseline()
 	}
+}
+
+// cmdBaselinePromote は既存ブランチを新 baseline に昇格する(#129)。
+func cmdBaselinePromote(args []string) int {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "Usage: sashiki baseline promote <branch>")
+		return exitUsage
+	}
+	code, data, err := call("POST", "/v1/baseline/promote", map[string]any{"branch": args[0]})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sashiki:", err)
+		return exitError
+	}
+	if code != http.StatusOK {
+		fmt.Fprintln(os.Stderr, "sashiki:", apiError(data))
+		return statusToExit(code)
+	}
+	var r struct{ From, Current string }
+	_ = json.Unmarshal(data, &r)
+	fmt.Printf("promoted '%s' to current baseline: %s\n", args[0], r.Current)
+	return exitOK
 }
 
 // cmdBaselineBuild は build 段階を実行し(既定 --wait)、candidate の snapshot を表示する(#84)。
@@ -113,6 +136,9 @@ func usageBaseline() int {
 	fmt.Fprint(os.Stderr, `Usage:
   sashiki baseline import --from <dump.sql> [--config <path>]   ベース構築 + @baseline 取得 (root)
   sashiki baseline list [--json]                                snapshot 一覧 (sashikid 経由)
+  sashiki baseline refresh                                      refresh_script / source_dir で更新
+  sashiki baseline promote <branch>                             migrate 済み branch を新 baseline に昇格 (#129)
+  sashiki baseline set|delete <snapshot> / build / validate / publish / gc
 `)
 	return exitUsage
 }

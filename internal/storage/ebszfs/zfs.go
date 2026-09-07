@@ -199,6 +199,17 @@ func (b *Backend) SnapshotBase(ctx context.Context, tag string) (storage.Snapsho
 }
 
 // ListSnapshots は base のスナップショット一覧。
+// PromoteBranch は branch dataset の snapshot を新しい baseline とする(#129)。
+// 新規ブランチはこの snapshot から clone される。呼び出し側が branch mysqld を
+// 停止済みであることを前提とする。
+func (b *Backend) PromoteBranch(ctx context.Context, branch storage.Volume, tag string) (storage.SnapshotRef, error) {
+	ref := branch.Dataset + "@" + tag
+	if _, err := b.run(ctx, "snapshot", ref); err != nil {
+		return "", err
+	}
+	return storage.SnapshotRef(ref), nil
+}
+
 func (b *Backend) ListSnapshots(ctx context.Context) ([]storage.SnapshotRef, error) {
 	out, err := b.run(ctx, "list", "-H", "-t", "snapshot", "-o", "name", "-r", b.cfg.BaseDataset)
 	if err != nil {
