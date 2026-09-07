@@ -193,7 +193,7 @@ PR open/reopen で create、close で delete。接続情報を出力するので
 
 ```hcl
 module "db" {
-  source = "github.com/rikukaInoue/sashiki//deploy/terraform?ref=v0.4.0"
+  source = "github.com/rikukaInoue/sashiki//deploy/terraform?ref=v0.4.2"
 
   name           = "myapp-preview"
   vpc_id         = var.vpc_id
@@ -265,7 +265,7 @@ sashiki は「汎用エンジン + MySQL/PR の完成した adapter」。コア�
 | FSx-ZFS / multi-host / Spot | 🔶 実装済み・**本番運用実績なし**。必要になったら(§FAQ) |
 | API / config の安定性 | ⚠️ 未固定。v0.x の間はマイナー版で破壊的変更があり得る |
 
-> **プロキシとドライバ**: `:3306` プロキシ(方式A)は現状 Go の go-sql-driver で検証。PHP(mysqlnd)/ Node 等 **DEPRECATE_EOF を要求しないドライバで結果セットが空になる既知の不具合**あり([#125](https://github.com/rikukaInoue/sashiki/issues/125))。直接ポート接続は影響を受けない。
+> **プロキシとドライバ**: `:3306` プロキシ(方式A)はクライアントの capability に追従するので、**DEPRECATE_EOF を要求しないドライバ(PHP mysqlnd / Node / PyMySQL 等)でも正しく動く**(v0.4.1 で修正、[#125](https://github.com/rikukaInoue/sashiki/issues/125))。go-sql-driver と合わせて実機検証済み。
 
 ## 向かない用途
 

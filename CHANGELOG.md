@@ -5,12 +5,26 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 
 ## Unreleased
 
+## v0.4.2 — (2026-09-07)
+
+> v0.3.0〜v0.4.1 の詳細な差分は各 [GitHub Release](https://github.com/rikukaInoue/sashiki/releases)(自動生成ノート)を参照。ここでは主な追加・修正をまとめる。
+
 ### Added
 - **`baseline promote <branch>`**: 検証済みブランチの現在の datadir をそのまま次の current baseline に昇格する(git の branch→main 相当)。snapshot 不変条件のため対象ブランチを graceful stop してから snapshot し、昇格後に再起動する。既存の他ブランチの origin は変えない。
 - **VM レスのコンテナ実行(macOS / OrbStack)**: XFS reflink(CoW)+ process モード mysqld で、フル VM 無しに `create → reset → delete` が動く(`deploy/orbstack/`)。
 - **VM レスの macOS ネイティブ実行が正式サポート(#113)**: `sashiki init --platform darwin` が Homebrew mysql 検出→APFS clonefile で baseline 構築→config 生成→launchd 常駐まで一括。`create → reset → delete` と proxy lazy create を実機 E2E で検証(`make e2e-darwin`、使い捨て temp root)。`docs/LOCAL-DEV.md` を実験的→正式サポートに更新(#139/#141/#142)。
+- **macOS バイナリ配布**: goreleaser で darwin(arm64/amd64)を配布、`install.sh` が macOS 対応(`curl | bash`)。
+- **`engine.mysql.extra_cnf`**: プロジェクト固有 my.cnf を `--defaults-file` で渡す(import / process / systemd の全経路に反映)。
+- **`proxy.allowed_user`**: 接続許可ユーザーを設定可能に(未設定=app_user のみ / `""`=任意 / 名前=限定)。管理ユーザー接続向け。
+- **`baseline import --db <name>`**: USE を含まない単体 DB ダンプの投入先を指定。
+- **stale 表示**: origin が current baseline より古いブランチを `list` / `show` で示し、`reset` 時に警告(最新化は recreate)。
 
 ### Fixed
+- **proxy DEPRECATE_EOF**: クライアントの capability に追従するよう修正。DEPRECATE_EOF を要求しないドライバ(PHP mysqlnd / Node / PyMySQL 等)で結果セットが空/エラーになる不具合を解消。
+- **apfs/reflink の USED / capacity**: CoW 差分を正確に取れない値は 0 でなく「-」(不明)で表示。
+- **extra_cnf の PERSIST 乗っ取り**: `--defaults-extra-file` → `--defaults-file` にし、起動前に `mysqld-auto.cnf`(SET PERSIST 残骸)を除去。
+- **Terraform デプロイ実戦修正**: data device を EBS volume id から by-id で解決(Nitro nvme)/ awscli v2 zip 導入(Ubuntu 24.04)/ SSM・Secrets の平文ログ残留を `set +x` で防止 / `install.sh` のタグ直リンク取得 / instance profile のタグ除去(`iam:TagInstanceProfile` 不要)/ Route53 A レコード / `root_volume_size` / deb postinstall で `sashiki` ユーザー作成 + `/var/log` 権限。
+- **systemd モードの extra_cnf**: ブランチの mysqld にも `--defaults-file` を反映(env の `MYSQLD_DEFAULTS` → ExecStart)。AppArmor が `/etc/sashiki/*.cnf` を読めるように。
 - `baseline promote` が snapshot 後の baseline 登録に失敗すると、対象ブランチの mysqld を停止したまま抜けていた。成否に関わらず再起動するよう修正。
 - `baseline import` が `mysql` / `mysqladmin` を PATH から引いており、`mysqld_bin` が PATH 外(Homebrew 等)だと失敗し得た。mysqld と同じディレクトリから解決するよう統一。
 - `baseline import` 成功後の baseline 台帳登録エラーを握りつぶしていた(`baseline list` / GC から漏れる)。失敗時に警告を出すよう修正。
