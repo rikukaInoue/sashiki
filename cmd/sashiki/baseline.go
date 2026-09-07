@@ -231,6 +231,9 @@ func runLocalBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	if mysqldBin == "" {
 		mysqldBin = "/usr/sbin/mysqld"
 	}
+	// client は mysqld の隣から解決する(PATH 側の別メジャーを引かない、#149)。
+	mysqlBin := mysqlClientBin(mysqldBin, "mysql")
+	mysqladminBin := mysqlClientBin(mysqldBin, "mysqladmin")
 	sock := "/tmp/sashiki-baseline.sock"
 	logErr := filepath.Join(cfg.Storage.Local.Root, "baseline.err")
 
@@ -246,10 +249,10 @@ func runLocalBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	stopped := false
 	defer func() {
 		if !stopped {
-			_ = exec.Command("mysqladmin", "-uroot", "-S", sock, "shutdown").Run()
+			_ = exec.Command(mysqladminBin, "-uroot", "-S", sock, "shutdown").Run()
 		}
 	}()
-	if err := waitSocket(sock, 60*time.Second); err != nil {
+	if err := waitSocket(sock, 60*time.Second, mysqladminBin); err != nil {
 		return err
 	}
 	if opts.from != "" {
@@ -259,7 +262,7 @@ func runLocalBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 			return err
 		}
 		defer func() { _ = dump.Close() }()
-		load := exec.Command("mysql", "-uroot", "-S", sock)
+		load := exec.Command(mysqlBin, "-uroot", "-S", sock)
 		load.Stdin = dump
 		if out, err := load.CombinedOutput(); err != nil {
 			return fmt.Errorf("load dump: %w: %s", err, strings.TrimSpace(string(out)))
@@ -269,11 +272,11 @@ func runLocalBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	createUser := fmt.Sprintf(
 		"CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED WITH mysql_native_password BY '%s'; GRANT ALL PRIVILEGES ON *.* TO '%s'@'%%'; FLUSH PRIVILEGES;",
 		cfg.Engine.Mysql.ProxyUser, cfg.Engine.Mysql.ProxyPass, cfg.Engine.Mysql.ProxyUser)
-	if out, err := exec.Command("mysql", "-uroot", "-S", sock, "-e", createUser).CombinedOutput(); err != nil {
+	if out, err := exec.Command(mysqlBin, "-uroot", "-S", sock, "-e", createUser).CombinedOutput(); err != nil {
 		return fmt.Errorf("create user: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	fmt.Println("→ 正常終了")
-	if out, err := exec.Command("mysqladmin", "-uroot", "-S", sock, "shutdown").CombinedOutput(); err != nil {
+	if out, err := exec.Command(mysqladminBin, "-uroot", "-S", sock, "shutdown").CombinedOutput(); err != nil {
 		return fmt.Errorf("shutdown: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	stopped = true
@@ -294,11 +297,7 @@ func runLocalBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	if err != nil {
 		return fmt.Errorf("snapshot: %w", err)
 	}
-	if db, err := state.Open(cfg.StateDB); err == nil {
-		_ = db.RegisterBaseline(string(snap), state.BaselineProvenance{DataAsOf: baselineTag})
-		_ = db.SetCurrentBaseline(string(snap))
-		_ = db.Close()
-	}
+	registerImportedBaseline(cfg.StateDB, string(snap), baselineTag)
 	fmt.Println("baseline import 完了。sashiki create <name> でブランチを作れます")
 	return nil
 }
@@ -352,12 +351,9 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	if cfg.Engine.Mysql.ExtraCnf != "" {
 		defaults = []string{"--defaults-file=" + cfg.Engine.Mysql.ExtraCnf}
 	}
-	mysqladminBin := "mysqladmin"
-	if strings.Contains(mysqldBin, "/") {
-		if p := filepath.Join(filepath.Dir(mysqldBin), "mysqladmin"); binExists(p) {
-			mysqladminBin = p
-		}
-	}
+	// client は mysqld の隣から解決する(PATH 側の別メジャーを引かない、#149)。
+	mysqlBin := mysqlClientBin(mysqldBin, "mysql")
+	mysqladminBin := mysqlClientBin(mysqldBin, "mysqladmin")
 
 	fmt.Println("→ mysqld 初期化")
 	initArgs := append(defaults, "--initialize-insecure", "--datadir="+dataDir, "--log-error="+logErr)
@@ -377,7 +373,7 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 			_ = exec.Command(mysqladminBin, "-uroot", "-S", sock, "shutdown").Run()
 		}
 	}()
-	if err := waitSocket(sock, 60*time.Second); err != nil {
+	if err := waitSocket(sock, 60*time.Second, mysqladminBin); err != nil {
 		return err
 	}
 
@@ -388,7 +384,7 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 			return err
 		}
 		defer func() { _ = dump.Close() }()
-		load := exec.Command("mysql", "-uroot", "-S", sock)
+		load := exec.Command(mysqlBin, "-uroot", "-S", sock)
 		load.Stdin = dump
 		if out, err := load.CombinedOutput(); err != nil {
 			return fmt.Errorf("load dump: %w: %s", err, strings.TrimSpace(string(out)))
@@ -401,13 +397,13 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	createUser := fmt.Sprintf(
 		"CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED WITH mysql_native_password BY '%s'; GRANT ALL PRIVILEGES ON *.* TO '%s'@'%%'; FLUSH PRIVILEGES;",
 		cfg.Engine.Mysql.ProxyUser, cfg.Engine.Mysql.ProxyPass, cfg.Engine.Mysql.ProxyUser)
-	userCmd := exec.Command("mysql", "-uroot", "-S", sock, "-e", createUser)
+	userCmd := exec.Command(mysqlBin, "-uroot", "-S", sock, "-e", createUser)
 	if out, err := userCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("create user: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 
 	fmt.Println("→ 正常終了")
-	if out, err := exec.Command("mysqladmin", "-uroot", "-S", sock, "shutdown").CombinedOutput(); err != nil {
+	if out, err := exec.Command(mysqladminBin, "-uroot", "-S", sock, "shutdown").CombinedOutput(); err != nil {
 		return fmt.Errorf("shutdown: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	stopped = true
@@ -428,14 +424,41 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	if out, err := exec.Command("zfs", "snapshot", snap).CombinedOutput(); err != nil {
 		return fmt.Errorf("snapshot: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	// baseline を state.db に current として登録(仕様 12-1)。
-	if db, err := state.Open(cfg.StateDB); err == nil {
-		_ = db.RegisterBaseline(snap, state.BaselineProvenance{DataAsOf: cfg.Storage.Zfs.BaselineSnapshot})
-		_ = db.SetCurrentBaseline(snap)
-		_ = db.Close()
-	}
+	registerImportedBaseline(cfg.StateDB, snap, cfg.Storage.Zfs.BaselineSnapshot)
 	fmt.Println("baseline import 完了。sashiki create <name> でブランチを作れます")
 	return nil
+}
+
+// mysqlClientBin は mysqld と同じディレクトリの client(mysql / mysqladmin)を
+// 返す。MysqldBin が絶対パス(Homebrew 等 PATH 外)のとき PATH 側の別メジャーの
+// client を引くと native_password 認証や ready 判定が失敗するため、隣を優先する
+// (#119 / #149)。見つからなければ素の名前(PATH 解決)にフォールバック。
+func mysqlClientBin(mysqldBin, name string) string {
+	if strings.Contains(mysqldBin, "/") {
+		if p := filepath.Join(filepath.Dir(mysqldBin), name); binExists(p) {
+			return p
+		}
+	}
+	return name
+}
+
+// registerImportedBaseline は import した baseline を state.db に current として
+// 登録する(仕様 12-1)。import 本体は成功しているので登録失敗は致命ではないが、
+// 黙って握りつぶすと baseline list / GC の台帳から漏れるため warning を出す(#150)。
+func registerImportedBaseline(stateDB, snap, dataAsOf string) {
+	db, err := state.Open(stateDB)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "警告: baseline を state.db に登録できません(baseline list / GC の台帳から漏れます): open %s: %v\n", stateDB, err)
+		return
+	}
+	defer func() { _ = db.Close() }()
+	if err := db.RegisterBaseline(snap, state.BaselineProvenance{DataAsOf: dataAsOf}); err != nil {
+		fmt.Fprintf(os.Stderr, "警告: baseline の登録に失敗しました(台帳から漏れます): %v\n", err)
+		return
+	}
+	if err := db.SetCurrentBaseline(snap); err != nil {
+		fmt.Fprintf(os.Stderr, "警告: current baseline の設定に失敗しました(backend 既定にフォールバックします): %v\n", err)
+	}
 }
 
 func lookupMysqlUser() (uint32, uint32, error) {
@@ -458,10 +481,10 @@ func runAsUser(uid, gid uint32, name string, args ...string) error {
 	return nil
 }
 
-func waitSocket(sock string, timeout time.Duration) error {
+func waitSocket(sock string, timeout time.Duration, mysqladminBin string) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if exec.Command("mysqladmin", "-uroot", "-S", sock, "ping").Run() == nil {
+		if exec.Command(mysqladminBin, "-uroot", "-S", sock, "ping").Run() == nil {
 			return nil
 		}
 		time.Sleep(500 * time.Millisecond)
