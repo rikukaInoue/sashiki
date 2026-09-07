@@ -80,6 +80,10 @@ func (e *Engine) unit(branch string) string {
 
 // Start は env ファイルを書いて systemd ユニットを起動する。
 func (e *Engine) Start(ctx context.Context, ins engine.Instance) error {
+	// env_dir を確保する(systemd の RuntimeDirectory が無い root 直起動でも動くように、#177)。
+	if err := os.MkdirAll(e.cfg.EnvDir, 0o755); err != nil {
+		return fmt.Errorf("ensure env_dir %s: %w", e.cfg.EnvDir, err)
+	}
 	env := fmt.Sprintf("PORT=%d\nDATADIR=%s\nPGBIN=%s\nLISTEN_ADDRESSES=%s\n",
 		ins.Port, ins.DataDir, e.cfg.BinDir, e.cfg.ListenAddresses)
 	if err := os.WriteFile(filepath.Join(e.cfg.EnvDir, ins.Branch+".env"), []byte(env), 0o644); err != nil {
