@@ -136,7 +136,7 @@ func cmdBaselineStage(args []string, stage string) int {
 
 func usageBaseline() int {
 	fmt.Fprint(os.Stderr, `Usage:
-  sashiki baseline import --from <dump.sql> [--config <path>]   ベース構築 + @baseline 取得 (root)
+  sashiki baseline import --from <dump.sql> [--db <name>] [--config <path>]   ベース構築 + @baseline 取得 (root)
   sashiki baseline list [--json]                                snapshot 一覧 (sashikid 経由)
   sashiki baseline refresh                                      refresh_script / source_dir で更新
   sashiki baseline promote <branch>                             migrate 済み branch を新 baseline に昇格 (#129)
@@ -150,6 +150,7 @@ func usageBaseline() int {
 type baselineImportOpts struct {
 	from       string
 	configPath string
+	db         string // 投入先 DB(#170)。USE を含まない単体 DB ダンプ向け
 }
 
 func cmdBaselineImport(args []string) int {
@@ -168,6 +169,12 @@ func cmdBaselineImport(args []string) int {
 				return usageBaseline()
 			}
 			opts.configPath = args[i]
+		case "--db":
+			i++
+			if i >= len(args) {
+				return usageBaseline()
+			}
+			opts.db = args[i]
 		default:
 			return usageBaseline()
 		}
@@ -197,6 +204,35 @@ func cmdBaselineImport(args []string) int {
 // runLocalBaselineImport は apfs / reflink backend 用の baseline import。
 // zfs コマンドを使わず、<root>/base/data に mysqld で投入して正常終了し、
 // storage backend の SnapshotBase で <root>/base/snap/<baseline> を作る(#113/#140)。
+// loadDump は dump を mysqld(socket)へ投入する(#170)。db 指定時は先に
+// CREATE DATABASE し、その DB を default に選んで投入する(USE を含まない単体 DB
+// ダンプ向け)。無指定ならダンプ内の CREATE/USE に従う(従来動作)。
+func loadDump(mysqlBin, sock, from, db string) error {
+	fmt.Printf("→ ダンプ投入 (%s)\n", from)
+	if db != "" {
+		mk := exec.Command(mysqlBin, "-uroot", "-S", sock, "-e",
+			fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", db))
+		if out, err := mk.CombinedOutput(); err != nil {
+			return fmt.Errorf("create database %s: %w: %s", db, err, strings.TrimSpace(string(out)))
+		}
+	}
+	dump, err := os.Open(from)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dump.Close() }()
+	args := []string{"-uroot", "-S", sock}
+	if db != "" {
+		args = append(args, db) // 既定 DB を選択(USE 無しダンプがこの DB に入る)
+	}
+	load := exec.Command(mysqlBin, args...)
+	load.Stdin = dump
+	if out, err := load.CombinedOutput(); err != nil {
+		return fmt.Errorf("load dump: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 func runLocalBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	root := cfg.Storage.Local.Root
 	if root == "" {
@@ -256,16 +292,8 @@ func runLocalBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 		return err
 	}
 	if opts.from != "" {
-		fmt.Printf("→ ダンプ投入 (%s)\n", opts.from)
-		dump, err := os.Open(opts.from)
-		if err != nil {
+		if err := loadDump(mysqlBin, sock, opts.from, opts.db); err != nil {
 			return err
-		}
-		defer func() { _ = dump.Close() }()
-		load := exec.Command(mysqlBin, "-uroot", "-S", sock)
-		load.Stdin = dump
-		if out, err := load.CombinedOutput(); err != nil {
-			return fmt.Errorf("load dump: %w: %s", err, strings.TrimSpace(string(out)))
 		}
 	}
 	fmt.Printf("→ 接続ユーザー %s 作成\n", cfg.Engine.Mysql.ProxyUser)
@@ -378,16 +406,8 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	}
 
 	if opts.from != "" {
-		fmt.Printf("→ ダンプ投入 (%s)\n", opts.from)
-		dump, err := os.Open(opts.from)
-		if err != nil {
+		if err := loadDump(mysqlBin, sock, opts.from, opts.db); err != nil {
 			return err
-		}
-		defer func() { _ = dump.Close() }()
-		load := exec.Command(mysqlBin, "-uroot", "-S", sock)
-		load.Stdin = dump
-		if out, err := load.CombinedOutput(); err != nil {
-			return fmt.Errorf("load dump: %w: %s", err, strings.TrimSpace(string(out)))
 		}
 	}
 
