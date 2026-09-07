@@ -1404,3 +1404,26 @@ func TestCreateNoQuotaWhenUnset(t *testing.T) {
 		t.Errorf("quota should not be set when DefaultStorageQuotaBytes=0, got %v", st.quota)
 	}
 }
+
+// #130: baseline 更新後、origin が current より古い branch は Stale=true。
+func TestInfoStaleAfterBaselineChange(t *testing.T) {
+	ctx := context.Background()
+	st := &mockStorage{caps: storage.Capabilities{FastRollback: true}}
+	m := newTestManager(t, st, &mockEngine{}, "")
+	if _, err := m.Create(ctx, "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	if i, _ := m.Get(ctx, "pr-1"); i.Stale {
+		t.Error("作成直後の branch は stale でないはず")
+	}
+	// current baseline を別 snapshot に更新
+	if err := m.db.RegisterBaseline("pool/base@new", state.BaselineProvenance{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.db.SetCurrentBaseline("pool/base@new"); err != nil {
+		t.Fatal(err)
+	}
+	if i, _ := m.Get(ctx, "pr-1"); !i.Stale {
+		t.Error("baseline 更新後は origin が古いので stale=true のはず")
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -205,6 +206,7 @@ type branchView struct {
 	ErrorCode    string   `json:"error_code"`
 	Recoverable  bool     `json:"recoverable"`
 	Suggestions  []string `json:"suggested_actions"`
+	Stale        bool     `json:"stale"`
 }
 
 // --- commands ---
@@ -398,6 +400,16 @@ func cmdSimpleBranch(args []string, action string) int {
 	if err != nil || len(pos) != 1 {
 		return usage()
 	}
+	// reset は origin(作成時の baseline)に戻す。baseline が更新済み(stale)なら
+	// 最新化には recreate が要ることを警告する(#130)。
+	if action == "reset" {
+		if _, bdata, e := call("GET", "/v1/branches/"+pos[0], nil); e == nil {
+			var bv branchView
+			if json.Unmarshal(bdata, &bv) == nil && bv.Stale {
+				fmt.Fprintf(os.Stderr, "警告: '%s' は origin が current baseline より古いです。reset は作成時点(古い baseline)に戻します。最新化には recreate を使ってください。\n", pos[0])
+			}
+		}
+	}
 	code, data, err := call("POST", "/v1/branches/"+pos[0]+"/"+action, nil)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sashiki:", err)
@@ -445,14 +457,23 @@ func cmdList(args []string) int {
 	_ = json.Unmarshal(data, &resp)
 	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	_, _ = fmt.Fprintln(tw, "NAME\tPORT\tSTATE\tLAST_CONN\tUSED")
+	var stale []string
 	for _, b := range resp.Branches {
 		last := "-"
 		if b.LastConnAt != nil {
 			last = *b.LastConnAt
 		}
-		_, _ = fmt.Fprintf(tw, "%s\t%d\t%s\t%s\t%s\n", b.Name, b.Port, b.State, last, humanBytes(b.UsedBytes))
+		name := b.Name
+		if b.Stale {
+			name += "*"
+			stale = append(stale, b.Name)
+		}
+		_, _ = fmt.Fprintf(tw, "%s\t%d\t%s\t%s\t%s\n", name, b.Port, b.State, last, humanBytes(b.UsedBytes))
 	}
 	_ = tw.Flush()
+	if len(stale) > 0 {
+		fmt.Printf("\n* origin が current baseline より古い(recreate で最新化): %s\n", strings.Join(stale, ", "))
+	}
 	return exitOK
 }
 
@@ -478,6 +499,9 @@ func cmdShow(args []string) int {
 	_ = json.Unmarshal(data, &b)
 	fmt.Printf("name:    %s\nstate:   %s\nport:    %d\nuser:    %s\nprivate: %s (CoW差分)\nlogical: %s\n",
 		b.Name, b.State, b.Port, b.User, humanBytes(b.UsedBytes), humanBytes(b.LogicalBytes))
+	if b.Stale {
+		fmt.Println("stale:   true (origin が current baseline より古い。reset は作成時点に戻る/最新化は recreate)")
+	}
 	if b.Error != "" {
 		fmt.Printf("error: %s\n", b.Error)
 		if b.ErrorCode != "" {
