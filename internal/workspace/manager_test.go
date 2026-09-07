@@ -31,6 +31,7 @@ type mockStorage struct {
 	destroyed        []string
 	cloneErr         error
 	rollbackErr      error
+	promoteErr       error
 	quota            map[string]int64 // #85: SetQuota で記録
 }
 
@@ -89,6 +90,9 @@ func (m *mockStorage) SnapshotBase(ctx context.Context, tag string) (storage.Sna
 }
 
 func (m *mockStorage) PromoteBranch(ctx context.Context, vol storage.Volume, tag string) (storage.SnapshotRef, error) {
+	if m.promoteErr != nil {
+		return "", m.promoteErr
+	}
 	return storage.SnapshotRef(vol.Dataset + "@" + tag), nil
 }
 
@@ -1460,5 +1464,33 @@ func TestPromoteBranch(t *testing.T) {
 	// branch は使用可能な状態へ再起動される
 	if len(eng.started) < 2 {
 		t.Errorf("promote 後に branch を再起動するはず (started=%v)", eng.started)
+	}
+}
+
+// promote が途中で失敗しても branch は使用可能な状態に戻す(#156)。以前は
+// snapshot 後の baseline 登録が失敗すると mysqld を停止したまま抜けていた。
+func TestPromoteBranchRestartsOnFailure(t *testing.T) {
+	ctx := context.Background()
+	eng := &mockEngine{}
+	st := &mockStorage{caps: storage.Capabilities{FastRollback: true}, promoteErr: errors.New("boom")}
+	m := newTestManager(t, st, eng, "")
+	if _, err := m.Create(ctx, "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	startsBefore := len(eng.started)
+
+	if _, err := m.PromoteBranch(ctx, "pr-1"); err == nil {
+		t.Fatal("PromoteBranch はエラーを返すはず")
+	}
+	// snapshot のため一度停止し、失敗後も再起動していること。
+	if len(eng.stopped) == 0 {
+		t.Error("promote は snapshot 前に branch を停止するはず")
+	}
+	if len(eng.started) <= startsBefore {
+		t.Errorf("promote 失敗後も branch を再起動するはず (started=%v)", eng.started)
+	}
+	// current baseline は切り替わっていない。
+	if got := string(m.currentBaseline()); strings.Contains(got, "pr-1@") {
+		t.Errorf("promote 失敗時は current を変えないはず (current=%q)", got)
 	}
 }
