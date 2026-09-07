@@ -248,15 +248,31 @@ apply 完了時点で sashikid が稼働する。詳細は [deploy/terraform/REA
 
 ## アーキテクチャ
 
-```
-sashiki CLI / Action / Terraform ──HTTP──▶ sashikid ──┬─▶ storage (zfs | fsx)   クローン・スナップショット・破棄
-             │                                        ├─▶ engine  (mysql | postgres)  起動・停止・ready・接続数
-   mysql クライアント ──:3306──▶ proxy(認証終端)──────┤
-             (user@branch でルーティング)             ├─▶ hooks    on-create / on-reset / on-baseline-* ...
-                                                      └─▶ state.db (SQLite)   branch / baseline / operation / token
+```mermaid
+flowchart LR
+  cli["sashiki CLI / GitHub Action"]
+  app["mysql クライアント / アプリ"]
+
+  cli -->|"HTTP REST（202 + operation）"| d
+  app -->|":3306  user@branch"| proxy
+
+  subgraph host["sashikid ホスト または コンテナ（単一ノード）"]
+    proxy["proxy（認証終端＝方式A）<br/>パスワード検証 → 認証後に lazy create"]
+    d["sashikid（control plane）"]
+    proxy -->|"route / lazy create"| d
+    d --> storage["storage interface<br/>ebs-zfs · fsx-zfs · apfs · reflink"]
+    d --> engine["engine interface<br/>mysql · postgres<br/>systemd / process モード"]
+    d --> hooks["hooks<br/>on-create · on-reset · on-baseline-*"]
+    d --> state[("state.db（SQLite）<br/>branch · baseline · operation · token")]
+    engine -.->|"起動 / 停止 / ready / 接続数"| mysqld["mysqld（ブランチごと）"]
+    storage -.->|"CoW クローン / snapshot / 破棄"| datadir[("branch datadir<br/>@init · @baseline")]
+    mysqld --- datadir
+  end
+
+  proxy ==>|"認証後はデータをそのまま中継"| mysqld
 ```
 
-- **storage** と **engine** はインターフェース。バックエンドは `Capabilities`(FastRollback / TypicalCreate / AsyncDelete)を宣言し、コアが挙動を切り替える(zfs の rollback は数秒、FSx は再クローン方式——同じ「reset」でも実装が変わる)
+- **storage** と **engine** はインターフェース。バックエンドは `Capabilities`(FastRollback / TypicalCreate / ClonesAreDistinct)を宣言し、コアが挙動を切り替える(zfs の rollback は数秒、FSx は再クローン方式——同じ「reset」でも実装が変わる)
 - **@init / @baseline スナップショットは必ず mysqld の正常終了状態でのみ取得する**。破るとブランチ起動のたびに InnoDB クラッシュリカバリが走る(設計全体で最も重要な不変条件)
 - 自社固有の処理(マイグレーション適用・データマスク)はコアに入れず **hooks** に追い出す
 
