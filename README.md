@@ -91,6 +91,14 @@ baseline は **build → validate → publish** の 3 段階。検証に落ち�
 壊れた migration が入っても新規ブランチは無傷。`baseline set` で直前の正常版に即ロールバックできる。
 本番データを使うなら **PII マスキング**を build に組み込み、`require_masked` を有効にすれば未マスクは publish できない。
 
+あるブランチで migration を当てて検証できたら、その状態をそのまま次の baseline に昇格できる(git の branch→main 相当):
+
+```bash
+sashiki baseline promote pr-123   # pr-123 の現在の datadir を新しい current baseline に
+```
+
+`promote` は snapshot 不変条件のため対象ブランチを一度 graceful stop し、昇格後に再起動する(既存の他ブランチの origin は変えない)。
+
 ### 4. ブランチを払い出す
 
 ```bash
@@ -210,7 +218,7 @@ apply 完了時点で sashikid が稼働する。詳細は [deploy/terraform/REA
 - **profile / lease**: 用途ごとの idle lifecycle(preview / ci / sandbox)+ `--ttl` / `lease renew` の絶対期限
 - **proxy(:3306 固定エンドポイント)**: `mysql -udev@<branch>` でルーティング。**認証終端(方式A)**——sashiki がパスワードを検証し、**認証後に** lazy create(認証前のリソース確保を防ぐ)。TLS 終端対応(`proxy.tls_cert`)
 - **アイドル管理**: 無接続で mysqld 停止(`sleeping`)、再接続で起床。engine ポーリングで接続を追跡するので proxy を通らない接続でも正しく判定。TTL / lease で自動削除
-- **baseline**: build → validate → publish。PII マスキングを必須化できる。`baseline set` で即ロールバック
+- **baseline**: build → validate → publish。PII マスキングを必須化できる。`baseline set` で即ロールバック、`baseline promote` で検証済みブランチを次の baseline に昇格
 - **capacity 管理**: メモリ admission(不足時は新規を拒否して既存 mysqld を OOM から守る)、storage watermark、`sashiki capacity`
 - **運用**: 起動時 reconciliation、`sashiki doctor`、orphan GC、`sashiki drain`、構造化ログ + Prometheus メトリクス、Web UI
 - **engine**: MySQL / PostgreSQL。起動は systemd(既定)または **process モード**(mysqld 直起動、systemd の無い macOS / コンテナ向け)

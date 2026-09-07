@@ -45,24 +45,34 @@ func (m *Manager) PromoteBranch(ctx context.Context, name string) (string, error
 	if err := m.eng.Stop(ctx, ins); err != nil {
 		return "", fmt.Errorf("promote: branch %s の停止に失敗: %w", name, err)
 	}
+	// promote は snapshot のために一時停止しただけなので、成否・どの経路で return
+	// しても branch は必ず使用可能な状態に戻す(best effort)。以前は登録失敗時に
+	// mysqld を停止したまま抜けていた(#156)。
+	restarted := false
+	restartBranch := func() {
+		if restarted {
+			return
+		}
+		restarted = true
+		if err := m.eng.Start(ctx, ins); err == nil {
+			_ = m.eng.WaitReady(ctx, ins)
+		}
+	}
+	defer restartBranch()
+
 	// server_uuid の重複を避けるため auto.cnf を削除してから snapshot(#80 と同趣旨)。
 	_ = os.Remove(filepath.Join(vol.Path, "data", "auto.cnf"))
 
 	tag := newBaselineTag()
 	snap, err := pr.PromoteBranch(ctx, vol, tag)
 	if err != nil {
-		_ = m.eng.Start(ctx, ins) // 失敗時は branch を戻す
 		return "", fmt.Errorf("promote snapshot: %w", err)
 	}
 	if err := m.db.RegisterBaseline(string(snap), state.BaselineProvenance{DataAsOf: tag, Validated: true}); err != nil {
-		return "", err
+		return "", fmt.Errorf("promote: baseline 登録に失敗: %w", err)
 	}
 	if err := m.db.SetCurrentBaseline(string(snap)); err != nil {
-		return "", err
-	}
-	// branch を使用可能な状態に戻す(best effort)。
-	if err := m.eng.Start(ctx, ins); err == nil {
-		_ = m.eng.WaitReady(ctx, ins)
+		return "", fmt.Errorf("promote: current baseline 設定に失敗: %w", err)
 	}
 	log.Printf("baseline promote: %s → %s (current)", name, snap)
 	return string(snap), nil
