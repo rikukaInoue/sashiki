@@ -126,6 +126,28 @@ mysql -udev@pr-1 -pdev -h 127.0.0.1 -P3306
 
 > 実測(20GB baseline, Apple Silicon): create 1〜3s / reset 1.3〜2.5s / recreate 〜3.5s。
 
+### コンテナ(VM 無し)
+
+Docker 互換のランタイム(Docker / Docker Desktop / OrbStack / Colima など)があれば、
+Mac でも Linux でもコンテナだけで完結する。ストレージは **XFS reflink**(CoW)、
+mysqld は **process モード**(systemd 不要)。ZFS カーネル拡張も要らない。
+
+```bash
+git clone https://github.com/rikukaInoue/sashiki && cd sashiki
+./deploy/orbstack/build.sh                                    # sashiki/sashikid を linux にクロスビルド
+docker compose -f deploy/orbstack/compose.yaml up --build -d  # 起動(baseline も自動構築)
+mysql -udev@pr-1 -pdev -h 127.0.0.1 -P 13306                  # 未知ブランチは proxy で lazy create
+```
+
+- 起動時にコンテナ内へ loopback の **XFS(`reflink=1`)** 領域を用意し、`schema.sql` から
+  baseline を自動構築して `sashikid` を常駐させる。CoW が効かない FS は起動時に検出して即停止する。
+- 要件: `privileged`(loopback FS のマウント用)と reflink 対応 FS。ホストの OS は問わない。
+- ポート: REST / Web UI が `:8080`、proxy が `:3306`(compose ではホスト側の衝突回避で
+  `13306:3306` に割り当て済み。上の例が `-P 13306` なのはこのため)。
+
+ディレクトリ名は歴史的経緯で `deploy/orbstack/` だが、**特定の製品に依存しない**
+(Docker 互換ランタイム全般で動く)。詳細は [deploy/orbstack/README.md](deploy/orbstack/)。
+
 ---
 
 ## 認証(トークン)
@@ -259,7 +281,7 @@ sashiki は「汎用エンジン + MySQL/PR の完成した adapter」。コア�
 |---|---|
 | MySQL + GitHub PR プレビュー | ✅ 実機検証済み(create / reset / recreate / delete / lazy create / proxy / baseline 更新 / スキーマ比較) |
 | macOS ネイティブ(APFS + process) | ✅ 実機検証済み(VM 無し。要 mysql@8.0)。`sashiki init --platform darwin` |
-| OrbStack コンテナ(XFS reflink) | 🔶 CoW 基盤は実機検証済み。sashikid フルコンテナ化は今後([deploy/orbstack/](deploy/orbstack/)) |
+| コンテナ(XFS reflink, VM 無し) | ✅ 実機検証済み(sashikid フルコンテナ化。create / reset / delete / lazy create。Docker 互換ランタイム全般。[deploy/orbstack/](deploy/orbstack/)) |
 | PostgreSQL | 🔶 engine 対応。接続は**直接ポートのみ**(proxy / lazy create は MySQL のみ) |
 | EBS-ZFS バックエンド | ✅ default(Linux)。単一ホスト |
 | FSx-ZFS / multi-host / Spot | 🔶 実装済み・**本番運用実績なし**。必要になったら(§FAQ) |
