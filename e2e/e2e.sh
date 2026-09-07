@@ -285,7 +285,9 @@ unset SASHIKI_API_URL SASHIKI_BRANCH SASHIKI_PR GITHUB_REPOSITORY
 
 log "capacity / logical size (#40)"
 curl -sf http://127.0.0.1:8080/v1/capacity | grep -q '"pool_used_ratio"' || fail "capacity should report pool ratio"
-sashiki capacity | grep -q 'pool_total_bytes' || fail "capacity CLI"
+# CLI は整形表示(#128)。--json は生レスポンス素通し。
+sashiki capacity | grep -q '^storage:' || fail "capacity CLI (formatted)"
+sashiki capacity --json | grep -q 'pool_total_bytes' || fail "capacity CLI --json"
 # CoW: logical(referenced)は private(used)より大きい
 sashiki show pr-1 --json | grep -q '"logical_bytes"' || fail "should report logical size"
 
