@@ -126,6 +126,28 @@ mysql -udev@pr-1 -pdev -h 127.0.0.1 -P3306
 
 > 実測(20GB baseline, Apple Silicon): create 1〜3s / reset 1.3〜2.5s / recreate 〜3.5s。
 
+### コンテナ(VM 無し)
+
+Docker 互換のランタイム(Docker / Docker Desktop / OrbStack / Colima など)があれば、
+Mac でも Linux でもコンテナだけで完結する。ストレージは **XFS reflink**(CoW)、
+mysqld は **process モード**(systemd 不要)。ZFS カーネル拡張も要らない。
+
+```bash
+git clone https://github.com/rikukaInoue/sashiki && cd sashiki
+./deploy/orbstack/build.sh                                    # sashiki/sashikid を linux にクロスビルド
+docker compose -f deploy/orbstack/compose.yaml up --build -d  # 起動(baseline も自動構築)
+mysql -udev@pr-1 -pdev -h 127.0.0.1 -P 13306                  # 未知ブランチは proxy で lazy create
+```
+
+- 起動時にコンテナ内へ loopback の **XFS(`reflink=1`)** 領域を用意し、`schema.sql` から
+  baseline を自動構築して `sashikid` を常駐させる。CoW が効かない FS は起動時に検出して即停止する。
+- 要件: `privileged`(loopback FS のマウント用)と reflink 対応 FS。ホストの OS は問わない。
+- ポート: REST / Web UI が `:8080`、proxy が `:3306`(compose ではホスト側の衝突回避で
+  `13306:3306` に割り当て済み。上の例が `-P 13306` なのはこのため)。
+
+ディレクトリ名は歴史的経緯で `deploy/orbstack/` だが、**特定の製品に依存しない**
+(Docker 互換ランタイム全般で動く)。詳細は [deploy/orbstack/README.md](deploy/orbstack/)。
+
 ---
 
 ## 認証(トークン)
@@ -226,15 +248,31 @@ apply 完了時点で sashikid が稼働する。詳細は [deploy/terraform/REA
 
 ## アーキテクチャ
 
-```
-sashiki CLI / Action / Terraform ──HTTP──▶ sashikid ──┬─▶ storage (zfs | fsx)   クローン・スナップショット・破棄
-             │                                        ├─▶ engine  (mysql | postgres)  起動・停止・ready・接続数
-   mysql クライアント ──:3306──▶ proxy(認証終端)──────┤
-             (user@branch でルーティング)             ├─▶ hooks    on-create / on-reset / on-baseline-* ...
-                                                      └─▶ state.db (SQLite)   branch / baseline / operation / token
+```mermaid
+flowchart LR
+  cli["sashiki CLI / GitHub Action"]
+  app["mysql クライアント / アプリ"]
+
+  cli -->|"HTTP REST（202 + operation）"| d
+  app -->|":3306  user@branch"| proxy
+
+  subgraph host["sashikid ホスト または コンテナ（単一ノード）"]
+    proxy["proxy（認証終端＝方式A）<br/>パスワード検証 → 認証後に lazy create"]
+    d["sashikid（control plane）"]
+    proxy -->|"route / lazy create"| d
+    d --> storage["storage interface<br/>ebs-zfs · fsx-zfs · apfs · reflink"]
+    d --> engine["engine interface<br/>mysql · postgres<br/>systemd / process モード"]
+    d --> hooks["hooks<br/>on-create · on-reset · on-baseline-*"]
+    d --> state[("state.db（SQLite）<br/>branch · baseline · operation · token")]
+    engine -.->|"起動 / 停止 / ready / 接続数"| mysqld["mysqld（ブランチごと）"]
+    storage -.->|"CoW クローン / snapshot / 破棄"| datadir[("branch datadir<br/>@init · @baseline")]
+    mysqld --- datadir
+  end
+
+  proxy ==>|"認証後はデータをそのまま中継"| mysqld
 ```
 
-- **storage** と **engine** はインターフェース。バックエンドは `Capabilities`(FastRollback / TypicalCreate / AsyncDelete)を宣言し、コアが挙動を切り替える(zfs の rollback は数秒、FSx は再クローン方式——同じ「reset」でも実装が変わる)
+- **storage** と **engine** はインターフェース。バックエンドは `Capabilities`(FastRollback / TypicalCreate / ClonesAreDistinct)を宣言し、コアが挙動を切り替える(zfs の rollback は数秒、FSx は再クローン方式——同じ「reset」でも実装が変わる)
 - **@init / @baseline スナップショットは必ず mysqld の正常終了状態でのみ取得する**。破るとブランチ起動のたびに InnoDB クラッシュリカバリが走る(設計全体で最も重要な不変条件)
 - 自社固有の処理(マイグレーション適用・データマスク)はコアに入れず **hooks** に追い出す
 
@@ -259,7 +297,7 @@ sashiki は「汎用エンジン + MySQL/PR の完成した adapter」。コア�
 |---|---|
 | MySQL + GitHub PR プレビュー | ✅ 実機検証済み(create / reset / recreate / delete / lazy create / proxy / baseline 更新 / スキーマ比較) |
 | macOS ネイティブ(APFS + process) | ✅ 実機検証済み(VM 無し。要 mysql@8.0)。`sashiki init --platform darwin` |
-| OrbStack コンテナ(XFS reflink) | 🔶 CoW 基盤は実機検証済み。sashikid フルコンテナ化は今後([deploy/orbstack/](deploy/orbstack/)) |
+| コンテナ(XFS reflink, VM 無し) | ✅ 実機検証済み(sashikid フルコンテナ化。create / reset / delete / lazy create。Docker 互換ランタイム全般。[deploy/orbstack/](deploy/orbstack/)) |
 | PostgreSQL | 🔶 engine 対応。接続は**直接ポートのみ**(proxy / lazy create は MySQL のみ) |
 | EBS-ZFS バックエンド | ✅ default(Linux)。単一ホスト |
 | FSx-ZFS / multi-host / Spot | 🔶 実装済み・**本番運用実績なし**。必要になったら(§FAQ) |
@@ -279,19 +317,24 @@ sashiki は**データ量・内容・schema の再現性は高いが、インフ
 ## FAQ
 
 **Q. 本番データをそのまま使っていい?**
-マスクしてから。PII マスキングは baseline build の必須ステップにでき、`require_masked` を有効にすると未マスクの baseline は publish できない。
+
+A. マスクしてから。PII マスキングは baseline build の必須ステップにでき、`require_masked` を有効にすると未マスクの baseline は publish できない。
 
 **Q. どのくらいメモリが要る?**
-ディスクは CoW でほぼ増えないが、**mysqld はブランチごとに 1 プロセス**。コストは同時稼働数で決まる(buffer pool 256MB 設定で t3.large に 8〜10 本)。アイドル停止があるので「100 ブランチ、同時稼働 5」なら小さいインスタンスで足りる。
+
+A. ディスクは CoW でほぼ増えないが、**mysqld はブランチごとに 1 プロセス**。コストは同時稼働数で決まる(buffer pool 256MB 設定で t3.large に 8〜10 本)。アイドル停止があるので「100 ブランチ、同時稼働 5」なら小さいインスタンスで足りる。
 
 **Q. profile と lease の違いは?**
-profile は「無接続が続いたら止める/消す」寿命ポリシー(preview/ci/sandbox)。lease(`--ttl` / `lease renew`)は「使用中でも必ず期限で回収する」絶対期限。CI で「最長 1 時間で必ず消える」を保証したいとき等に使う。
+
+A. profile は「無接続が続いたら止める/消す」寿命ポリシー(preview/ci/sandbox)。lease(`--ttl` / `lease renew`)は「使用中でも必ず期限で回収する」絶対期限。CI で「最長 1 時間で必ず消える」を保証したいとき等に使う。
 
 **Q. PostgreSQL は?**
-engine として対応(接続は直接ポート)。proxy / lazy create は MySQL のみ。idle 管理は engine ポーリングで両対応。
+
+A. engine として対応(接続は直接ポート)。proxy / lazy create は MySQL のみ。idle 管理は engine ポーリングで両対応。
 
 **Q. FSx バックエンドはいつ使う?**
-「小規模→EBS、大規模→FSx」ではない。multi-host / Spot / host 使い捨て / 1 台の RAM 限界、のどれかが必要になったら FSx。詳細は [docs/COSTS.md](docs/COSTS.md)。
+
+A. 「小規模→EBS、大規模→FSx」ではない。multi-host / Spot / host 使い捨て / 1 台の RAM 限界、のどれかが必要になったら FSx。詳細は [docs/COSTS.md](docs/COSTS.md)。
 
 ## 開発 / コントリビュート
 
