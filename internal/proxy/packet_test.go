@@ -197,3 +197,23 @@ func TestBackendHandshakeAdvertisesDeprecateEOF(t *testing.T) {
 		t.Error("must not advertise capDeprecateEOF when backend does not support it")
 	}
 }
+
+// #125 回帰: backend への capability 申告は client の DEPRECATE_EOF を反映する。
+// 反映しないと非 deprecate ドライバ(mysqlnd/Node 等)が結果セットを読めず空になる。
+func TestBackendHandshakeMirrorsDeprecateEOF(t *testing.T) {
+	backendCaps := uint32(0xffffffff)
+
+	// client が DEPRECATE_EOF を立てていない → backend にも立てない
+	noEOF := handshakeResponse{caps: capProtocol41 | capSecureConn}
+	b := buildBackendHandshakeResponse(noEOF, backendCaps, "dev", nil, nativePlugin)
+	if binary.LittleEndian.Uint32(b[0:4])&capDeprecateEOF != 0 {
+		t.Error("client が DEPRECATE_EOF 無しなら backend にも申告してはいけない")
+	}
+
+	// client が DEPRECATE_EOF を立てている → backend にも立てる
+	withEOF := handshakeResponse{caps: capProtocol41 | capSecureConn | capDeprecateEOF}
+	b2 := buildBackendHandshakeResponse(withEOF, backendCaps, "dev", nil, nativePlugin)
+	if binary.LittleEndian.Uint32(b2[0:4])&capDeprecateEOF == 0 {
+		t.Error("client が DEPRECATE_EOF 有りなら backend にも申告する")
+	}
+}

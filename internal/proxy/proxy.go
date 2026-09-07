@@ -211,7 +211,7 @@ func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
 		return authErr(client, seq+1, 2003, "HY000", "backend unavailable")
 	}
 	defer func() { _ = backend.Close() }()
-	if berr := s.authenticateBackend(backend, hr.database); berr != nil {
+	if berr := s.authenticateBackend(backend, hr.caps, hr.database); berr != nil {
 		log.Printf("proxy: backend auth for %s@%s: %v", user, branch, berr)
 		return authErr(client, seq+1, 2003, "HY000", "backend auth failed")
 	}
@@ -270,7 +270,7 @@ func enableKeepAlive(c net.Conn) {
 
 // authenticateBackend は sashiki がクライアントとして backend mysqld へ
 // mysql_native_password で認証する(方式A)。backend の dev は native_password。
-func (s *Server) authenticateBackend(backend net.Conn, database string) error {
+func (s *Server) authenticateBackend(backend net.Conn, clientCaps uint32, database string) error {
 	bhs, err := readPacket(backend)
 	if err != nil {
 		return fmt.Errorf("read backend handshake: %w", err)
@@ -279,17 +279,22 @@ func (s *Server) authenticateBackend(backend net.Conn, database string) error {
 	if err != nil {
 		return err
 	}
-	// クライアントが接続時に指定した DB(DSN の /dbname)を backend にも引き継ぐ。
-	// go-sql-driver 等は handshake の database フィールドでのみ DB を選択し、
-	// 明示的な USE を送らないため、ここで転送しないと backend が DB 未選択のまま
-	// になり "No database selected"(1046)になる。DB 指定が無ければ従来どおり
-	// capConnectWithDB を落として何も選択しない。
+	// backend への capability 申告は「クライアントが実際に交渉した capability」に
+	// 合わせる(#125)。特に DEPRECATE_EOF を揃えないと、backend が deprecate 形式の
+	// 結果セット(中間 EOF 無し・末尾 OK)を返し、DEPRECATE_EOF を立てないドライバ
+	// (PHP mysqlnd / Node 等)が読めず結果が空/エラーになる。以前は synthCaps を
+	// 固定申告していたため、非 deprecate クライアントで壊れていた。
+	//
+	// DB 選択(capConnectWithDB)だけは sashiki 側で制御する: クライアントが接続時に
+	// 指定した DB を backend にも引き継ぐ(go-sql-driver 等は handshake の database
+	// フィールドでのみ DB を選ぶため、転送しないと "No database selected" になる)。
 	hr := handshakeResponse{maxLen: 16 * 1024 * 1024, charset: 0xff}
+	hr.caps = clientCaps & synthCaps
 	if database != "" {
-		hr.caps = synthCaps
+		hr.caps |= capConnectWithDB
 		hr.database = database
 	} else {
-		hr.caps = synthCaps &^ capConnectWithDB
+		hr.caps &^= capConnectWithDB
 	}
 	token := nativeToken(s.cfg.AppPassword, salt)
 	resp := buildBackendHandshakeResponse(hr, backendCaps, s.cfg.AppUser, token, nativePlugin)
