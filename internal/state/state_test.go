@@ -74,14 +74,14 @@ func TestHookRuns(t *testing.T) {
 	if err := db.CreateBranch("pr-1", 3401, "s"); err != nil {
 		t.Fatal(err)
 	}
-	id, err := db.RecordHookStart("pr-1", "on-create", "/log/1.log")
+	id, err := db.RecordHookStart("pr-1", "on-create")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := db.RecordHookFinish(id, 0); err != nil {
 		t.Fatal(err)
 	}
-	id2, _ := db.RecordHookStart("pr-1", "on-reset", "/log/2.log")
+	id2, _ := db.RecordHookStart("pr-1", "on-reset")
 	_ = db.RecordHookFinish(id2, 2)
 
 	hs, err := db.LastHookStatus("pr-1")
@@ -130,13 +130,13 @@ func TestOperationStatsAndHookFailureCount(t *testing.T) {
 	if err := db.CreateOperation("op_a", "create", "pr-1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.FinishOperation("op_a", ""); err != nil {
+	if err := db.FinishOperation("op_a", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.CreateOperation("op_b", "create", "pr-2"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.FinishOperation("op_b", "boom"); err != nil {
+	if err := db.FinishOperation("op_b", "", "boom"); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.CreateOperation("op_c", "reset", "pr-1"); err != nil {
@@ -159,11 +159,11 @@ func TestOperationStatsAndHookFailureCount(t *testing.T) {
 	}
 
 	// hook_runs: 成功1・失敗1・未完了1 → 失敗のみカウント
-	id1, _ := db.RecordHookStart("pr-1", "on-create", "/tmp/a.log")
+	id1, _ := db.RecordHookStart("pr-1", "on-create")
 	_ = db.RecordHookFinish(id1, 0)
-	id2, _ := db.RecordHookStart("pr-1", "on-reset", "/tmp/b.log")
+	id2, _ := db.RecordHookStart("pr-1", "on-reset")
 	_ = db.RecordHookFinish(id2, 1)
-	_, _ = db.RecordHookStart("pr-2", "on-create", "/tmp/c.log")
+	_, _ = db.RecordHookStart("pr-2", "on-create")
 
 	n, err := db.HookFailureCount()
 	if err != nil {
@@ -179,18 +179,18 @@ func TestOperationErrorJSONAndPrune(t *testing.T) {
 	if err := db.CreateOperation("op-ok", "create", "pr-1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.FinishOperation("op-ok", ""); err != nil {
+	if err := db.FinishOperation("op-ok", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	// 失敗 op: error_json は JSON、Error は message
+	// 失敗 op: error_json は JSON、Error は message、error_code は分類(#151)
 	if err := db.CreateOperation("op-bad", "create", "pr-2"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.FinishOperation("op-bad", "clone failed: boom"); err != nil {
+	if err := db.FinishOperation("op-bad", "clone", "clone failed: boom"); err != nil {
 		t.Fatal(err)
 	}
 	bad, _ := db.GetOperation("op-bad")
-	if bad.State != OpFailed || bad.Error != "clone failed: boom" {
+	if bad.State != OpFailed || bad.Error != "clone failed: boom" || bad.ErrorCode != "clone" {
 		t.Errorf("op-bad = %+v", bad)
 	}
 	var raw string
@@ -273,7 +273,7 @@ func TestRecoverInterruptedOperations(t *testing.T) {
 	if err := db.CreateOperation("op_done", "delete", "pr-2"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.FinishOperation("op_done", ""); err != nil {
+	if err := db.FinishOperation("op_done", "", ""); err != nil {
 		t.Fatal(err)
 	}
 

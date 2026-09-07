@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -17,9 +18,25 @@ import (
 // Store は operation の永続化(state.DB が実装)。
 type Store interface {
 	CreateOperation(id, typ, target string) error
-	FinishOperation(id, errMsg string) error
+	FinishOperation(id, errCode, errMsg string) error
 	GetOperation(id string) (state.Operation, error)
 	ListOperations(limit int) ([]state.Operation, error)
+}
+
+// errClassifier は失敗ステージ等の機械判定用コードを持つエラー(workspace の
+// stageErr が実装)。import 循環を避けるため構造的に拾う。
+type errClassifier interface{ Code() string }
+
+// errInfo は runErr から error_code / message を取り出す(wrap されていても拾う)。
+func errInfo(runErr error) (code, msg string) {
+	if runErr == nil {
+		return "", ""
+	}
+	var c errClassifier
+	if errors.As(runErr, &c) {
+		code = c.Code()
+	}
+	return code, runErr.Error()
 }
 
 // Runner は operation の起動と追跡を担う。
@@ -78,11 +95,8 @@ func (r *Runner) Start(typ, target string, fn func(ctx context.Context) error) (
 			}()
 			runErr = fn(ctx)
 		}()
-		errMsg := ""
-		if runErr != nil {
-			errMsg = runErr.Error()
-		}
-		_ = r.store.FinishOperation(id, errMsg)
+		code, errMsg := errInfo(runErr)
+		_ = r.store.FinishOperation(id, code, errMsg)
 		r.logOperation(id, typ, target, start, runErr)
 	}()
 	return id, nil
@@ -97,11 +111,8 @@ func (r *Runner) RunSync(typ, target string, fn func(ctx context.Context) error)
 	}
 	start := r.now()
 	runErr := fn(context.Background())
-	errMsg := ""
-	if runErr != nil {
-		errMsg = runErr.Error()
-	}
-	_ = r.store.FinishOperation(id, errMsg)
+	code, errMsg := errInfo(runErr)
+	_ = r.store.FinishOperation(id, code, errMsg)
 	r.logOperation(id, typ, target, start, runErr)
 	return id, runErr
 }

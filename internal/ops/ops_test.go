@@ -3,6 +3,7 @@ package ops
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -86,6 +87,40 @@ func TestListNewestFirst(t *testing.T) {
 	}
 	if len(list) != 2 || list[0].Type != "delete" {
 		t.Errorf("list = %+v (newest should be first)", list)
+	}
+}
+
+// codedError は Code() を持つエラー(workspace.stageErr 相当)。
+type codedError struct {
+	code string
+	err  error
+}
+
+func (e codedError) Error() string { return e.err.Error() }
+func (e codedError) Unwrap() error { return e.err }
+func (e codedError) Code() string  { return e.code }
+
+func TestRunSyncFailureRecordsErrorCode(t *testing.T) {
+	r := New(newStore(t))
+	id, _ := r.RunSync("create", "pr-1", func(context.Context) error {
+		return codedError{code: "clone", err: errors.New("clone failed: boom")}
+	})
+	op, _ := r.Get(id)
+	if op.State != state.OpFailed || op.Error != "clone failed: boom" || op.ErrorCode != "clone" {
+		t.Errorf("op = %+v (error_code should be wired from Code())", op)
+	}
+}
+
+// wrap されていても error_code を拾えること。
+func TestRunSyncFailureErrorCodeUnwrapped(t *testing.T) {
+	r := New(newStore(t))
+	inner := codedError{code: "engine-start", err: errors.New("start fail")}
+	id, _ := r.RunSync("reset", "pr-1", func(context.Context) error {
+		return fmt.Errorf("reset: %w", inner)
+	})
+	op, _ := r.Get(id)
+	if op.ErrorCode != "engine-start" {
+		t.Errorf("error_code = %q, want engine-start (should unwrap)", op.ErrorCode)
 	}
 }
 

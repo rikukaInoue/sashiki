@@ -51,7 +51,6 @@ func (b *Backend) Capabilities() storage.Capabilities {
 	return storage.Capabilities{
 		FastRollback:      true,
 		TypicalCreate:     500 * time.Millisecond,
-		AsyncDelete:       false,
 		ClonesAreDistinct: false,
 	}
 }
@@ -101,7 +100,7 @@ func (b *Backend) Rollback(ctx context.Context, vol storage.Volume, snap storage
 }
 
 // DeleteAsync はブランチのディレクトリを削除する(APFS は分岐ブロックだけ解放)。
-// AsyncDelete=false のため実際には同期削除し、完了済みジョブを返す。
+// 実際には同期削除し、完了済みジョブを返す。
 func (b *Backend) DeleteAsync(ctx context.Context, vol storage.Volume) (storage.JobID, error) {
 	if err := os.RemoveAll(vol.Path); err != nil {
 		return "", err

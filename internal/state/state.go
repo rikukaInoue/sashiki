@@ -131,8 +131,7 @@ CREATE TABLE IF NOT EXISTS hook_runs (
   event       TEXT NOT NULL,
   started_at  TEXT NOT NULL,
   finished_at TEXT,
-  exit_code   INTEGER,
-  log_path    TEXT
+  exit_code   INTEGER
 );
 CREATE TABLE IF NOT EXISTS tokens (
   name         TEXT PRIMARY KEY,
@@ -402,10 +401,10 @@ func scanBranch(row scannable) (Branch, error) {
 }
 
 // RecordHookStart は hook 実行開始を記録し、行 ID を返す。
-func (d *DB) RecordHookStart(branch, event, logPath string) (int64, error) {
+func (d *DB) RecordHookStart(branch, event string) (int64, error) {
 	res, err := d.sql.Exec(
-		`INSERT INTO hook_runs (branch, event, started_at, log_path) VALUES (?, ?, ?, ?)`,
-		branch, event, time.Now().UTC().Format(timeFmt), logPath)
+		`INSERT INTO hook_runs (branch, event, started_at) VALUES (?, ?, ?)`,
+		branch, event, time.Now().UTC().Format(timeFmt))
 	if err != nil {
 		return 0, err
 	}
@@ -684,13 +683,14 @@ func (d *DB) CreateOperation(id, typ, target string) error {
 }
 
 // FinishOperation は operation を completed/failed にする。errMsg が空なら completed。
-// error_json 列には列名どおり JSON({"code","message"})を入れる(#83)。
-func (d *DB) FinishOperation(id, errMsg string) error {
+// error_json 列には列名どおり JSON({"code","message"})を入れる(#83)。errCode は
+// 機械判定用の分類(失敗ステージ等、無ければ空)。
+func (d *DB) FinishOperation(id, errCode, errMsg string) error {
 	st := OpCompleted
 	var e any
 	if errMsg != "" {
 		st = OpFailed
-		b, _ := json.Marshal(map[string]string{"code": "", "message": errMsg})
+		b, _ := json.Marshal(map[string]string{"code": errCode, "message": errMsg})
 		e = string(b)
 	}
 	_, err := d.sql.Exec(

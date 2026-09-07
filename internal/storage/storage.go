@@ -12,7 +12,6 @@ import (
 type Capabilities struct {
 	FastRollback  bool          // ebs-zfs: true / fsx-zfs: false
 	TypicalCreate time.Duration // ebs-zfs: ~2s / fsx-zfs: ~70s
-	AsyncDelete   bool          // ebs-zfs: false / fsx-zfs: true
 	// ClonesAreDistinct: Clone(name) が呼ぶたび別実体を作り、同名 branch の
 	// 新旧が共存できるか。fsx-zfs=true(世代サフィックス)、ebs-zfs=false(固定名)。
 	// false のバックエンドの recreate は「旧を退避→新 clone→旧削除」になる。
