@@ -201,6 +201,9 @@ type Info struct {
 	UsedBytes    int64 // Private delta(zfs used)。CoW 差分
 	LogicalBytes int64 // Logical(zfs referenced)
 	HookStatus   map[string]string
+	// Stale: origin snapshot が current baseline と異なる(= baseline が更新された後)。
+	// reset は origin(古い baseline)に戻すため、最新化したいなら recreate を使う(#130)。
+	Stale bool
 }
 
 func (m *Manager) instance(b state.Branch, vol storage.Volume) engine.Instance {
@@ -936,6 +939,10 @@ func (m *Manager) info(ctx context.Context, name string) (Info, error) {
 	}
 	if hs, err := m.db.LastHookStatus(name); err == nil && len(hs) > 0 {
 		info.HookStatus = hs
+	}
+	// origin が current baseline と違えば stale(reset は古い origin に戻る、#130)。
+	if cur := string(m.currentBaseline()); cur != "" && b.OriginSnapshot != cur {
+		info.Stale = true
 	}
 	return info, nil
 }

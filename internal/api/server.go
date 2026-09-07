@@ -676,6 +676,7 @@ type branchJSON struct {
 	Purpose        string            `json:"purpose,omitempty"`
 	Source         json.RawMessage   `json:"source,omitempty"`
 	ExpiresAt      *string           `json:"expires_at,omitempty"`
+	Stale          bool              `json:"stale,omitempty"` // origin < current baseline(#130)
 }
 
 func (s *Server) toJSON(i workspace.Info) branchJSON {
@@ -699,6 +700,7 @@ func (s *Server) toJSON(i workspace.Info) branchJSON {
 		Profile:        i.Profile,
 		Owner:          i.Owner,
 		Purpose:        i.Purpose,
+		Stale:          i.Stale,
 	}
 	if i.Source != "" {
 		b.Source = json.RawMessage(i.Source)
