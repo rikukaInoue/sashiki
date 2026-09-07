@@ -30,12 +30,14 @@ func (e *Engine) socketPath(ins engine.Instance) string {
 
 // startArgs は process モードで mysqld に渡す引数を組む(純粋関数、テスト用)。
 func (e *Engine) startArgs(ins engine.Instance) []string {
-	// 先頭は defaults の扱い。ExtraCnf 指定時はその my.cnf を読み(--defaults-extra-file)、
-	// 無ければ /etc/my.cnf 等を一切読まない(--no-defaults)。どちらも「先頭必須」の
-	// オプションなので必ず args[0] に置く。後続の datadir/port 等が値を上書きする。
+	// 先頭は defaults の扱い。ExtraCnf 指定時は **その 1 ファイルだけ**を読む
+	// (--defaults-file)。--defaults-extra-file だと /etc/my.cnf や
+	// /opt/homebrew/etc/my.cnf も追加で読み、意図しない設定が混ざる(#126)。
+	// 無ければ何も読まない(--no-defaults)。どちらも「先頭必須」オプションなので
+	// 必ず args[0] に置く。後続の datadir/port 等が値を上書きする。
 	first := "--no-defaults"
 	if e.cfg.ExtraCnf != "" {
-		first = "--defaults-extra-file=" + e.cfg.ExtraCnf
+		first = "--defaults-file=" + e.cfg.ExtraCnf
 	}
 	args := []string{
 		first,
@@ -58,6 +60,12 @@ func (e *Engine) startArgs(ins engine.Instance) []string {
 // startProcess は mysqld を直接 spawn する(--daemonize で自己 daemon 化)。
 func (e *Engine) startProcess(ctx context.Context, ins engine.Instance) error {
 	_ = os.Remove(e.pidPath(ins)) // 古い pidfile が起動を妨げないよう掃除
+	// ExtraCnf を「唯一の設定源」にするため、baseline 由来の PERSIST 残骸
+	// (mysqld-auto.cnf)を除去する。PERSIST は option file より優先されるため、
+	// 残っていると extra_cnf を上書きしてしまう(#126)。
+	if e.cfg.ExtraCnf != "" {
+		_ = os.Remove(filepath.Join(ins.DataDir, "mysqld-auto.cnf"))
+	}
 	if _, err := e.run(ctx, e.cfg.MysqldBin, e.startArgs(ins)...); err != nil {
 		return fmt.Errorf("start mysqld (process mode): %w", err)
 	}
