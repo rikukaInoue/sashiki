@@ -31,7 +31,7 @@ func TestStartArgs(t *testing.T) {
 		"--no-defaults",
 		"--datadir=/data/pr-1",
 		"--port=3401",
-		"--socket=/data/pr-1/mysqld.sock",
+		"--socket=/tmp/sashiki-3401.sock",
 		"--pid-file=/data/pr-1/mysqld.pid",
 		"--daemonize",
 		"--mysqlx=OFF",

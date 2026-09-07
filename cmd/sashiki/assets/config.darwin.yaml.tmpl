@@ -1,0 +1,42 @@
+# sashiki(macOS ネイティブ, VM レス)。sashiki init --platform darwin が生成。
+# storage=apfs(clonefile), engine=process(mysqld 直起動)。
+listen:
+  api: "127.0.0.1:8080"     # Web UI もここ (GET /)
+  proxy: "127.0.0.1:3306"
+  metrics: "127.0.0.1:9100"
+
+state_db: {{.Root}}/state.db
+run_dir: {{.Root}}/run
+log_dir: {{.Root}}/log
+domain: sashiki.local
+
+storage:
+  backend: apfs
+  local:
+    root: {{.Root}}          # APFS 上。clonefile で CoW ブランチを生やす
+
+engine:
+  type: mysql
+  mysql:
+    mode: process            # systemd を使わず mysqld を直接 spawn
+    mysqld_bin: {{.MysqldBin}}
+    sudo: false              # ログインユーザーで mysqld を起動(sudo 不要)
+    port_range: [3401, 3600]
+    app_user: dev
+    app_pass: dev
+    # extra_cnf: /path/to/server.80.cnf   # プロジェクト固有 my.cnf を使うなら
+
+branches:
+  name_pattern: "^[a-z0-9-]{1,32}$"
+  max_branches: 20
+  lazy_create: true
+  lazy_create_max_wait: 20s
+  idle_stop_after: 30m
+  delete_after_idle: 168h
+  default_profile: preview
+  profiles:
+    preview: { idle_stop_after: 30m, delete_after_idle: 168h }
+    ci:      { idle_stop_after: 5m,  delete_after_idle: 1h }
+
+hooks:
+  dir: {{.Root}}/hooks

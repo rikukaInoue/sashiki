@@ -21,7 +21,11 @@ func (e *Engine) pidPath(ins engine.Instance) string {
 }
 
 func (e *Engine) socketPath(ins engine.Instance) string {
-	return filepath.Join(ins.DataDir, "mysqld.sock")
+	// Unix ドメインソケットのパスは ~103 byte 制限がある。datadir が深い場所
+	// (例: ~/Library/Application Support/... 配下)だと超えて mysqld が起動
+	// できないため、短い固定ディレクトリに port ごとの名前で置く。クライアントは
+	// TCP(127.0.0.1:port)で繋ぐのでソケットの位置は問わない。
+	return filepath.Join("/tmp", fmt.Sprintf("sashiki-%d.sock", ins.Port))
 }
 
 // startArgs は process モードで mysqld に渡す引数を組む(純粋関数、テスト用)。
