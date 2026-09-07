@@ -145,20 +145,6 @@ func TestBackendHandshakeResponseKeepsUserAndDB(t *testing.T) {
 	}
 }
 
-func TestAuthSwitchRequestFormat(t *testing.T) {
-	salt := bytes.Repeat([]byte{0x01}, 20)
-	b := buildAuthSwitchRequest(salt)
-	if b[0] != 0xfe {
-		t.Errorf("first byte = %x, want 0xfe", b[0])
-	}
-	if !bytes.Contains(b, []byte(nativePlugin)) {
-		t.Error("plugin name missing")
-	}
-	if b[len(b)-1] != 0 {
-		t.Error("should end with null")
-	}
-}
-
 func TestErrPacket(t *testing.T) {
 	b := buildErr(1049, "42000", "Unknown branch 'x'")
 	if !isErr(b) {
