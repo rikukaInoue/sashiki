@@ -263,3 +263,37 @@ func TestProvisionAndEngineState(t *testing.T) {
 		t.Errorf("engine_state after sleeping = %q", b.EngineState)
 	}
 }
+
+func TestRecoverInterruptedOperations(t *testing.T) {
+	db := openTest(t)
+	// running のまま残った op(前回クラッシュ相当)と、正常完了済みの op
+	if err := db.CreateOperation("op_run", "create", "pr-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateOperation("op_done", "delete", "pr-2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishOperation("op_done", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := db.RecoverInterruptedOperations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("recovered = %d, want 1", n)
+	}
+	got, _ := db.GetOperation("op_run")
+	if got.State != OpFailed {
+		t.Errorf("op_run state = %q, want failed", got.State)
+	}
+	done, _ := db.GetOperation("op_done")
+	if done.State != OpCompleted {
+		t.Errorf("op_done should stay completed, got %q", done.State)
+	}
+	// 冪等: 2 回目は 0 件
+	if n2, _ := db.RecoverInterruptedOperations(); n2 != 0 {
+		t.Errorf("second run should recover 0, got %d", n2)
+	}
+}

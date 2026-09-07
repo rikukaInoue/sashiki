@@ -699,6 +699,22 @@ func (d *DB) FinishOperation(id, errMsg string) error {
 	return err
 }
 
+// RecoverInterruptedOperations は running のまま残った operation を failed にする。
+// sashikid はシングルプロセスなので、起動時点で running の operation は前回の
+// クラッシュ/再起動で中断されたもの。これを回収しないと `op wait` が
+// タイムアウトまで永久に待つ(#53)。回収した件数を返す。
+func (d *DB) RecoverInterruptedOperations() (int64, error) {
+	b, _ := json.Marshal(map[string]string{"code": "interrupted", "message": "daemon restarted while operation was running"})
+	res, err := d.sql.Exec(
+		`UPDATE operations SET state = ?, finished_at = ?, error_json = ? WHERE state = ?`,
+		OpFailed, time.Now().UTC().Format(timeFmt), string(b), OpRunning)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // PruneOperations は finished_at が before より古い完了/失敗 operation を削除し、
 // 削除件数を返す(operations テーブルの無限成長を防ぐ。reaper から呼ぶ #83)。
 func (d *DB) PruneOperations(before time.Time) (int64, error) {

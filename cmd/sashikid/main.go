@@ -212,6 +212,14 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// 前回の再起動/クラッシュで running のまま残った operation を failed に回収する
+	// (#53。放置すると op wait がタイムアウトまで待つ)。
+	if n, err := db.RecoverInterruptedOperations(); err != nil {
+		log.Printf("recover interrupted operations: %v", err)
+	} else if n > 0 {
+		log.Printf("recovered %d interrupted operation(s) from previous run", n)
+	}
+
 	// 起動時に state.db と ZFS/engine を突き合わせる(仕様 20-1)。
 	if rep, err := mgr.Reconcile(context.Background()); err != nil {
 		log.Printf("reconcile: %v", err)
