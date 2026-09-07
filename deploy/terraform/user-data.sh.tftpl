@@ -2,58 +2,81 @@
 # sashiki EC2 の初期化(仕様17章)。install.sh → sashiki init --yes まで走らせ、
 # 完了時点で sashikid が稼働する。シークレットは IAM ロール経由で取得し、
 # ディスクの平文設定には残さない(API トークンは環境変数、dev パスワードは init が使う)。
-set -euxo pipefail
+set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-apt-get install -y curl ca-certificates awscli jq
+# awscli は Ubuntu 24.04 の apt に無いため公式 v2 を導入する(#164)。unzip が要る。
+apt-get install -y curl ca-certificates unzip jq
+if ! command -v aws >/dev/null 2>&1; then
+  curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip
+  unzip -q /tmp/awscliv2.zip -d /tmp
+  /tmp/aws/install
+fi
 
 # region は IMDSv2 から取得(Terraform に依存させない)。
 IMDS_TOKEN="$(curl -sS -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300")"
 REGION="$(curl -sS -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/placement/region)"
 POOL="${pool}"
-DATA_DEVICE="${data_device}"
 
-# --- シークレット取得(instance role) ---
+# --- シークレット取得(instance role)。set +x で cloud-init ログへの平文残留を防ぐ(#165) ---
+set +x
 API_TOKEN="$(aws ssm get-parameter --with-decryption --region "$REGION" \
   --name "${api_token_ssm_path}" --query 'Parameter.Value' --output text)"
 DEV_PASSWORD="$(aws secretsmanager get-secret-value --region "$REGION" \
   --secret-id "${dev_secret_arn}" --query 'SecretString' --output text)"
+set -x
 
-# --- sashiki のインストール(deb) ---
+# --- sashiki のインストール(deb)。sashiki_ref がタグなら releases の直リンクで取得する
+#     (latest API 経由のパース失敗を避ける、#166)。github_token は private 時のみ ---
 %{ if github_token != "" ~}
 curl -fsSL -H "Authorization: Bearer ${github_token}" \
   "https://raw.githubusercontent.com/rikukaInoue/sashiki/${sashiki_ref}/install.sh" \
-  | GITHUB_TOKEN="${github_token}" bash
+  | SASHIKI_RELEASE="${sashiki_ref}" GITHUB_TOKEN="${github_token}" bash
 %{ else ~}
-curl -fsSL "https://raw.githubusercontent.com/rikukaInoue/sashiki/${sashiki_ref}/install.sh" | bash
+curl -fsSL "https://raw.githubusercontent.com/rikukaInoue/sashiki/${sashiki_ref}/install.sh" \
+  | SASHIKI_RELEASE="${sashiki_ref}" bash
 %{ endif ~}
 
-# --- データ EBS がアタッチされるまで待つ ---
-for i in $(seq 1 30); do
-  [ -b "$DATA_DEVICE" ] && break
+# --- データ EBS のデバイスを解決する。Nitro 世代は /dev/xvdf でなく /dev/nvmeXn1 に
+#     見えるため、EBS の volume id から by-id パスを引いて実デバイスを特定する(#163)。
+#     symlink を自作すると zpool がパーティション名を見失うので、canonical な実体を使う。
+VID="$(echo "${data_volume_id}" | tr -d '-')"   # vol-0abc... → vol0abc...
+BYID="/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_$${VID}"
+DATA_DEVICE=""
+for i in $(seq 1 60); do
+  if [ -e "$BYID" ]; then
+    DATA_DEVICE="$(readlink -f "$BYID")"
+    break
+  fi
+  if [ -b "${data_device}" ]; then   # 非 Nitro フォールバック(/dev/xvdf 等)
+    DATA_DEVICE="${data_device}"
+    break
+  fi
   sleep 5
 done
+if [ -z "$DATA_DEVICE" ]; then
+  echo "sashiki: data volume ${data_volume_id} のデバイスが見つかりません" >&2
+  exit 1
+fi
 
 # --- init: zpool 作成・mysql セットアップ・config 生成・sashikid 有効化まで(--yes で非対話) ---
 sashiki init --yes --pool "$POOL" --device "$DATA_DEVICE"
 
-# init が生成した config の proxy ユーザー/パスワードを Secrets Manager の値へ差し替える。
+# init が生成した config の app credential を Secrets Manager の値へ差し替える(#165: 平文回避)。
+set +x
 CONFIG=/etc/sashiki/config.yaml
 if [ -f "$CONFIG" ]; then
   # init は app_user / app_pass を生成する(旧名 proxy_user / proxy_pass も許容)。
-  # どちらのキーでも一致するよう両対応で置換し、app_* に正規化する。
   sed -i -E "s/^( *)(app_user|proxy_user):.*/\1app_user: ${proxy_user}/" "$CONFIG"
-  # パスワードは特殊文字を避けた生成(special=false)なので単純 sed で安全。
-  sed -i -E "s/^( *)(app_pass|proxy_pass):.*/\1app_pass: $DEV_PASSWORD/" "$CONFIG"
+  sed -i -E "s#^( *)(app_pass|proxy_pass):.*#\1app_pass: $DEV_PASSWORD#" "$CONFIG"
 fi
 
 # --- API トークンを sashikid の環境に渡す ---
 install -d -m 0755 /etc/sashiki
 umask 077
-cat > /etc/sashiki/env <<EOF
-SASHIKI_API_TOKEN=$API_TOKEN
-EOF
+printf 'SASHIKI_API_TOKEN=%s\n' "$API_TOKEN" > /etc/sashiki/env
+set -x
 # systemd unit が EnvironmentFile=/etc/sashiki/env を読む前提。無ければ drop-in で補う。
 if ! grep -q "EnvironmentFile=/etc/sashiki/env" /etc/systemd/system/sashikid.service 2>/dev/null; then
   install -d -m 0755 /etc/systemd/system/sashikid.service.d
@@ -66,4 +89,4 @@ fi
 systemctl enable --now sashikid
 
 # baseline import は運用者の手順(ダンプが要るため)。ここでは sashikid 稼働までを保証する。
-echo "sashiki: bootstrap done. Next: sashiki baseline import <dump.sql>"
+echo "sashiki: bootstrap done. Next: sashiki baseline import --from <dump.sql> [--db <name>]"
