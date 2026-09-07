@@ -26,8 +26,15 @@ func (e *Engine) socketPath(ins engine.Instance) string {
 
 // startArgs は process モードで mysqld に渡す引数を組む(純粋関数、テスト用)。
 func (e *Engine) startArgs(ins engine.Instance) []string {
+	// 先頭は defaults の扱い。ExtraCnf 指定時はその my.cnf を読み(--defaults-extra-file)、
+	// 無ければ /etc/my.cnf 等を一切読まない(--no-defaults)。どちらも「先頭必須」の
+	// オプションなので必ず args[0] に置く。後続の datadir/port 等が値を上書きする。
+	first := "--no-defaults"
+	if e.cfg.ExtraCnf != "" {
+		first = "--defaults-extra-file=" + e.cfg.ExtraCnf
+	}
 	args := []string{
-		"--no-defaults", // /etc/my.cnf を読ませない(ブランチ間の干渉回避)
+		first,
 		"--datadir=" + ins.DataDir,
 		fmt.Sprintf("--port=%d", ins.Port),
 		"--socket=" + e.socketPath(ins),

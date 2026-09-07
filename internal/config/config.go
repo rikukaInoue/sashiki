@@ -115,6 +115,9 @@ type MysqlEngine struct {
 	Mode      string `yaml:"mode"`
 	MysqldBin string `yaml:"mysqld_bin"` // process モードの mysqld パス(既定 "mysqld")
 	RunUser   string `yaml:"run_user"`   // root 起動時に mysqld へ渡す --user(既定 "mysql")
+	// ExtraCnf はプロジェクト固有の my.cnf。process モードで
+	// --defaults-extra-file として読み込む(datadir/port 等は sashiki が上書き)。
+	ExtraCnf string `yaml:"extra_cnf"`
 }
 
 // Proxy はプロトコルプロキシの設定。

@@ -148,6 +148,7 @@ func main() {
 			Mode:      cfg.Engine.Mysql.Mode,
 			MysqldBin: cfg.Engine.Mysql.MysqldBin,
 			RunUser:   cfg.Engine.Mysql.RunUser,
+			ExtraCnf:  cfg.Engine.Mysql.ExtraCnf,
 		})
 	}
 
