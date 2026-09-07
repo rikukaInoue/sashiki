@@ -179,10 +179,6 @@ func cmdBaselineImport(args []string) int {
 			return usageBaseline()
 		}
 	}
-	if os.Geteuid() != 0 {
-		fmt.Fprintln(os.Stderr, "sashiki baseline import: root で実行してください")
-		return exitError
-	}
 	if opts.from != "" {
 		if _, err := os.Stat(opts.from); err != nil {
 			fmt.Fprintf(os.Stderr, "sashiki baseline import: --from %s: %v\n", opts.from, err)
@@ -192,6 +188,13 @@ func cmdBaselineImport(args []string) int {
 	cfg, err := config.Load(opts.configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sashiki baseline import: config: %v\n", err)
+		return exitError
+	}
+	// root が要るのは zfs(systemd)経路だけ。apfs/reflink のローカル CoW は
+	// ログインユーザー(macOS ネイティブ)や root コンテナで動くので要求しない(#138)。
+	local := cfg.Storage.Backend == "apfs" || cfg.Storage.Backend == "reflink"
+	if !local && os.Geteuid() != 0 {
+		fmt.Fprintln(os.Stderr, "sashiki baseline import: root で実行してください")
 		return exitError
 	}
 	if err := runBaselineImport(cfg, opts); err != nil {
@@ -233,6 +236,14 @@ func loadDump(mysqlBin, sock, from, db string) error {
 	return nil
 }
 
+// mysqldBinOr は設定の mysqld パス(未設定なら /usr/sbin/mysqld)を返す。
+func mysqldBinOr(cfg config.Config) string {
+	if b := cfg.Engine.Mysql.MysqldBin; b != "" {
+		return b
+	}
+	return "/usr/sbin/mysqld"
+}
+
 func runLocalBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	root := cfg.Storage.Local.Root
 	if root == "" {
@@ -252,21 +263,38 @@ func runLocalBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 		return fmt.Errorf("%s が空ではありません。初期化済みの base に import はできません", dataDir)
 	}
 
-	mysqlUID, mysqlGID, err := lookupMysqlUser()
-	if err != nil {
-		return err
+	// root(コンテナ)なら mysqld を mysql ユーザーに落として動かし、datadir も
+	// chown する。非 root(macOS ネイティブのログインユーザー)ではそのまま自分で
+	// 起動する — mysql ユーザーが居ない/setuid できないため(#138)。
+	asRoot := os.Geteuid() == 0
+	var mysqlUID, mysqlGID uint32
+	if asRoot {
+		var err error
+		mysqlUID, mysqlGID, err = lookupMysqlUser()
+		if err != nil {
+			return err
+		}
 	}
 	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		return err
 	}
-	if err := chownR(filepath.Join(root, "base"), mysqlUID, mysqlGID); err != nil {
-		return err
+	if asRoot {
+		if err := chownR(filepath.Join(root, "base"), mysqlUID, mysqlGID); err != nil {
+			return err
+		}
+	}
+	runMysqld := func(args ...string) error {
+		if asRoot {
+			return runAsUser(mysqlUID, mysqlGID, mysqldBinOr(cfg), args...)
+		}
+		out, err := exec.Command(mysqldBinOr(cfg), args...).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("%s: %w: %s", mysqldBinOr(cfg), err, strings.TrimSpace(string(out)))
+		}
+		return nil
 	}
 
-	mysqldBin := cfg.Engine.Mysql.MysqldBin
-	if mysqldBin == "" {
-		mysqldBin = "/usr/sbin/mysqld"
-	}
+	mysqldBin := mysqldBinOr(cfg)
 	// client は mysqld の隣から解決する(PATH 側の別メジャーを引かない、#149)。
 	mysqlBin := mysqlClientBin(mysqldBin, "mysql")
 	mysqladminBin := mysqlClientBin(mysqldBin, "mysqladmin")
@@ -274,11 +302,11 @@ func runLocalBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	logErr := filepath.Join(cfg.Storage.Local.Root, "baseline.err")
 
 	fmt.Println("→ mysqld 初期化")
-	if err := runAsUser(mysqlUID, mysqlGID, mysqldBin, "--initialize-insecure", "--datadir="+dataDir, "--log-error="+logErr); err != nil {
+	if err := runMysqld("--initialize-insecure", "--datadir="+dataDir, "--log-error="+logErr); err != nil {
 		return fmt.Errorf("initialize: %w", err)
 	}
 	fmt.Println("→ mysqld 起動")
-	if err := runAsUser(mysqlUID, mysqlGID, mysqldBin, "--datadir="+dataDir, "--port=0", "--skip-networking",
+	if err := runMysqld("--datadir="+dataDir, "--port=0", "--skip-networking",
 		"--socket="+sock, "--pid-file=/tmp/sashiki-baseline.pid", "--log-error="+logErr, "--daemonize"); err != nil {
 		return fmt.Errorf("start: %w", err)
 	}

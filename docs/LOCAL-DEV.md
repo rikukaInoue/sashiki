@@ -103,10 +103,12 @@ limactl delete -f sashiki-dev # VM ごと破棄
 
 判断の目安は [README の損益分岐](../README.md) と [docs/COSTS.md](COSTS.md) を参照。
 
-## VM を使わない経路(実験的、#113)
+## VM を使わない経路(正式サポート、#113)
 
 フル VM(Lima)を避けたい場合、ZFS の代わりに **CoW クローン + mysqld 直起動**で
-動かせる。ZFS カーネル拡張は不要。
+動かせる。ZFS カーネル拡張は不要。macOS ネイティブ / OrbStack コンテナのどちらも
+`create → reset → delete` と proxy lazy create を E2E で検証済み(macOS は
+`make e2e-darwin`、コンテナは `deploy/orbstack/`)。
 
 - **macOS ネイティブ**: `storage.backend: apfs`(APFS `clonefile`)+ `engine.mysql.mode: process`
   (mysqld を systemd 無しで直接 spawn)。Homebrew の mysql を使う。
@@ -129,12 +131,23 @@ engine:
     app_pass: dev
 ```
 
-`<root>/base/data` に mysqld を初期化・データ投入し、正常終了させてから
-`<root>/base/snap/baseline` を作る(baseline)。以降 `sashiki create` が
-clonefile で一瞬・省容量にブランチを生やす。
+一括セットアップは **`sashiki init --platform darwin`**(macOS では既定)が行う:
+Homebrew mysql の検出 → `<root>/base/data` を mysqld で初期化しデータ投入 → 正常終了 →
+`<root>/base/snap/baseline` を clonefile で取得 → config 生成 → launchd に sashikid を
+常駐登録、まで自動。以降 `sashiki create` が clonefile で一瞬・省容量にブランチを生やす。
 
-> 注: この経路は storage(apfs/reflink)と engine(process)が個別に検証済み。
-> `sashiki init` 相当の macOS 一括セットアップは今後の作業(#113)。
+```bash
+brew install mysql@8.0
+sashiki init --platform darwin --yes         # ~/Library/Application Support/sashiki に構築
+sashiki create pr-1                           # clonefile で秒未満
+mysql -udev@pr-1 -pdev -h 127.0.0.1 -P 3306   # proxy 経由。未知ブランチは lazy create
+```
+
+`baseline` を後から差し替えるなら **`sashiki baseline import --from dump.sql --config <root>/config.yaml`**
+(macOS では root 不要。ログインユーザーで走る)、または稼働中に `sashiki baseline refresh`。
+
+> 停止/削除: `launchctl unload ~/Library/LaunchAgents/dev.sashiki.sashikid.plist`。
+> この VM レス経路の回帰テストは `make e2e-darwin`(使い捨て temp root で完結、launchd 非使用)。
 
 ### process モードと実行ユーザー(`run_user`)
 

@@ -8,6 +8,7 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 ### Added
 - **`baseline promote <branch>`**: 検証済みブランチの現在の datadir をそのまま次の current baseline に昇格する(git の branch→main 相当)。snapshot 不変条件のため対象ブランチを graceful stop してから snapshot し、昇格後に再起動する。既存の他ブランチの origin は変えない。
 - **VM レスのコンテナ実行(macOS / OrbStack)**: XFS reflink(CoW)+ process モード mysqld で、フル VM 無しに `create → reset → delete` が動く(`deploy/orbstack/`)。
+- **VM レスの macOS ネイティブ実行が正式サポート(#113)**: `sashiki init --platform darwin` が Homebrew mysql 検出→APFS clonefile で baseline 構築→config 生成→launchd 常駐まで一括。`create → reset → delete` と proxy lazy create を実機 E2E で検証(`make e2e-darwin`、使い捨て temp root)。`docs/LOCAL-DEV.md` を実験的→正式サポートに更新(#139/#141/#142)。
 
 ### Fixed
 - `baseline promote` が snapshot 後の baseline 登録に失敗すると、対象ブランチの mysqld を停止したまま抜けていた。成否に関わらず再起動するよう修正。
@@ -17,6 +18,8 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 - per-branch の `<branch>.env` を `/etc/sashiki`(root 所有で書けない)から `/run/sashiki` に移動。`sashikid.service` に `RuntimeDirectory=sashiki` を追加し、mysqld@/postgres-sashiki@ の `EnvironmentFile` も追随(#177)。
 - sudoers に `baseline promote` の snapshot(`branches/*@baseline-*`)と、promote 済み baseline からの clone を追加(promote 後の運用が sudo で止まらないように、#178)。
 - promote 元ブランチの `delete` が baseline snapshot ごと破棄し current baseline を宙吊りにしていたのを、dataset 上に baseline がある間は delete を拒否するよう修正(#179)。
+- `baseline import` が常に root を要求し macOS ネイティブ(ログインユーザー)で使えなかったのを、apfs/reflink では非 root 実行を許可(root 時のみ mysql ユーザーへ降格)(#138)。
+- macOS の `sashiki init --platform darwin` が baseline snapshot 取得前に `auto.cnf` を削除するよう修正(全ブランチが同一 server_uuid になるのを防ぐ、#80 と同趣旨)。
 
 ## v0.2.0 — public preview (2026-09-07)
 
