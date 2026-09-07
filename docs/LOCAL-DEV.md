@@ -135,3 +135,16 @@ clonefile で一瞬・省容量にブランチを生やす。
 
 > 注: この経路は storage(apfs/reflink)と engine(process)が個別に検証済み。
 > `sashiki init` 相当の macOS 一括セットアップは今後の作業(#113)。
+
+### process モードと実行ユーザー(`run_user`)
+
+process モードは `sashikid` を動かしているユーザーで `mysqld` を起動する。
+`engine.mysql.run_user` は **root で sashikid を動かすときだけ**効く(#117)。
+
+- **一般ユーザー実行(macOS の通常、rootless コンテナ)**: mysqld も同じユーザーで動くので
+  `--user` は付かない。`run_user` は無視される。前提として **`storage.local.root` 配下
+  (datadir / socket / pid-file / error.log)がそのユーザーで読み書きできる**こと。
+  Homebrew の Mac ではログインユーザーで動かすのが基本で、`run_user` は設定不要。
+- **root 実行(Linux コンテナで PID1=root 等)**: mysqld は root では起動を拒むため、
+  `run_user`(既定 `mysql`)へ降格して `--user=<run_user>` を渡す。この場合は
+  **datadir の所有権を `run_user` に合わせておく**(でないと mysqld が書けない)。
