@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"text/template"
 )
@@ -24,6 +25,8 @@ type initOpts struct {
 	device       string
 	skipPackages bool
 	yes          bool
+	platform     string // linux(既定) | darwin
+	root         string // darwin: storage.local.root(既定 ~/Library/Application Support/sashiki)
 }
 
 // initStep は 1 ステップ。done が true を返したらスキップする。
@@ -34,7 +37,7 @@ type initStep struct {
 }
 
 func cmdInit(args []string) int {
-	opts := initOpts{pool: "dbpool"}
+	opts := initOpts{pool: "dbpool", platform: runtime.GOOS}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--pool":
@@ -49,6 +52,18 @@ func cmdInit(args []string) int {
 				return usage()
 			}
 			opts.device = args[i]
+		case "--platform":
+			i++
+			if i >= len(args) {
+				return usage()
+			}
+			opts.platform = args[i]
+		case "--root":
+			i++
+			if i >= len(args) {
+				return usage()
+			}
+			opts.root = args[i]
 		case "--skip-packages":
 			opts.skipPackages = true
 		case "--yes", "-y":
@@ -56,6 +71,9 @@ func cmdInit(args []string) int {
 		default:
 			return usage()
 		}
+	}
+	if opts.platform == "darwin" {
+		return cmdInitDarwin(opts)
 	}
 	if os.Geteuid() != 0 {
 		fmt.Fprintln(os.Stderr, "sashiki init: root で実行してください (sudo sashiki init ...)")

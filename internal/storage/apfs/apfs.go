@@ -73,6 +73,13 @@ func (b *Backend) Clone(ctx context.Context, baseline storage.SnapshotRef, name 
 	return storage.Volume{Name: name, Dataset: dst, Path: dst}, nil
 }
 
+// ResolveVolume は既存ブランチの Volume を名前規約から再構成する
+// (reset/recreate 等で manager が使う)。
+func (b *Backend) ResolveVolume(ctx context.Context, name string) (storage.Volume, error) {
+	dst := b.branchDir(name)
+	return storage.Volume{Name: name, Dataset: dst, Path: dst}, nil
+}
+
 // SnapshotInit は作成直後の datadir を .init として CoW クローンする(reset 用)。
 func (b *Backend) SnapshotInit(ctx context.Context, vol storage.Volume) (storage.SnapshotRef, error) {
 	snap := filepath.Join(vol.Path, ".init")

@@ -95,6 +95,20 @@ func (e *Engine) unit(branch string) string {
 	return fmt.Sprintf("%s@%s", e.cfg.UnitTemplate, branch)
 }
 
+// clientBin は mysqladmin / mysql クライアントのパスを返す。MysqldBin が
+// 絶対パス(例: Homebrew mysql@8.0)なら同じディレクトリのクライアントを使う。
+// PATH の client がサーバと別メジャー(例: mysql 9.x クライアント ↔ 8.0 サーバ)だと
+// native_password で認証できず ready 判定/接続数取得が失敗するため(#119)。
+func (e *Engine) clientBin(name string) string {
+	if strings.Contains(e.cfg.MysqldBin, "/") {
+		p := filepath.Join(filepath.Dir(e.cfg.MysqldBin), name)
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return name
+}
+
 func (e *Engine) envPath(branch string) string {
 	return filepath.Join(e.cfg.EnvDir, branch+".env")
 }
@@ -145,7 +159,7 @@ func (e *Engine) WaitReady(ctx context.Context, ins engine.Instance) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		cmd := exec.CommandContext(ctx, "mysqladmin",
+		cmd := exec.CommandContext(ctx, e.clientBin("mysqladmin"),
 			"-u"+e.cfg.ProxyUser, "-p"+e.cfg.ProxyPass,
 			"-h127.0.0.1", fmt.Sprintf("-P%d", ins.Port), "ping")
 		if err := cmd.Run(); err == nil {
@@ -170,7 +184,7 @@ func (e *Engine) IsRunning(ctx context.Context, ins engine.Instance) (bool, erro
 // `SHOW STATUS LIKE 'Threads_connected'` を mysql CLI で取得し、自分(この
 // クライアント)の接続を1つ差し引く。sudo は不要(TCP で dev ユーザー接続)。
 func (e *Engine) ConnCount(ctx context.Context, ins engine.Instance) (int, error) {
-	cmd := exec.CommandContext(ctx, "mysql",
+	cmd := exec.CommandContext(ctx, e.clientBin("mysql"),
 		"-u"+e.cfg.ProxyUser, "-p"+e.cfg.ProxyPass,
 		"-h127.0.0.1", fmt.Sprintf("-P%d", ins.Port),
 		"-N", "-B", "-e", "SHOW STATUS LIKE 'Threads_connected'")
