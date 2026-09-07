@@ -317,19 +317,24 @@ sashiki は**データ量・内容・schema の再現性は高いが、インフ
 ## FAQ
 
 **Q. 本番データをそのまま使っていい?**
-マスクしてから。PII マスキングは baseline build の必須ステップにでき、`require_masked` を有効にすると未マスクの baseline は publish できない。
+
+A. マスクしてから。PII マスキングは baseline build の必須ステップにでき、`require_masked` を有効にすると未マスクの baseline は publish できない。
 
 **Q. どのくらいメモリが要る?**
-ディスクは CoW でほぼ増えないが、**mysqld はブランチごとに 1 プロセス**。コストは同時稼働数で決まる(buffer pool 256MB 設定で t3.large に 8〜10 本)。アイドル停止があるので「100 ブランチ、同時稼働 5」なら小さいインスタンスで足りる。
+
+A. ディスクは CoW でほぼ増えないが、**mysqld はブランチごとに 1 プロセス**。コストは同時稼働数で決まる(buffer pool 256MB 設定で t3.large に 8〜10 本)。アイドル停止があるので「100 ブランチ、同時稼働 5」なら小さいインスタンスで足りる。
 
 **Q. profile と lease の違いは?**
-profile は「無接続が続いたら止める/消す」寿命ポリシー(preview/ci/sandbox)。lease(`--ttl` / `lease renew`)は「使用中でも必ず期限で回収する」絶対期限。CI で「最長 1 時間で必ず消える」を保証したいとき等に使う。
+
+A. profile は「無接続が続いたら止める/消す」寿命ポリシー(preview/ci/sandbox)。lease(`--ttl` / `lease renew`)は「使用中でも必ず期限で回収する」絶対期限。CI で「最長 1 時間で必ず消える」を保証したいとき等に使う。
 
 **Q. PostgreSQL は?**
-engine として対応(接続は直接ポート)。proxy / lazy create は MySQL のみ。idle 管理は engine ポーリングで両対応。
+
+A. engine として対応(接続は直接ポート)。proxy / lazy create は MySQL のみ。idle 管理は engine ポーリングで両対応。
 
 **Q. FSx バックエンドはいつ使う?**
-「小規模→EBS、大規模→FSx」ではない。multi-host / Spot / host 使い捨て / 1 台の RAM 限界、のどれかが必要になったら FSx。詳細は [docs/COSTS.md](docs/COSTS.md)。
+
+A. 「小規模→EBS、大規模→FSx」ではない。multi-host / Spot / host 使い捨て / 1 台の RAM 限界、のどれかが必要になったら FSx。詳細は [docs/COSTS.md](docs/COSTS.md)。
 
 ## 開発 / コントリビュート
 
