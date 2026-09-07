@@ -44,5 +44,12 @@ e2e-postgres-local:
 e2e-local-clean:
 	limactl delete -f sashiki-e2e 2>/dev/null || true
 
+# macOS ネイティブ(VM レス)E2E。APFS clonefile + process モード mysqld を
+# このマシンで直接検証する(Lima 不要)。要: brew install mysql@8.0。
+e2e-darwin:
+	go build $(LDFLAGS) -o bin/sashikid ./cmd/sashikid
+	go build $(LDFLAGS) -o bin/sashiki ./cmd/sashiki
+	./e2e/darwin/run.sh bin/sashikid bin/sashiki
+
 clean:
 	rm -rf bin/

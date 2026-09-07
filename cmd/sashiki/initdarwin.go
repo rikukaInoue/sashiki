@@ -96,7 +96,14 @@ func cmdInitDarwin(opts initOpts) int {
 		{
 			name: "baseline snapshot を取得 (clonefile)",
 			done: func() bool { _, err := os.Stat(baseline); return err == nil },
-			run:  func() error { return runOut("cp", "-Rc", baseData, baseline) },
+			run: func() error {
+				// server_uuid の重複を避けるため auto.cnf を消してから clone する
+				// (全ブランチが同一 UUID になるのを防ぐ。#80 と同趣旨)。
+				if err := os.Remove(filepath.Join(baseData, "auto.cnf")); err != nil && !os.IsNotExist(err) {
+					return err
+				}
+				return runOut("cp", "-Rc", baseData, baseline)
+			},
 		},
 		{
 			name: "config.yaml 生成",

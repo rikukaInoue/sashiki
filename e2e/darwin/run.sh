@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# macOS ネイティブ(VM レス)E2E。APFS clonefile ストレージ + process モード
+# mysqld で create→reset→delete と proxy lazy create を検証する(#113 / #139)。
+#
+# 前提: brew install mysql@8.0(このマシンの mysqld を使う。root 不要)。
+# 使い方: ./e2e/darwin/run.sh <sashikid> <sashiki>
+#
+# launchd も既定の ~/Library/Application Support/sashiki も触らない。すべて
+# 使い捨ての temp root(TMPDIR 配下)で完結し、終了時に片付ける。
+set -euo pipefail
+
+SASHIKID_BIN=${1:?usage: run.sh <sashikid> <sashiki>}
+SASHIKI_BIN=${2:?usage: run.sh <sashikid> <sashiki>}
+
+log() { echo -e "\n=== $* ==="; }
+fail() { echo "DARWIN E2E FAILED: $*" >&2; [ -n "${ROOT:-}" ] && tail -30 "$ROOT/sashikid.out" 2>/dev/null; exit 1; }
+
+# --- mysqld / client の解決(Homebrew mysql@8.0 優先) ---
+BREW_PREFIX="$(brew --prefix mysql@8.0 2>/dev/null || true)"
+MYSQLD=""
+for c in "$BREW_PREFIX/bin/mysqld" /opt/homebrew/opt/mysql@8.0/bin/mysqld /usr/local/opt/mysql@8.0/bin/mysqld; do
+  [ -x "$c" ] && MYSQLD="$c" && break
+done
+[ -n "$MYSQLD" ] || fail "mysqld が見つかりません。brew install mysql@8.0 を実行してください"
+MYSQL="$(dirname "$MYSQLD")/mysql"
+log "mysqld: $MYSQLD"
+
+API_PORT=18080
+PROXY_PORT=13306
+export SASHIKI_API_URL="http://127.0.0.1:$API_PORT"
+
+ROOT="$(mktemp -d "${TMPDIR:-/tmp}/sashiki-darwin-e2e.XXXXXX")"
+SKPID=""
+cleanup() {
+  [ -n "$SKPID" ] && kill "$SKPID" 2>/dev/null || true
+  # 起動しっぱなしの branch mysqld を掃除(datadir 配下の pid を SIGKILL)
+  for p in "$ROOT"/branches/*/data/mysqld.pid; do
+    [ -f "$p" ] && kill -9 "$(cat "$p")" 2>/dev/null || true
+  done
+  rm -rf "$ROOT"
+}
+trap cleanup EXIT
+
+log "temp root: $ROOT"
+mkdir -p "$ROOT/log" "$ROOT/run" "$ROOT/hooks"
+
+cat > "$ROOT/config.yaml" <<YAML
+listen:
+  api: "127.0.0.1:$API_PORT"
+  proxy: "127.0.0.1:$PROXY_PORT"
+  metrics: "127.0.0.1:19100"
+state_db: $ROOT/state.db
+run_dir: $ROOT/run
+log_dir: $ROOT/log
+domain: sashiki.local
+storage:
+  backend: apfs
+  local:
+    root: $ROOT
+engine:
+  type: mysql
+  mysql:
+    mode: process
+    mysqld_bin: $MYSQLD
+    sudo: false
+    port_range: [13401, 13600]
+    app_user: dev
+    app_pass: dev
+branches:
+  name_pattern: "^[a-z0-9-]{1,32}$"
+  max_branches: 20
+  lazy_create: true
+hooks:
+  dir: $ROOT/hooks
+YAML
+
+log "seed dump"
+cat > "$ROOT/seed.sql" <<'SQL'
+CREATE DATABASE IF NOT EXISTS app;
+USE app;
+CREATE TABLE items (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(64));
+INSERT INTO items (name) VALUES ('alpha'), ('beta'), ('gamma');
+SQL
+
+log "baseline import (non-root, apfs, clonefile)"
+"$SASHIKI_BIN" baseline import --config "$ROOT/config.yaml" --from "$ROOT/seed.sql" || fail "baseline import"
+
+log "start sashikid (background, no launchd)"
+"$SASHIKID_BIN" --config "$ROOT/config.yaml" >"$ROOT/sashikid.out" 2>&1 &
+SKPID=$!
+for i in $(seq 1 50); do "$SASHIKI_BIN" list >/dev/null 2>&1 && break; sleep 0.3; done
+"$SASHIKI_BIN" list >/dev/null 2>&1 || fail "sashikid が ready になりません"
+
+q() { "$MYSQL" -udev@"$1" -pdev -h127.0.0.1 -P"$PROXY_PORT" -N -e "$2" 2>/dev/null; }
+
+log "create pr-1"
+"$SASHIKI_BIN" create pr-1 || fail "create"
+[ "$(q pr-1 'SELECT COUNT(*) FROM app.items;')" = "3" ] || fail "初期データ 3 件のはず"
+
+log "break -> reset -> データ復元"
+"$MYSQL" -udev@pr-1 -pdev -h127.0.0.1 -P"$PROXY_PORT" -e "DELETE FROM app.items;" 2>/dev/null
+[ "$(q pr-1 'SELECT COUNT(*) FROM app.items;')" = "0" ] || fail "破壊後は 0 件のはず"
+"$SASHIKI_BIN" reset pr-1 || fail "reset"
+[ "$(q pr-1 'SELECT COUNT(*) FROM app.items;')" = "3" ] || fail "reset で 3 件に戻るはず"
+
+log "proxy lazy create (未知ブランチへ接続だけで自動作成)"
+[ "$(q pr-lazy 'SELECT COUNT(*) FROM app.items;')" = "3" ] || fail "lazy create が効かない"
+
+log "delete"
+"$SASHIKI_BIN" delete pr-1 || fail "delete pr-1"
+"$SASHIKI_BIN" delete pr-lazy || fail "delete pr-lazy"
+
+log "DARWIN E2E PASSED"
