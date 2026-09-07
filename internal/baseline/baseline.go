@@ -34,6 +34,41 @@ type Server struct {
 	// UID/GID: mysqld を実行する uid/gid(root から mysql ユーザーへ降格)。
 	// 両方 0 なら降格しない(呼び出し元プロセスのユーザーで実行)。
 	UID, GID uint32
+	// MysqldBin は使う mysqld のパス(空なら /usr/sbin/mysqld)。macOS では
+	// Homebrew mysql@8.0 等を指定する(#127)。
+	MysqldBin string
+	// ExtraCnf を指定すると初期化/投入時の mysqld が --defaults-file でその 1
+	// ファイルだけを読む。投入時の sql_mode / strict を実行時と揃えられる
+	// (未指定なら従来どおり既定の my.cnf を読む、#127)。
+	ExtraCnf string
+}
+
+// mysqld は使う mysqld バイナリを返す(既定 /usr/sbin/mysqld)。
+func (s Server) mysqld() string {
+	if s.MysqldBin != "" {
+		return s.MysqldBin
+	}
+	return "/usr/sbin/mysqld"
+}
+
+// defaultsArgs は mysqld の先頭に置く defaults 引数(空スライス可)。
+func (s Server) defaultsArgs() []string {
+	if s.ExtraCnf != "" {
+		return []string{"--defaults-file=" + s.ExtraCnf}
+	}
+	return nil
+}
+
+// client は mysql / mysqladmin クライアントのパスを返す。MysqldBin が絶対パスなら
+// 同じディレクトリのものを使う(8.0 サーバを 9.x クライアントで叩く事故を避ける)。
+func (s Server) client(name string) string {
+	if strings.Contains(s.MysqldBin, "/") {
+		p := filepath.Join(filepath.Dir(s.MysqldBin), name)
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return name
 }
 
 // Ops は mysqld / mysql / mysqladmin の実行一式。テストでは各関数を
@@ -59,14 +94,16 @@ type Ops struct {
 func RealOps() Ops {
 	return Ops{
 		Initialize: func(ctx context.Context, s Server) error {
-			return runAs(ctx, s, "/usr/sbin/mysqld", "--initialize-insecure",
+			args := append(s.defaultsArgs(), "--initialize-insecure",
 				"--datadir="+s.DataDir, "--log-error="+s.LogError)
+			return runAs(ctx, s, s.mysqld(), args...)
 		},
 		Start: func(ctx context.Context, s Server) error {
-			return runAs(ctx, s, "/usr/sbin/mysqld",
+			args := append(s.defaultsArgs(),
 				"--datadir="+s.DataDir, "--port=0", "--skip-networking",
 				"--socket="+s.Socket, "--pid-file="+s.PidFile,
 				"--log-error="+s.LogError, "--daemonize")
+			return runAs(ctx, s, s.mysqld(), args...)
 		},
 		WaitReady: func(ctx context.Context, s Server, timeout time.Duration) error {
 			deadline := time.Now().Add(timeout)
@@ -74,7 +111,7 @@ func RealOps() Ops {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				if exec.CommandContext(ctx, "mysqladmin", "-uroot", "-S", s.Socket, "ping").Run() == nil {
+				if exec.CommandContext(ctx, s.client("mysqladmin"), "-uroot", "-S", s.Socket, "ping").Run() == nil {
 					return nil
 				}
 				time.Sleep(500 * time.Millisecond)
@@ -82,7 +119,7 @@ func RealOps() Ops {
 			return fmt.Errorf("mysqld が %s 以内に ready になりませんでした", timeout)
 		},
 		Query: func(ctx context.Context, s Server, sql string) (string, error) {
-			cmd := exec.CommandContext(ctx, "mysql", "-uroot", "-S", s.Socket, "-N", "-B", "-e", sql)
+			cmd := exec.CommandContext(ctx, s.client("mysql"), "-uroot", "-S", s.Socket, "-N", "-B", "-e", sql)
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
@@ -99,7 +136,7 @@ func RealOps() Ops {
 			if db != "" {
 				args = append(args, db)
 			}
-			cmd := exec.CommandContext(ctx, "mysql", args...)
+			cmd := exec.CommandContext(ctx, s.client("mysql"), args...)
 			cmd.Stdin = f
 			if out, err := cmd.CombinedOutput(); err != nil {
 				return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
@@ -107,7 +144,7 @@ func RealOps() Ops {
 			return nil
 		},
 		Shutdown: func(ctx context.Context, s Server) error {
-			if out, err := exec.CommandContext(ctx, "mysqladmin", "-uroot", "-S", s.Socket, "shutdown").CombinedOutput(); err != nil {
+			if out, err := exec.CommandContext(ctx, s.client("mysqladmin"), "-uroot", "-S", s.Socket, "shutdown").CombinedOutput(); err != nil {
 				return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 			}
 			return nil

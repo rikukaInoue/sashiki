@@ -460,10 +460,12 @@ func (m *Manager) runSourceLoader(ctx context.Context, rc RefreshConfig) error {
 		return fmt.Errorf("base path: %v", err)
 	}
 	srv := baseline.Server{
-		DataDir:  base + "/data",
-		Socket:   "/tmp/sashiki-refresh.sock",
-		PidFile:  "/tmp/sashiki-refresh.pid",
-		LogError: "/var/log/sashiki/refresh.err",
+		DataDir:   base + "/data",
+		Socket:    "/tmp/sashiki-refresh.sock",
+		PidFile:   "/tmp/sashiki-refresh.pid",
+		LogError:  "/var/log/sashiki/refresh.err",
+		MysqldBin: m.cfg.MysqldBin,
+		ExtraCnf:  m.cfg.MysqlExtraCnf,
 	}
 	if os.Geteuid() == 0 {
 		if uid, gid, err := baseline.LookupMysqlUser(); err == nil {

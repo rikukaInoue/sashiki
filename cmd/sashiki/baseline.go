@@ -199,22 +199,40 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	sock := "/tmp/sashiki-baseline.sock"
 	logErr := filepath.Join(cfg.Hooks.LogDir, "..", "baseline.err")
 
+	// mysqld のパスと defaults を config から取る(#127)。固定 /usr/sbin/mysqld を
+	// やめ、engine.mysql.mysqld_bin / extra_cnf を使うことで投入時の sql_mode /
+	// strict を実行時と揃える。mysqladmin は mysqld と同じ場所から解決する。
+	mysqldBin := cfg.Engine.Mysql.MysqldBin
+	if mysqldBin == "" {
+		mysqldBin = "/usr/sbin/mysqld"
+	}
+	var defaults []string
+	if cfg.Engine.Mysql.ExtraCnf != "" {
+		defaults = []string{"--defaults-file=" + cfg.Engine.Mysql.ExtraCnf}
+	}
+	mysqladminBin := "mysqladmin"
+	if strings.Contains(mysqldBin, "/") {
+		if p := filepath.Join(filepath.Dir(mysqldBin), "mysqladmin"); binExists(p) {
+			mysqladminBin = p
+		}
+	}
+
 	fmt.Println("→ mysqld 初期化")
-	if err := runAsUser(mysqlUID, mysqlGID, "/usr/sbin/mysqld", "--initialize-insecure", "--datadir="+dataDir,
-		"--log-error=/var/log/sashiki/baseline.err"); err != nil {
+	initArgs := append(defaults, "--initialize-insecure", "--datadir="+dataDir, "--log-error="+logErr)
+	if err := runAsUser(mysqlUID, mysqlGID, mysqldBin, initArgs...); err != nil {
 		return fmt.Errorf("initialize: %w", err)
 	}
 	fmt.Println("→ mysqld 起動")
-	if err := runAsUser(mysqlUID, mysqlGID, "/usr/sbin/mysqld",
-		"--datadir="+dataDir, "--port=0", "--skip-networking",
+	startArgs := append(defaults, "--datadir="+dataDir, "--port=0", "--skip-networking",
 		"--socket="+sock, "--pid-file=/tmp/sashiki-baseline.pid",
-		"--log-error="+logErr, "--daemonize"); err != nil {
+		"--log-error="+logErr, "--daemonize")
+	if err := runAsUser(mysqlUID, mysqlGID, mysqldBin, startArgs...); err != nil {
 		return fmt.Errorf("start: %w", err)
 	}
 	stopped := false
 	defer func() {
 		if !stopped {
-			_ = exec.Command("mysqladmin", "-uroot", "-S", sock, "shutdown").Run()
+			_ = exec.Command(mysqladminBin, "-uroot", "-S", sock, "shutdown").Run()
 		}
 	}()
 	if err := waitSocket(sock, 60*time.Second); err != nil {
