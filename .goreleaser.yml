@@ -41,6 +41,8 @@ nfpms:
       - src: deploy/systemd/sashikid.service
         dst: /lib/systemd/system/sashikid.service
         type: config
+    scripts:
+      postinstall: deploy/nfpm/postinstall.sh
 
 checksum:
   name_template: checksums.txt
