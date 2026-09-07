@@ -262,11 +262,17 @@ func main() {
 			tlsCfg = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 			log.Printf("sashikid: proxy TLS 終端を有効化しました")
 		}
+		// allowed_user: 未設定(nil)なら app_user のみ許可、明示指定(空=任意)なら
+		// その値を使う(管理ユーザー接続などのため、#131)。
+		allowedUser := cfg.Engine.Mysql.ProxyUser
+		if cfg.Proxy.AllowedUser != nil {
+			allowedUser = *cfg.Proxy.AllowedUser
+		}
 		px, err := proxy.New(proxy.Config{
 			Listen:           cfg.Listen.Proxy,
 			NamePattern:      cfg.Branches.NamePattern,
 			MaxConnPerBranch: cfg.Proxy.MaxConnPerBranch,
-			AllowedUser:      cfg.Engine.Mysql.ProxyUser,
+			AllowedUser:      allowedUser,
 			AppUser:          cfg.Engine.Mysql.ProxyUser,
 			AppPassword:      cfg.Engine.Mysql.ProxyPass,
 			TLSConfig:        tlsCfg,

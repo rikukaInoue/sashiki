@@ -237,3 +237,22 @@ branches:
 		t.Error("Load should fail when default_profile is not in profiles")
 	}
 }
+
+func TestProxyAllowedUser(t *testing.T) {
+	base := "storage:\n  backend: ebs-zfs\n  ebs-zfs:\n    pool: p\n"
+	// 未設定 → nil(既定 = app_user のみ)
+	cfg := load(t, base)
+	if cfg.Proxy.AllowedUser != nil {
+		t.Errorf("unset allowed_user should be nil, got %q", *cfg.Proxy.AllowedUser)
+	}
+	// 空文字 → 非 nil の ""(任意ユーザー許可)
+	cfg = load(t, base+"proxy:\n  allowed_user: \"\"\n")
+	if cfg.Proxy.AllowedUser == nil || *cfg.Proxy.AllowedUser != "" {
+		t.Errorf(`allowed_user: "" should be non-nil empty, got %v`, cfg.Proxy.AllowedUser)
+	}
+	// 特定名
+	cfg = load(t, base+"proxy:\n  allowed_user: admin\n")
+	if cfg.Proxy.AllowedUser == nil || *cfg.Proxy.AllowedUser != "admin" {
+		t.Errorf("allowed_user: admin, got %v", cfg.Proxy.AllowedUser)
+	}
+}
