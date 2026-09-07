@@ -172,6 +172,51 @@ hooks:
 	}
 }
 
+func TestLocalBackendRequiresRoot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.yaml")
+	// apfs だが local.root が無い → Validate エラー
+	_ = os.WriteFile(path, []byte(`
+storage:
+  backend: apfs
+`), 0o644)
+	if _, err := Load(path); err == nil {
+		t.Error("apfs without local.root should fail validation")
+	}
+	// root を与えれば通る
+	_ = os.WriteFile(path, []byte(`
+storage:
+  backend: reflink
+  local:
+    root: /mnt/xfs/sashiki
+`), 0o644)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("reflink with root should load: %v", err)
+	}
+	if cfg.Storage.Local.Root != "/mnt/xfs/sashiki" {
+		t.Errorf("local.root = %q", cfg.Storage.Local.Root)
+	}
+}
+
+func TestEngineProcessMode(t *testing.T) {
+	cfg := load(t, `
+storage:
+  backend: ebs-zfs
+  ebs-zfs:
+    pool: p
+engine:
+  mysql:
+    mode: process
+    mysqld_bin: /opt/homebrew/opt/mysql/bin/mysqld
+`)
+	if cfg.Engine.Mysql.Mode != "process" {
+		t.Errorf("mode = %q, want process", cfg.Engine.Mysql.Mode)
+	}
+	if cfg.Engine.Mysql.MysqldBin != "/opt/homebrew/opt/mysql/bin/mysqld" {
+		t.Errorf("mysqld_bin = %q", cfg.Engine.Mysql.MysqldBin)
+	}
+}
+
 func TestDefaultProfileMustExist(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	// profiles を上書きしつつ default_profile が存在しない → Validate エラー

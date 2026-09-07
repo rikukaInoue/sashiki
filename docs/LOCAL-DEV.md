@@ -102,3 +102,36 @@ limactl delete -f sashiki-dev # VM ごと破棄
 - **向かない(Docker で十分)**: 軽い MySQL が 1 個欲しいだけ。その場合は素の container の方が VM 不要で楽。
 
 判断の目安は [README の損益分岐](../README.md) と [docs/COSTS.md](COSTS.md) を参照。
+
+## VM を使わない経路(実験的、#113)
+
+フル VM(Lima)を避けたい場合、ZFS の代わりに **CoW クローン + mysqld 直起動**で
+動かせる。ZFS カーネル拡張は不要。
+
+- **macOS ネイティブ**: `storage.backend: apfs`(APFS `clonefile`)+ `engine.mysql.mode: process`
+  (mysqld を systemd 無しで直接 spawn)。Homebrew の mysql を使う。
+- **OrbStack コンテナ**: `storage.backend: reflink`(XFS reflink `cp --reflink`)+ 同 `mode: process`。
+  OrbStack カーネルには ZFS が無いため XFS reflink を CoW 基盤に使う(`deploy/orbstack/` 参照)。
+
+config 例(macOS ネイティブ):
+
+```yaml
+storage:
+  backend: apfs
+  local:
+    root: ~/Library/Application Support/sashiki   # APFS 上のルート
+engine:
+  type: mysql
+  mysql:
+    mode: process
+    mysqld_bin: /opt/homebrew/opt/mysql/bin/mysqld
+    app_user: dev
+    app_pass: dev
+```
+
+`<root>/base/data` に mysqld を初期化・データ投入し、正常終了させてから
+`<root>/base/snap/baseline` を作る(baseline)。以降 `sashiki create` が
+clonefile で一瞬・省容量にブランチを生やす。
+
+> 注: この経路は storage(apfs/reflink)と engine(process)が個別に検証済み。
+> `sashiki init` 相当の macOS 一括セットアップは今後の作業(#113)。

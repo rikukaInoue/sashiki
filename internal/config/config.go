@@ -37,16 +37,23 @@ type Listen struct {
 
 // Storage はバックエンド設定。
 type Storage struct {
-	Backend             string     `yaml:"backend"` // ebs-zfs | fsx-zfs
-	HighWatermark       float64    `yaml:"high_watermark"`
-	CriticalWatermark   float64    `yaml:"critical_watermark"`
-	DefaultStorageQuota string     `yaml:"default_storage_quota"` // branch ごとの refquota(例 "10G"。空=無制限, #85)
-	Zfs                 ZfsStorage `yaml:"ebs-zfs"`
-	Fsx                 FsxStorage `yaml:"fsx-zfs"`
+	Backend             string       `yaml:"backend"` // ebs-zfs | fsx-zfs | apfs | reflink
+	HighWatermark       float64      `yaml:"high_watermark"`
+	CriticalWatermark   float64      `yaml:"critical_watermark"`
+	DefaultStorageQuota string       `yaml:"default_storage_quota"` // branch ごとの refquota(例 "10G"。空=無制限, #85)
+	Zfs                 ZfsStorage   `yaml:"ebs-zfs"`
+	Fsx                 FsxStorage   `yaml:"fsx-zfs"`
+	Local               LocalStorage `yaml:"local"` // apfs / reflink(ローカル CoW、#113)
 
 	// 旧キー(v0.1 互換)。Load で新フィールドへ移す。
 	LegacyZfs *ZfsStorage `yaml:"zfs"`
 	LegacyFsx *FsxStorage `yaml:"fsx"`
+}
+
+// LocalStorage は apfs(macOS clonefile)/ reflink(Linux cp --reflink)の設定。
+type LocalStorage struct {
+	Root             string `yaml:"root"`              // CoW 対応 FS 上のルート(APFS / XFS reflink)
+	BaselineSnapshot string `yaml:"baseline_snapshot"` // 既定 "baseline"
 }
 
 // FsxStorage は fsx バックエンドの設定。
@@ -103,6 +110,11 @@ type MysqlEngine struct {
 	ProxyPass string `yaml:"proxy_pass"`
 	EnvDir    string `yaml:"env_dir"`
 	Sudo      bool   `yaml:"sudo"`
+	// Mode は起動方式。"systemd"(既定)か "process"(systemd の無い macOS ネイティブ /
+	// コンテナで mysqld を直接 spawn、#113)。
+	Mode      string `yaml:"mode"`
+	MysqldBin string `yaml:"mysqld_bin"` // process モードの mysqld パス(既定 "mysqld")
+	RunUser   string `yaml:"run_user"`   // root 起動時に mysqld へ渡す --user(既定 "mysql")
 }
 
 // Proxy はプロトコルプロキシの設定。
@@ -292,14 +304,21 @@ func (c *Config) normalize() {
 
 // Validate は設定の整合性チェック。
 func (c Config) Validate() error {
-	if c.Storage.Backend != "ebs-zfs" && c.Storage.Backend != "fsx-zfs" {
-		return fmt.Errorf("storage.backend %q is not supported (ebs-zfs | fsx-zfs)", c.Storage.Backend)
+	switch c.Storage.Backend {
+	case "ebs-zfs", "fsx-zfs", "apfs", "reflink":
+	default:
+		return fmt.Errorf("storage.backend %q is not supported (ebs-zfs | fsx-zfs | apfs | reflink)", c.Storage.Backend)
 	}
 	if c.Storage.Backend == "fsx-zfs" {
 		f := c.Storage.Fsx
 		// parent_volume_id は省略可(filesystem のルートボリュームを自動発見)
 		if f.Region == "" || f.FilesystemID == "" || f.BaseVolumeID == "" || f.DNSName == "" {
 			return fmt.Errorf("storage.fsx-zfs requires region, filesystem_id, base_volume_id, dns_name")
+		}
+	}
+	if c.Storage.Backend == "apfs" || c.Storage.Backend == "reflink" {
+		if c.Storage.Local.Root == "" {
+			return fmt.Errorf("storage.local.root is required for backend %q", c.Storage.Backend)
 		}
 	}
 	if c.LogFormat != "text" && c.LogFormat != "json" {

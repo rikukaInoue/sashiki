@@ -24,7 +24,22 @@ type Config struct {
 	ProxyPass    string
 	ReadyTimeout time.Duration // 既定 30s
 	Sudo         bool
+
+	// Mode は起動方式。"systemd"(既定)は systemd テンプレートユニット、
+	// "process" は mysqld を直接 spawn する(systemd の無い macOS ネイティブ /
+	// コンテナ向け、#113)。
+	Mode string
+	// MysqldBin は process モードで起動する mysqld のパス(既定 "mysqld")。
+	MysqldBin string
+	// RunUser は root で動かすとき mysqld に渡す --user(既定 "mysql")。
+	// root でなければ無視する。
+	RunUser string
 }
+
+const (
+	ModeSystemd = "systemd"
+	ModeProcess = "process"
+)
 
 // Engine は engine.Engine の MySQL + systemd 実装。
 type Engine struct {
@@ -42,6 +57,15 @@ func New(cfg Config) *Engine {
 	}
 	if cfg.ReadyTimeout == 0 {
 		cfg.ReadyTimeout = 30 * time.Second
+	}
+	if cfg.Mode == "" {
+		cfg.Mode = ModeSystemd
+	}
+	if cfg.MysqldBin == "" {
+		cfg.MysqldBin = "mysqld"
+	}
+	if cfg.RunUser == "" {
+		cfg.RunUser = "mysql"
 	}
 	e := &Engine{cfg: cfg}
 	e.run = e.execCmd
@@ -70,8 +94,11 @@ func (e *Engine) envPath(branch string) string {
 	return filepath.Join(e.cfg.EnvDir, branch+".env")
 }
 
-// Start は env ファイルを書いて systemd ユニットを起動する。
+// Start はインスタンスを起動する(mode により systemd / 直 spawn)。
 func (e *Engine) Start(ctx context.Context, ins engine.Instance) error {
+	if e.cfg.Mode == ModeProcess {
+		return e.startProcess(ctx, ins)
+	}
 	env := fmt.Sprintf("PORT=%d\nDATADIR=%s\n", ins.Port, ins.DataDir)
 	if err := os.WriteFile(e.envPath(ins.Branch), []byte(env), 0o644); err != nil {
 		return fmt.Errorf("write env: %w", err)
@@ -80,8 +107,11 @@ func (e *Engine) Start(ctx context.Context, ins engine.Instance) error {
 	return err
 }
 
-// Stop は systemd 経由で正常終了させ、env ファイルを消す。
+// Stop は正常終了(graceful)させる。snapshot の一貫性はこれに依存する。
 func (e *Engine) Stop(ctx context.Context, ins engine.Instance) error {
+	if e.cfg.Mode == ModeProcess {
+		return e.stopProcess(ctx, ins)
+	}
 	if _, err := e.run(ctx, "systemctl", "stop", e.unit(ins.Branch)); err != nil {
 		return err
 	}
@@ -90,9 +120,11 @@ func (e *Engine) Stop(ctx context.Context, ins engine.Instance) error {
 	return nil
 }
 
-// Kill は systemd 経由で SIGKILL する(env は消す)。rollback で捨てる
-// dirty state 用。snapshot 前には使わない。
+// Kill は即時停止(dirty state を捨てる。rollback 直前用、snapshot 前には使わない)。
 func (e *Engine) Kill(ctx context.Context, ins engine.Instance) error {
+	if e.cfg.Mode == ModeProcess {
+		return e.killProcess(ctx, ins)
+	}
 	_, _ = e.run(ctx, "systemctl", "kill", "-s", "SIGKILL", e.unit(ins.Branch))
 	// プロセス消滅を待たずとも rollback は volume を置き換えるが、
 	// datadir を掴んだままの rollback を避けるため軽く待つ。
@@ -120,8 +152,11 @@ func (e *Engine) WaitReady(ctx context.Context, ins engine.Instance) error {
 		ins.Branch, ins.Port, e.cfg.ReadyTimeout)
 }
 
-// IsRunning は systemctl is-active で判定する。
+// IsRunning は起動中かどうか(mode により systemctl / pidfile)。
 func (e *Engine) IsRunning(ctx context.Context, ins engine.Instance) (bool, error) {
+	if e.cfg.Mode == ModeProcess {
+		return e.isRunningProcess(ins), nil
+	}
 	out, _ := e.run(ctx, "systemctl", "is-active", e.unit(ins.Branch))
 	return out == "active", nil
 }
