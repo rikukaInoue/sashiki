@@ -107,6 +107,7 @@ func New(mgr *workspace.Manager, domain, engineType, proxyUser, proxyPass, token
 	s.mux.HandleFunc("POST /v1/baseline/validate", s.handleBaselineValidate)
 	s.mux.HandleFunc("POST /v1/baseline/publish", s.handleSetBaseline) // publish == set(policy 検査つき)
 	s.mux.HandleFunc("POST /v1/baseline/delete", s.handleBaselineDelete)
+	s.mux.HandleFunc("POST /v1/baseline/promote", s.handleBaselinePromote)
 	s.mux.HandleFunc("GET /v1/capacity", s.handleCapacity)
 	s.mux.HandleFunc("GET /v1/doctor", s.handleDoctor)
 	s.mux.HandleFunc("POST /v1/gc/orphans", s.handleGCOrphans)
@@ -266,6 +267,24 @@ func (s *Server) handleBaselineDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"deleted": req.Snapshot})
+}
+
+// handleBaselinePromote は既存ブランチを新 baseline に昇格する(#129)。body {branch}。
+// branch でマイグレーション済みの状態をそのまま current baseline にする。
+func (s *Server) handleBaselinePromote(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Branch string `json:"branch"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Branch == "" {
+		writeErr(w, http.StatusBadRequest, "invalid_name", "body must be {\"branch\": \"...\"}")
+		return
+	}
+	snap, err := s.mgr.PromoteBranch(r.Context(), req.Branch)
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"from": req.Branch, "current": snap})
 }
 
 func (s *Server) handleSetBaseline(w http.ResponseWriter, r *http.Request) {

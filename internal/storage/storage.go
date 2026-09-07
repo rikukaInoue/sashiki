@@ -85,6 +85,14 @@ type PoolStatusChecker interface {
 	PoolStatus(ctx context.Context) (healthy bool, detail string, err error)
 }
 
+// BranchPromoter は既存ブランチの datadir を新しい baseline snapshot に昇格できる
+// バックエンド(`baseline promote`、#129)。branch でマイグレーション済みの状態を
+// そのまま次の baseline にする(git の branch→main 相当)。呼び出し側は事前に
+// branch の mysqld を graceful stop 済みであることを保証する。
+type BranchPromoter interface {
+	PromoteBranch(ctx context.Context, branch Volume, tag string) (SnapshotRef, error)
+}
+
 // LogicalSizer は volume の logical(referenced)サイズを報告できるバックエンド。
 // CoW では Logical(482GiB)と Private delta(18MiB)が大きく乖離する(仕様 14-4)。
 type LogicalSizer interface {

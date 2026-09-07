@@ -8,12 +8,65 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"sort"
 	"time"
 
 	"github.com/rikukaInoue/sashiki/internal/state"
 	"github.com/rikukaInoue/sashiki/internal/storage"
 )
+
+// PromoteBranch は既存ブランチの現在の datadir を新しい baseline に昇格する(#129)。
+// branch でマイグレーション済みの状態をそのまま次の baseline にできる(git の
+// branch→main 相当)。snapshot 不変条件のため branch mysqld を graceful stop して
+// から snapshot し、完了後に再起動する。既存の他ブランチの origin は変えない。
+func (m *Manager) PromoteBranch(ctx context.Context, name string) (string, error) {
+	unlock := m.lock(name)
+	defer unlock()
+	m.baselineMu.Lock()
+	defer m.baselineMu.Unlock()
+
+	pr, ok := m.st.(storage.BranchPromoter)
+	if !ok {
+		return "", fmt.Errorf("%w: このバックエンドは promote に未対応です", ErrPreconditionFailed)
+	}
+	b, err := m.db.GetBranch(name)
+	if err != nil {
+		return "", err
+	}
+	vol, err := m.resolveVolume(ctx, b)
+	if err != nil {
+		return "", err
+	}
+	ins := m.instance(b, vol)
+
+	// 不変条件: snapshot は必ず正常終了状態でのみ取得する。graceful stop する。
+	if err := m.eng.Stop(ctx, ins); err != nil {
+		return "", fmt.Errorf("promote: branch %s の停止に失敗: %w", name, err)
+	}
+	// server_uuid の重複を避けるため auto.cnf を削除してから snapshot(#80 と同趣旨)。
+	_ = os.Remove(filepath.Join(vol.Path, "data", "auto.cnf"))
+
+	tag := newBaselineTag()
+	snap, err := pr.PromoteBranch(ctx, vol, tag)
+	if err != nil {
+		_ = m.eng.Start(ctx, ins) // 失敗時は branch を戻す
+		return "", fmt.Errorf("promote snapshot: %w", err)
+	}
+	if err := m.db.RegisterBaseline(string(snap), state.BaselineProvenance{DataAsOf: tag, Validated: true}); err != nil {
+		return "", err
+	}
+	if err := m.db.SetCurrentBaseline(string(snap)); err != nil {
+		return "", err
+	}
+	// branch を使用可能な状態に戻す(best effort)。
+	if err := m.eng.Start(ctx, ins); err == nil {
+		_ = m.eng.WaitReady(ctx, ins)
+	}
+	log.Printf("baseline promote: %s → %s (current)", name, snap)
+	return string(snap), nil
+}
 
 // SetBaseline は current pointer を指定 snapshot へ切り替える(仕様 12-2)。
 // 直前の正常版へ即 rollback するのに使う。snapshot は登録済みである必要がある。

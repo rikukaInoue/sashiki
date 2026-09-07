@@ -124,6 +124,19 @@ func (b *Backend) SnapshotBase(ctx context.Context, tag string) (storage.Snapsho
 	return storage.SnapshotRef(snap), nil
 }
 
+// PromoteBranch は branch の datadir を新しい baseline snapshot として reflink
+// する(#129)。呼び出し側が branch mysqld を停止済みであることを前提とする。
+func (b *Backend) PromoteBranch(ctx context.Context, branch storage.Volume, tag string) (storage.SnapshotRef, error) {
+	snap := filepath.Join(b.cfg.Root, "base", "snap", tag)
+	if err := os.RemoveAll(snap); err != nil {
+		return "", err
+	}
+	if err := b.cloneTree(ctx, dataDir(branch.Path), snap); err != nil {
+		return "", err
+	}
+	return storage.SnapshotRef(snap), nil
+}
+
 // ListSnapshots は base/snap 配下のベースライン snapshot を列挙する。
 func (b *Backend) ListSnapshots(ctx context.Context) ([]storage.SnapshotRef, error) {
 	dir := filepath.Join(b.cfg.Root, "base", "snap")
