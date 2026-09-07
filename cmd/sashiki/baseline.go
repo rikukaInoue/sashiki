@@ -5,6 +5,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/rikukaInoue/sashiki/internal/config"
+	"github.com/rikukaInoue/sashiki/internal/localstore"
 	"github.com/rikukaInoue/sashiki/internal/state"
 )
 
@@ -192,7 +194,121 @@ func cmdBaselineImport(args []string) int {
 	return exitOK
 }
 
+// runLocalBaselineImport は apfs / reflink backend 用の baseline import。
+// zfs コマンドを使わず、<root>/base/data に mysqld で投入して正常終了し、
+// storage backend の SnapshotBase で <root>/base/snap/<baseline> を作る(#113/#140)。
+func runLocalBaselineImport(cfg config.Config, opts baselineImportOpts) error {
+	root := cfg.Storage.Local.Root
+	if root == "" {
+		return fmt.Errorf("storage.local.root が未設定です(apfs/reflink には必須)")
+	}
+	baselineTag := cfg.Storage.Local.BaselineSnapshot
+	if baselineTag == "" {
+		baselineTag = "baseline"
+	}
+	dataDir := filepath.Join(root, "base", "data")
+	snapPath := filepath.Join(root, "base", "snap", baselineTag)
+
+	if _, err := os.Stat(snapPath); err == nil {
+		return fmt.Errorf("baseline %s は既に存在します。取得し直しは baseline refresh で対応", snapPath)
+	}
+	if entries, err := os.ReadDir(dataDir); err == nil && len(entries) > 0 {
+		return fmt.Errorf("%s が空ではありません。初期化済みの base に import はできません", dataDir)
+	}
+
+	mysqlUID, mysqlGID, err := lookupMysqlUser()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
+		return err
+	}
+	if err := chownR(filepath.Join(root, "base"), mysqlUID, mysqlGID); err != nil {
+		return err
+	}
+
+	mysqldBin := cfg.Engine.Mysql.MysqldBin
+	if mysqldBin == "" {
+		mysqldBin = "/usr/sbin/mysqld"
+	}
+	sock := "/tmp/sashiki-baseline.sock"
+	logErr := filepath.Join(cfg.Storage.Local.Root, "baseline.err")
+
+	fmt.Println("→ mysqld 初期化")
+	if err := runAsUser(mysqlUID, mysqlGID, mysqldBin, "--initialize-insecure", "--datadir="+dataDir, "--log-error="+logErr); err != nil {
+		return fmt.Errorf("initialize: %w", err)
+	}
+	fmt.Println("→ mysqld 起動")
+	if err := runAsUser(mysqlUID, mysqlGID, mysqldBin, "--datadir="+dataDir, "--port=0", "--skip-networking",
+		"--socket="+sock, "--pid-file=/tmp/sashiki-baseline.pid", "--log-error="+logErr, "--daemonize"); err != nil {
+		return fmt.Errorf("start: %w", err)
+	}
+	stopped := false
+	defer func() {
+		if !stopped {
+			_ = exec.Command("mysqladmin", "-uroot", "-S", sock, "shutdown").Run()
+		}
+	}()
+	if err := waitSocket(sock, 60*time.Second); err != nil {
+		return err
+	}
+	if opts.from != "" {
+		fmt.Printf("→ ダンプ投入 (%s)\n", opts.from)
+		dump, err := os.Open(opts.from)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = dump.Close() }()
+		load := exec.Command("mysql", "-uroot", "-S", sock)
+		load.Stdin = dump
+		if out, err := load.CombinedOutput(); err != nil {
+			return fmt.Errorf("load dump: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+	}
+	fmt.Printf("→ 接続ユーザー %s 作成\n", cfg.Engine.Mysql.ProxyUser)
+	createUser := fmt.Sprintf(
+		"CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED WITH mysql_native_password BY '%s'; GRANT ALL PRIVILEGES ON *.* TO '%s'@'%%'; FLUSH PRIVILEGES;",
+		cfg.Engine.Mysql.ProxyUser, cfg.Engine.Mysql.ProxyPass, cfg.Engine.Mysql.ProxyUser)
+	if out, err := exec.Command("mysql", "-uroot", "-S", sock, "-e", createUser).CombinedOutput(); err != nil {
+		return fmt.Errorf("create user: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	fmt.Println("→ 正常終了")
+	if out, err := exec.Command("mysqladmin", "-uroot", "-S", sock, "shutdown").CombinedOutput(); err != nil {
+		return fmt.Errorf("shutdown: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	stopped = true
+	if err := waitGone("/tmp/sashiki-baseline.pid", 30*time.Second); err != nil {
+		return err
+	}
+	fmt.Println("→ auto.cnf 削除 (server_uuid 重複対策)")
+	if err := os.Remove(filepath.Join(dataDir, "auto.cnf")); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove auto.cnf: %w", err)
+	}
+
+	fmt.Printf("→ snapshot %s 取得\n", snapPath)
+	st, err := localstore.New(cfg.Storage.Backend, root, baselineTag)
+	if err != nil {
+		return err
+	}
+	snap, err := st.SnapshotBase(context.Background(), baselineTag)
+	if err != nil {
+		return fmt.Errorf("snapshot: %w", err)
+	}
+	if db, err := state.Open(cfg.StateDB); err == nil {
+		_ = db.RegisterBaseline(string(snap), state.BaselineProvenance{DataAsOf: baselineTag})
+		_ = db.SetCurrentBaseline(string(snap))
+		_ = db.Close()
+	}
+	fmt.Println("baseline import 完了。sashiki create <name> でブランチを作れます")
+	return nil
+}
+
 func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
+	// apfs / reflink はローカル CoW backend(zfs コマンドを使わない)。
+	if cfg.Storage.Backend == "apfs" || cfg.Storage.Backend == "reflink" {
+		return runLocalBaselineImport(cfg, opts)
+	}
+
 	base := cfg.Storage.Zfs.BaseDataset
 	snap := base + "@" + cfg.Storage.Zfs.BaselineSnapshot
 

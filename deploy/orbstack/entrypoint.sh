@@ -44,6 +44,7 @@ engine:
     mode: process
     mysqld_bin: /usr/sbin/mysqld
     run_user: mysql
+    sudo: false
     app_user: dev
     app_pass: dev
 branches:
