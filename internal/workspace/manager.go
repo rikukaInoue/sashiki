@@ -574,13 +574,23 @@ func (m *Manager) Delete(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	if err := m.db.SetState(name, state.StateDeleting, ""); err != nil {
-		return err
-	}
 	vol, err := m.resolveVolume(ctx, b)
 	if err != nil {
 		// 実体が見つからない(手動削除・不整合)場合は行だけ片付ける
 		return m.db.DeleteBranch(name)
+	}
+	// promote 済みブランチの保護(#179): このブランチの dataset 上に登録済み
+	// baseline snapshot が乗っている場合、delete(ebs-zfs は zfs destroy -r)が
+	// それを巻き込み、current baseline が存在しない snapshot を指して宙吊りになる。
+	// 破壊の前に拒否し、別 baseline への set/promote を促す。
+	if backing, err := m.baselinesOnDataset(vol.Dataset); err != nil {
+		return err
+	} else if len(backing) > 0 {
+		return fmt.Errorf("%w: branch %q は baseline %v の実体を保持しています。"+
+			"先に別の baseline を promote/set してから削除してください", ErrPreconditionFailed, name, backing)
+	}
+	if err := m.db.SetState(name, state.StateDeleting, ""); err != nil {
+		return err
 	}
 	ins := m.instance(b, vol)
 	_ = m.eng.Stop(ctx, ins) // 動いていなくてもよい
@@ -874,6 +884,25 @@ func (m *Manager) TouchConn(name string) {
 type BaselineInfo struct {
 	Current   string
 	Snapshots []string
+}
+
+// baselinesOnDataset は dataset 上に置かれた登録済み baseline snapshot を返す(#179)。
+// ebs-zfs では promote が branch dataset に snapshot を作るため、その branch を
+// zfs destroy -r すると baseline ごと消える。reflink/apfs は snapshot を base 配下の
+// 独立パスに置くので prefix が一致せず、このガードは自然に発火しない。
+func (m *Manager) baselinesOnDataset(dataset string) ([]string, error) {
+	bls, err := m.db.ListBaselines()
+	if err != nil {
+		return nil, err
+	}
+	prefix := dataset + "@"
+	var on []string
+	for _, bl := range bls {
+		if strings.HasPrefix(bl.Snapshot, prefix) {
+			on = append(on, bl.Snapshot)
+		}
+	}
+	return on, nil
 }
 
 // currentBaseline は DB の切り替え記録を優先し、無ければバックエンド既定を使う。

@@ -1467,6 +1467,38 @@ func TestPromoteBranch(t *testing.T) {
 	}
 }
 
+// promote 済みブランチの delete は拒否する(#179)。ebs-zfs では baseline
+// snapshot が branch dataset 上にあり、zfs destroy -r が巻き込んで current
+// baseline を宙吊りにするため。
+func TestDeleteRefusesBranchBackingBaseline(t *testing.T) {
+	ctx := context.Background()
+	eng := &mockEngine{}
+	st := &mockStorage{caps: storage.Capabilities{FastRollback: true}}
+	m := newTestManager(t, st, eng, "")
+	if _, err := m.Create(ctx, "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.PromoteBranch(ctx, "pr-1"); err != nil {
+		t.Fatal(err)
+	}
+	// pr-1 の dataset 上に baseline があるので delete は precondition で拒否。
+	err := m.Delete(ctx, "pr-1")
+	if !errors.Is(err, ErrPreconditionFailed) {
+		t.Fatalf("delete of promote-source branch should be refused, got %v", err)
+	}
+	// 拒否されても branch は残っている(状態を壊さない)。
+	if _, err := m.db.GetBranch("pr-1"); err != nil {
+		t.Errorf("branch should still exist after refused delete: %v", err)
+	}
+	// baseline を持たない別ブランチは普通に削除できる。
+	if _, err := m.Create(ctx, "pr-2", 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Delete(ctx, "pr-2"); err != nil {
+		t.Errorf("non-backing branch should delete cleanly: %v", err)
+	}
+}
+
 // promote が途中で失敗しても branch は使用可能な状態に戻す(#156)。以前は
 // snapshot 後の baseline 登録が失敗すると mysqld を停止したまま抜けていた。
 func TestPromoteBranchRestartsOnFailure(t *testing.T) {
