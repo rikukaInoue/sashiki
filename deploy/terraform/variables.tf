@@ -40,6 +40,12 @@ variable "allocated_storage" {
   default     = 100
 }
 
+variable "root_volume_size" {
+  description = "root EBS のサイズ(GiB)。AMI 既定 8GB では apt/ダンプ作業で溢れるため既定 30(#162)。ブランチデータは別の data EBS)"
+  type        = number
+  default     = 30
+}
+
 variable "engine_version" {
   description = "MySQL のメジャーバージョン(user-data のパッケージ選択に使う)"
   type        = string
