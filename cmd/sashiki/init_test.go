@@ -29,9 +29,14 @@ func TestRenderConfigIsLoadable(t *testing.T) {
 	if cfg.Storage.Zfs.BaseDataset != "mypool/base" {
 		t.Errorf("base_dataset = %q", cfg.Storage.Zfs.BaseDataset)
 	}
-	// init が生成する構成は sudo なし(sashikid を root 相当で動かす想定)
-	if cfg.Storage.Zfs.Sudo || cfg.Engine.Mysql.Sudo {
-		t.Error("generated config should have sudo: false")
+	// systemd デプロイは sashikid を User=sashiki で動かし、zfs/systemctl を
+	// sudoers 経由で叩くため sudo: true(#176)。
+	if !cfg.Storage.Zfs.Sudo || !cfg.Engine.Mysql.Sudo {
+		t.Error("generated config should have sudo: true (systemd/User=sashiki path)")
+	}
+	// per-branch env は /run/sashiki(RuntimeDirectory、#177)。/etc は root 所有。
+	if cfg.Engine.Mysql.EnvDir != "/run/sashiki" {
+		t.Errorf("env_dir = %q, want /run/sashiki", cfg.Engine.Mysql.EnvDir)
 	}
 }
 
@@ -39,7 +44,7 @@ func TestRenderConfigIsLoadable(t *testing.T) {
 func TestEmbeddedUnitFile(t *testing.T) {
 	s := string(mysqldUnit)
 	for _, want := range []string{
-		"EnvironmentFile=/etc/sashiki/%i.env",
+		"EnvironmentFile=/run/sashiki/%i.env",
 		"--datadir=${DATADIR}",
 		"--port=${PORT}",
 		"User=mysql",

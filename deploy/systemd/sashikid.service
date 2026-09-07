@@ -5,6 +5,10 @@ After=network.target zfs-mount.service
 [Service]
 User=sashiki
 Group=sashiki
+# /run/sashiki を sashiki 所有で用意する(config の run_dir と per-branch <branch>.env
+# の置き場。/etc は root 所有で書けないため #177)。0755 で mysqld@(User=mysql)も読める。
+RuntimeDirectory=sashiki
+RuntimeDirectoryMode=0755
 EnvironmentFile=-/etc/sashiki/sashikid.env
 ExecStart=/usr/local/bin/sashikid --config /etc/sashiki/config.yaml
 Restart=on-failure

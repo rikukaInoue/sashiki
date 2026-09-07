@@ -13,6 +13,10 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 - `baseline promote` が snapshot 後の baseline 登録に失敗すると、対象ブランチの mysqld を停止したまま抜けていた。成否に関わらず再起動するよう修正。
 - `baseline import` が `mysql` / `mysqladmin` を PATH から引いており、`mysqld_bin` が PATH 外(Homebrew 等)だと失敗し得た。mysqld と同じディレクトリから解決するよう統一。
 - `baseline import` 成功後の baseline 台帳登録エラーを握りつぶしていた(`baseline list` / GC から漏れる)。失敗時に警告を出すよう修正。
+- systemd デプロイ整合性(authense 実戦 #134): `sashiki init` が生成する config を `sudo: true` に修正(sashikid は `User=sashiki` で動き zfs/systemctl を sudoers 経由で叩くため。`sudo: false` だとブランチ作成が permission denied で全滅していた、#176)。
+- per-branch の `<branch>.env` を `/etc/sashiki`(root 所有で書けない)から `/run/sashiki` に移動。`sashikid.service` に `RuntimeDirectory=sashiki` を追加し、mysqld@/postgres-sashiki@ の `EnvironmentFile` も追随(#177)。
+- sudoers に `baseline promote` の snapshot(`branches/*@baseline-*`)と、promote 済み baseline からの clone を追加(promote 後の運用が sudo で止まらないように、#178)。
+- promote 元ブランチの `delete` が baseline snapshot ごと破棄し current baseline を宙吊りにしていたのを、dataset 上に baseline がある間は delete を拒否するよう修正(#179)。
 
 ## v0.2.0 — public preview (2026-09-07)
 

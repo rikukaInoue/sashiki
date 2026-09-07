@@ -36,11 +36,15 @@ func sudoersContent(pool string) string {
 		"# sashiki: 限定的な root 操作のみ許可(sashiki init が生成。root-helper 化は v0.3 #78)",
 		"# 実呼び出し形は internal/storage/ebszfs/zfs.go / internal/engine/{mysql,postgres} を参照。",
 		"# 注意: sudoers の * は空白をまたぐため、末尾パターンによる制限は完全ではない。",
-		// clone: baseline snapshot → branches 配下のみ(引数 2 個の固定形)
+		// clone: baseline snapshot → branches 配下のみ(引数 2 個の固定形)。
+		// base@* に加え、promote 済み baseline(branch dataset 上の @baseline-*)からの
+		// clone も許可する(promote 後に新規ブランチを作れるように、#178)。
 		fmt.Sprintf("sashiki ALL=(root) NOPASSWD: /usr/sbin/zfs clone %s@* %s/*", base, br),
-		// snapshot: branch の @init と base の新ベースライン取得のみ
+		fmt.Sprintf("sashiki ALL=(root) NOPASSWD: /usr/sbin/zfs clone %s/*@baseline-* %s/*", br, br),
+		// snapshot: branch の @init、base の新ベースライン、promote(branch@baseline-*)。
 		fmt.Sprintf("sashiki ALL=(root) NOPASSWD: /usr/sbin/zfs snapshot %s/*@init", br),
 		fmt.Sprintf("sashiki ALL=(root) NOPASSWD: /usr/sbin/zfs snapshot %s@*", base),
+		fmt.Sprintf("sashiki ALL=(root) NOPASSWD: /usr/sbin/zfs snapshot %s/*@baseline-*", br),
 		// rollback: branch の @init への巻き戻しのみ
 		fmt.Sprintf("sashiki ALL=(root) NOPASSWD: /usr/sbin/zfs rollback -r %s/*@init", br),
 		// destroy: branch の再帰破棄と base snapshot のみ。base snapshot 側は
