@@ -7,7 +7,7 @@ builds:
     main: ./cmd/sashiki
     binary: sashiki
     env: [CGO_ENABLED=0]
-    goos: [linux]
+    goos: [linux, darwin]
     goarch: [amd64, arm64]
     ldflags:
       - -s -w -X main.version={{.Version}}+{{.ShortCommit}}
@@ -15,7 +15,7 @@ builds:
     main: ./cmd/sashikid
     binary: sashikid
     env: [CGO_ENABLED=0]
-    goos: [linux]
+    goos: [linux, darwin]
     goarch: [amd64, arm64]
     ldflags:
       - -s -w -X main.version={{.Version}}+{{.ShortCommit}}
