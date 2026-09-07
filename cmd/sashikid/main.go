@@ -172,6 +172,8 @@ func main() {
 		PortLow:                  cfg.PortRange()[0],
 		PortHigh:                 cfg.PortRange()[1],
 		EngineType:               cfg.Engine.Type,
+		MysqldBin:                cfg.Engine.Mysql.MysqldBin,
+		MysqlExtraCnf:            cfg.Engine.Mysql.ExtraCnf,
 		StateDir:                 "/var/lib/sashiki/branches",
 		LazyCreate:               cfg.Branches.LazyCreate,
 		LazyMaxWait:              cfg.Branches.LazyCreateMaxWait,

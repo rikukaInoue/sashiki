@@ -142,3 +142,27 @@ func TestApplyDirRejectsBadNames(t *testing.T) {
 		t.Fatal("invalid file name should be rejected")
 	}
 }
+
+// #127: Server が mysqld/defaults/client を config から解決する。
+func TestServerMysqldResolution(t *testing.T) {
+	// 既定(未指定)
+	s := Server{}
+	if s.mysqld() != "/usr/sbin/mysqld" {
+		t.Errorf("mysqld() default = %q", s.mysqld())
+	}
+	if s.defaultsArgs() != nil {
+		t.Errorf("defaultsArgs() default should be nil, got %v", s.defaultsArgs())
+	}
+	if s.client("mysql") != "mysql" {
+		t.Errorf("client default should be PATH name, got %q", s.client("mysql"))
+	}
+	// 明示指定
+	s2 := Server{MysqldBin: "/opt/homebrew/opt/mysql@8.0/bin/mysqld", ExtraCnf: "/etc/server.cnf"}
+	if s2.mysqld() != "/opt/homebrew/opt/mysql@8.0/bin/mysqld" {
+		t.Errorf("mysqld() = %q", s2.mysqld())
+	}
+	da := s2.defaultsArgs()
+	if len(da) != 1 || da[0] != "--defaults-file=/etc/server.cnf" {
+		t.Errorf("defaultsArgs() = %v, want [--defaults-file=/etc/server.cnf]", da)
+	}
+}

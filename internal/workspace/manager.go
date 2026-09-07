@@ -62,7 +62,11 @@ type Config struct {
 	PortLow     int
 	PortHigh    int
 	EngineType  string
-	StateDir    string // hook 用の作業ディレクトリの親(/var/lib/sashiki/branches)
+	// MysqldBin / MysqlExtraCnf は baseline refresh の一時 mysqld に使う(#127)。
+	// 空なら /usr/sbin/mysqld / 既定 my.cnf。
+	MysqldBin     string
+	MysqlExtraCnf string
+	StateDir      string // hook 用の作業ディレクトリの親(/var/lib/sashiki/branches)
 
 	// LazyCreate: プロキシに未知のブランチ名で接続が来たとき自動作成する。
 	// バックエンドの TypicalCreate が LazyMaxWait を超える場合は無効(仕様 15-3)。
