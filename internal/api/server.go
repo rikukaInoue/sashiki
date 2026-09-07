@@ -310,16 +310,27 @@ func (s *Server) handleCapacity(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, err)
 		return
 	}
+	// pool 容量を取得できないバックエンド(apfs / reflink)は 0 でなく -1(不明)を
+	// 返し、表示側で「-」を出す(#128、誤った 0 を見せない)。
+	poolUsed, poolTotal, poolRatio := c.PoolUsedBytes, c.PoolTotalBytes, c.PoolUsedRatio
+	if !c.StorageIntrospectable {
+		poolUsed, poolTotal, poolRatio = -1, -1, -1
+	}
+	memAvail := c.MemAvailableBytes
+	if memAvail <= 0 {
+		memAvail = -1
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"storage": map[string]any{
-			"pool_used_bytes":    c.PoolUsedBytes,
-			"pool_total_bytes":   c.PoolTotalBytes,
-			"pool_used_ratio":    c.PoolUsedRatio,
+			"introspectable":     c.StorageIntrospectable,
+			"pool_used_bytes":    poolUsed,
+			"pool_total_bytes":   poolTotal,
+			"pool_used_ratio":    poolRatio,
 			"high_watermark":     c.HighWatermark,
 			"critical_watermark": c.CritWatermark,
 		},
 		"ports":    map[string]any{"used": c.PortsUsed, "total": c.PortsTotal},
-		"memory":   map[string]any{"available_bytes": c.MemAvailableBytes, "expected_rss_bytes": c.ExpectedRSSBytes},
+		"memory":   map[string]any{"available_bytes": memAvail, "expected_rss_bytes": c.ExpectedRSSBytes},
 		"branches": map[string]any{"running": c.Running, "max_running": c.MaxRunning, "max_branches": c.MaxBranches},
 	})
 }

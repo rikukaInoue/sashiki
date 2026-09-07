@@ -921,13 +921,15 @@ func (m *Manager) info(ctx context.Context, name string) (Info, error) {
 	if err != nil {
 		return Info{}, err
 	}
-	info := Info{Branch: b}
+	// 既定は -1(不明)。取得できたバックエンドだけ実値を入れる。CoW 差分を
+	// 素直に取れない apfs / reflink 等は -1 のままにして表示側で「-」を出す(#128)。
+	info := Info{Branch: b, UsedBytes: -1, LogicalBytes: -1}
 	if vol, err := m.resolveVolume(ctx, b); err == nil {
-		if used, err := m.st.UsedBytes(ctx, vol); err == nil {
+		if used, err := m.st.UsedBytes(ctx, vol); err == nil && used >= 0 {
 			info.UsedBytes = used
 		}
 		if ls, ok := m.st.(storage.LogicalSizer); ok {
-			if logical, err := ls.LogicalBytes(ctx, vol); err == nil {
+			if logical, err := ls.LogicalBytes(ctx, vol); err == nil && logical >= 0 {
 				info.LogicalBytes = logical
 			}
 		}

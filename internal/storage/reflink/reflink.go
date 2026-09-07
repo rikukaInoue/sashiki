@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -144,22 +143,11 @@ func (b *Backend) ListSnapshots(ctx context.Context) ([]storage.SnapshotRef, err
 	return refs, nil
 }
 
-// UsedBytes は datadir の実消費(概算)。reflink の CoW 分岐分のみの正確な報告は
-// 難しいため du の論理サイズで代用する(共有エクステントを重複計上しうる)。
+// UsedBytes は branch の CoW 差分。reflink の共有エクステント差分だけを素直に
+// 取得する手段が無く、du は全量を返して誤解を招くため -1(不明)を返す。表示側は
+// 「-」を出す(#128)。
 func (b *Backend) UsedBytes(ctx context.Context, vol storage.Volume) (int64, error) {
-	out, err := exec.CommandContext(ctx, "du", "-sk", dataDir(vol.Path)).CombinedOutput()
-	if err != nil {
-		return 0, fmt.Errorf("du: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	fields := strings.Fields(string(out))
-	if len(fields) == 0 {
-		return 0, fmt.Errorf("unexpected du output: %q", string(out))
-	}
-	kb, err := strconv.ParseInt(fields[0], 10, 64)
-	if err != nil {
-		return 0, err
-	}
-	return kb * 1024, nil
+	return -1, nil
 }
 
 // Rename は recreate の退避に使う(storage.Renamer)。

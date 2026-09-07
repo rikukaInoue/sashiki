@@ -1,0 +1,4 @@
+CREATE DATABASE IF NOT EXISTS app;
+USE app;
+CREATE TABLE IF NOT EXISTS items (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(64));
+INSERT INTO items (name) VALUES ('alpha'), ('beta'), ('gamma');

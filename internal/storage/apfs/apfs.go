@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -145,22 +144,12 @@ func (b *Backend) ListSnapshots(ctx context.Context) ([]storage.SnapshotRef, err
 	return refs, nil
 }
 
-// UsedBytes は datadir の実消費(概算)。APFS は CoW 分岐分のみの正確な報告が
-// 難しいため du の論理サイズで代用する(共有ブロックを重複計上しうる)。
+// UsedBytes は branch の CoW 差分(clone してから増えた分)。APFS は clone の
+// 差分ブロックだけを素直に取得する API が無く、du は共有ブロックも重複計上して
+// 全量(例 18.7G)を返してしまい誤解を招く。正確に取れないので -1(不明)を返し、
+// 表示側は「-」を出す(#128)。
 func (b *Backend) UsedBytes(ctx context.Context, vol storage.Volume) (int64, error) {
-	out, err := exec.CommandContext(ctx, "du", "-sk", dataDir(vol.Path)).CombinedOutput()
-	if err != nil {
-		return 0, fmt.Errorf("du: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	fields := strings.Fields(string(out))
-	if len(fields) == 0 {
-		return 0, fmt.Errorf("unexpected du output: %q", string(out))
-	}
-	kb, err := strconv.ParseInt(fields[0], 10, 64)
-	if err != nil {
-		return 0, err
-	}
-	return kb * 1024, nil
+	return -1, nil
 }
 
 // Rename は ClonesAreDistinct=false の recreate 退避に使う(storage.Renamer)。
