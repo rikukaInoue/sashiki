@@ -136,7 +136,7 @@ func cmdBaselineStage(args []string, stage string) int {
 
 func usageBaseline() int {
 	fmt.Fprint(os.Stderr, `Usage:
-  sashiki baseline import --from <dump.sql> [--db <name>] [--config <path>]   ベース構築 + @baseline 取得 (root)
+  sashiki baseline import --from <dump.sql> [--db <name>] [--import-cnf <my.cnf>] [--config <path>]   ベース構築 + @baseline 取得 (zfs は root)
   sashiki baseline list [--json]                                snapshot 一覧 (sashikid 経由)
   sashiki baseline refresh                                      refresh_script / source_dir で更新
   sashiki baseline promote <branch>                             migrate 済み branch を新 baseline に昇格 (#129)
@@ -151,6 +151,7 @@ type baselineImportOpts struct {
 	from       string
 	configPath string
 	db         string // 投入先 DB(#170)。USE を含まない単体 DB ダンプ向け
+	importCnf  string // import 中だけ使う my.cnf(buffer pool 等を緩める、#194)
 }
 
 func cmdBaselineImport(args []string) int {
@@ -175,6 +176,12 @@ func cmdBaselineImport(args []string) int {
 				return usageBaseline()
 			}
 			opts.db = args[i]
+		case "--import-cnf":
+			i++
+			if i >= len(args) {
+				return usageBaseline()
+			}
+			opts.importCnf = args[i]
 		default:
 			return usageBaseline()
 		}
@@ -182,6 +189,12 @@ func cmdBaselineImport(args []string) int {
 	if opts.from != "" {
 		if _, err := os.Stat(opts.from); err != nil {
 			fmt.Fprintf(os.Stderr, "sashiki baseline import: --from %s: %v\n", opts.from, err)
+			return exitError
+		}
+	}
+	if opts.importCnf != "" {
+		if _, err := os.Stat(opts.importCnf); err != nil {
+			fmt.Fprintf(os.Stderr, "sashiki baseline import: --import-cnf %s: %v\n", opts.importCnf, err)
 			return exitError
 		}
 	}
@@ -224,7 +237,14 @@ func loadDump(mysqlBin, sock, from, db string) error {
 		return err
 	}
 	defer func() { _ = dump.Close() }()
-	args := []string{"-uroot", "-S", sock}
+	// バルク投入の高速化(#194): unique / FK チェックと binlog 書き込みをこの投入
+	// セッションだけ無効化する。baseline は使い捨てブランチの元なので整合性は
+	// ダンプ自体が保証しており、投入時の再チェックは不要。--init-command は
+	// stdin を読む前に 1 度だけ実行される。
+	args := []string{
+		"-uroot", "-S", sock,
+		"--init-command=SET unique_checks=0, foreign_key_checks=0, sql_log_bin=0",
+	}
 	if db != "" {
 		args = append(args, db) // 既定 DB を選択(USE 無しダンプがこの DB に入る)
 	}
@@ -284,6 +304,10 @@ func runLocalBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 		}
 	}
 	runMysqld := func(args ...string) error {
+		// import 専用 cnf があれば先頭に置く(buffer pool 等を投入中だけ緩める、#194)。
+		if opts.importCnf != "" {
+			args = append([]string{"--defaults-file=" + opts.importCnf}, args...)
+		}
 		if asRoot {
 			return runAsUser(mysqlUID, mysqlGID, mysqldBinOr(cfg), args...)
 		}
@@ -403,8 +427,15 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	if mysqldBin == "" {
 		mysqldBin = "/usr/sbin/mysqld"
 	}
+	// import 中の mysqld が読む defaults。--import-cnf(#194)があれば投入中だけ
+	// それを使い(buffer pool 等を緩める)、無ければ従来どおり extra_cnf(#127、
+	// 投入時の sql_mode / strict を実行時と揃える)。両者は排他(mysqld の
+	// --defaults-file は 1 つだけ。import-cnf 側に必要な設定を含める前提)。
 	var defaults []string
-	if cfg.Engine.Mysql.ExtraCnf != "" {
+	switch {
+	case opts.importCnf != "":
+		defaults = []string{"--defaults-file=" + opts.importCnf}
+	case cfg.Engine.Mysql.ExtraCnf != "":
 		defaults = []string{"--defaults-file=" + cfg.Engine.Mysql.ExtraCnf}
 	}
 	// client は mysqld の隣から解決する(PATH 側の別メジャーを引かない、#149)。
