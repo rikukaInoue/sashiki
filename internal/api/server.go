@@ -40,7 +40,13 @@ type Server struct {
 	openDB func(ctx context.Context, name string) (*sql.DB, error) // テストで差し替え可
 	ops    *ops.Runner                                             // nil 可(operation 記録なし)
 	mux    *http.ServeMux
+	// trustLoopback が true(既定)なら loopback を無認証で通す。false なら
+	// loopback でも Bearer トークン必須(リバプロ公開時の素通し防止、#198)。
+	trustLoopback bool
 }
+
+// SetTrustLoopback は loopback 無認証の可否を設定する(sashikid 起動時)。
+func (s *Server) SetTrustLoopback(v bool) { s.trustLoopback = v }
 
 // SetOps は operation Runner を配線する(sashikid 起動時)。
 func (s *Server) SetOps(r *ops.Runner) {
@@ -82,7 +88,7 @@ func (s *Server) accepted(w http.ResponseWriter, typ, target string, fn func(con
 
 // New は Server を作る。tokens は nil 可(env トークンのみ)。
 func New(mgr *workspace.Manager, domain, engineType, proxyUser, proxyPass, token string, tokens TokenChecker) *Server {
-	s := &Server{mgr: mgr, domain: domain, engine: engineType, user: proxyUser, pass: proxyPass, token: token, tokens: tokens, mux: http.NewServeMux()}
+	s := &Server{mgr: mgr, domain: domain, engine: engineType, user: proxyUser, pass: proxyPass, token: token, tokens: tokens, mux: http.NewServeMux(), trustLoopback: true}
 	s.openDB = s.branchDB
 	s.mux.HandleFunc("GET /v1/branches", s.handleList)
 	s.mux.HandleFunc("POST /v1/branches", s.handleCreate)
@@ -128,10 +134,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // authorized: localhost からは無認証、それ以外は Bearer トークン(仕様 13-3)。
 func (s *Server) authorized(r *http.Request) bool {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil {
-		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-			return true
+	if s.trustLoopback {
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err == nil {
+			if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+				return true
+			}
 		}
 	}
 	got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")

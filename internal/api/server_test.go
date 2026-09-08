@@ -203,11 +203,23 @@ func TestAPIAuthFromNonLoopback(t *testing.T) {
 	if !s.authorized(req) {
 		t.Error("correct token should be allowed")
 	}
-	// loopback は無認証
+	// loopback は無認証(既定 trust_loopback=true)
 	req2 := httptest.NewRequest(http.MethodGet, "/v1/branches", nil)
 	req2.RemoteAddr = "127.0.0.1:9999"
 	if !s.authorized(req2) {
 		t.Error("loopback should be allowed without token")
+	}
+
+	// #198: trust_loopback=false なら loopback でもトークン必須
+	s.SetTrustLoopback(false)
+	req3 := httptest.NewRequest(http.MethodGet, "/v1/branches", nil)
+	req3.RemoteAddr = "127.0.0.1:9999"
+	if s.authorized(req3) {
+		t.Error("trust_loopback=false: loopback without token should be denied")
+	}
+	req3.Header.Set("Authorization", "Bearer secret")
+	if !s.authorized(req3) {
+		t.Error("trust_loopback=false: loopback with correct token should be allowed")
 	}
 }
 
