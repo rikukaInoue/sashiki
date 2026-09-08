@@ -102,13 +102,12 @@ variable "github_token" {
 }
 
 variable "sashiki_ref" {
-  # ★重要: この ref は「install.sh の取得元(=バイナリ版)」と「SASHIKI_RELEASE の
-  # 直リンク」の両方に使う。上げ忘れると旧版の install.sh/バイナリが走り、新しい版の
-  # 修正が効かない(#193)。再現性のため "latest" ではなく **バージョンタグ**(例
-  # "v0.4.2")で固定し、モジュール(source の ?ref=)と同じ値にすること。
-  description = "sashiki のリリースタグ。バイナリとモジュールを同じ ref で固定する(例 \"v0.4.2\"。\"latest\" は再現性が無いため非推奨)"
+  # 空(既定)なら module 同梱の deploy/terraform/VERSION(= その module ref の
+  # タグ)を使う(#199)。つまり利用側は source の ?ref=vX.Y.Z を固定するだけでよく、
+  # バイナリ版はモジュールと自動一致する。明示的に別タグを入れたいときだけ設定する。
+  description = "sashiki のリリースタグ。空ならモジュール同梱の VERSION を使う(= source の ?ref= と自動一致、#199)。上書きするなら module の ?ref= と同じ値にすること(#193)"
   type        = string
-  default     = "latest"
+  default     = ""
 }
 
 variable "tags" {
