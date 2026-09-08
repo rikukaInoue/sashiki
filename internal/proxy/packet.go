@@ -6,6 +6,7 @@ package proxy
 import (
 	"crypto/rand"
 	"crypto/sha1"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/binary"
 	"fmt"
@@ -106,7 +107,10 @@ func buildInitialHandshake(connID uint32, sslAvailable bool) ([]byte, []byte, er
 	b = append(b, make([]byte, 10)...)              // reserved
 	b = append(b, salt[8:20]...)                    // auth-plugin-data part2
 	b = append(b, 0)
-	b = append(b, []byte(nativePlugin)...)
+	// caching_sha2_password を広告する(#197)。MySQL 8.0 既定 / 9.x(native 廃止)の
+	// クライアントに対応。native しか話せない旧クライアントには authResp の長さで
+	// フォールバックする(authTerminate 参照)。
+	b = append(b, []byte(sha2Plugin)...)
 	b = append(b, 0)
 	return b, salt, nil
 }
@@ -137,6 +141,34 @@ func nativeToken(password string, salt []byte) []byte {
 // 一致するかを定時間比較で検証する(方式A: 認証終端)。
 func verifyNativePassword(password string, salt, token []byte) bool {
 	return subtle.ConstantTimeCompare(nativeToken(password, salt), token) == 1
+}
+
+// cachingSha2Token は caching_sha2_password のクライアント応答スクランブルを計算する。
+//
+//	token = SHA256(pass) XOR SHA256( SHA256(SHA256(pass)) || nonce )
+//
+// nonce は 20byte の auth-plugin-data(salt)。空パスワードは空トークン。MySQL 8.0
+// 既定 / 9.x(native 廃止)のクライアントはこれを使う(#197)。
+func cachingSha2Token(password string, nonce []byte) []byte {
+	if password == "" {
+		return nil
+	}
+	h1 := sha256.Sum256([]byte(password))
+	h2 := sha256.Sum256(h1[:])
+	h := sha256.New()
+	h.Write(h2[:])
+	h.Write(nonce)
+	scr := h.Sum(nil)
+	out := make([]byte, len(h1))
+	for i := range h1 {
+		out[i] = h1[i] ^ scr[i]
+	}
+	return out
+}
+
+// verifyCachingSha2Password は nonce に対するクライアント応答 token を定時間比較する。
+func verifyCachingSha2Password(password string, nonce, token []byte) bool {
+	return subtle.ConstantTimeCompare(cachingSha2Token(password, nonce), token) == 1
 }
 
 // isSSLRequest は HandshakeResponse が SSLRequest(TLS へ切り替える短いパケット)
