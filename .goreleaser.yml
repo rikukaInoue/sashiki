@@ -47,14 +47,13 @@ nfpms:
 checksum:
   name_template: checksums.txt
 
+# リリースノートは release-please が CHANGELOG から作る。goreleaser 側では
+# changelog を生成しない。
 changelog:
-  use: github
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
+  disable: true
 
 release:
+  # release-please が先に作った Release にバイナリを足すだけ(本文は保持)。
+  mode: append
   draft: false
   prerelease: auto

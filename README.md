@@ -1,8 +1,8 @@
 # sashiki
 
-![status](https://img.shields.io/badge/status-v0.5%20(public%20preview)-orange) ![license](https://img.shields.io/badge/license-Apache--2.0-blue)
+![release](https://img.shields.io/github/v/release/rikukaInoue/sashiki?sort=semver) ![status](https://img.shields.io/badge/status-public%20preview-orange) ![license](https://img.shields.io/badge/license-Apache--2.0-blue)
 
-> **成熟度**: v0.5(public preview)。MySQL + GitHub PR プレビューの経路は実機で検証済み。
+> **成熟度**: public preview。MySQL + GitHub PR プレビューの経路は実機で検証済み。
 > API / config は**まだ固定していない**(マイナー版で破壊的変更があり得る)。本番 DB には使わない。
 
 **開発環境向けの、ブランチできる RDS。**
@@ -216,7 +216,7 @@ PR open/reopen で create、close で delete。接続情報を出力するので
 
 ```hcl
 module "db" {
-  source = "github.com/rikukaInoue/sashiki//deploy/terraform?ref=v0.5.0"
+  source = "github.com/rikukaInoue/sashiki//deploy/terraform?ref=v0.5.0" # x-release-please-version
 
   name           = "myapp-preview"
   vpc_id         = var.vpc_id
@@ -296,7 +296,7 @@ sashiki は「汎用エンジン + MySQL/PR の完成した adapter」。コア�
 
 「設定 3 行で完成」ではなく「1 日で組めるフレームワーク」と考えてほしい。
 
-## 対応状況(v0.5)
+## 対応状況
 
 | | 状態 |
 |---|---|
