@@ -446,7 +446,7 @@ func runLocalBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	}
 	fmt.Printf("→ 接続ユーザー %s 作成\n", cfg.Engine.Mysql.ProxyUser)
 	createUser := fmt.Sprintf(
-		"CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED WITH mysql_native_password BY '%s'; GRANT ALL PRIVILEGES ON *.* TO '%s'@'%%'; FLUSH PRIVILEGES;",
+		"CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED WITH caching_sha2_password BY '%s'; GRANT ALL PRIVILEGES ON *.* TO '%s'@'%%'; FLUSH PRIVILEGES;",
 		cfg.Engine.Mysql.ProxyUser, cfg.Engine.Mysql.ProxyPass, cfg.Engine.Mysql.ProxyUser)
 	if out, err := exec.Command(mysqlBin, "-uroot", "-S", sock, "-e", createUser).CombinedOutput(); err != nil {
 		return fmt.Errorf("create user: %w: %s", err, strings.TrimSpace(string(out)))
@@ -567,10 +567,11 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	}
 
 	fmt.Printf("→ 接続ユーザー %s 作成\n", cfg.Engine.Mysql.ProxyUser)
-	// mysql_native_password で作る: プロキシの AuthSwitch 中継を決定的にするため
-	// (caching_sha2 の full-auth は RSA 鍵交換が挟まり中継が複雑化する)。ADR-006。
+	// caching_sha2_password で作る(MySQL 8.0/8.4/9.x 共通。8.4 は native 既定 OFF、
+	// 9.x は native 廃止なので native では作れない)。proxy は client 認証を自前検証し、
+	// backend へは caching_sha2 で接続し直す(平文 TCP は RSA full-auth)。
 	createUser := fmt.Sprintf(
-		"CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED WITH mysql_native_password BY '%s'; GRANT ALL PRIVILEGES ON *.* TO '%s'@'%%'; FLUSH PRIVILEGES;",
+		"CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED WITH caching_sha2_password BY '%s'; GRANT ALL PRIVILEGES ON *.* TO '%s'@'%%'; FLUSH PRIVILEGES;",
 		cfg.Engine.Mysql.ProxyUser, cfg.Engine.Mysql.ProxyPass, cfg.Engine.Mysql.ProxyUser)
 	userCmd := exec.Command(mysqlBin, "-uroot", "-S", sock, "-e", createUser)
 	if out, err := userCmd.CombinedOutput(); err != nil {

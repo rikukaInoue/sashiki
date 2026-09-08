@@ -17,11 +17,15 @@ fail() { echo "DARWIN E2E FAILED: $*" >&2; [ -n "${ROOT:-}" ] && tail -30 "$ROOT
 
 # --- mysqld / client の解決(Homebrew mysql@8.0 優先) ---
 BREW_PREFIX="$(brew --prefix mysql@8.0 2>/dev/null || true)"
-MYSQLD=""
-for c in "$BREW_PREFIX/bin/mysqld" /opt/homebrew/opt/mysql@8.0/bin/mysqld /usr/local/opt/mysql@8.0/bin/mysqld; do
-  [ -x "$c" ] && MYSQLD="$c" && break
-done
-[ -n "$MYSQLD" ] || fail "mysqld が見つかりません。brew install mysql@8.0 を実行してください"
+# SASHIKI_MYSQLD で版を明示できる(クロス版チェック用: 8.0 / 8.4 / 9.x など)。
+# app_user は caching_sha2_password で作るのでどの版でも通るはず(#version-compat)。
+MYSQLD="${SASHIKI_MYSQLD:-}"
+if [ -z "$MYSQLD" ]; then
+  for c in "$BREW_PREFIX/bin/mysqld" /opt/homebrew/opt/mysql@8.0/bin/mysqld /opt/homebrew/opt/mysql@8.4/bin/mysqld /usr/local/opt/mysql@8.0/bin/mysqld; do
+    [ -x "$c" ] && MYSQLD="$c" && break
+  done
+fi
+[ -x "$MYSQLD" ] || fail "mysqld が見つかりません(SASHIKI_MYSQLD で指定 or brew install mysql@8.0)"
 MYSQL="$(dirname "$MYSQLD")/mysql"
 log "mysqld: $MYSQLD"
 
