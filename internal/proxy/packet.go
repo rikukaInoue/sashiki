@@ -6,6 +6,7 @@ package proxy
 import (
 	"crypto/rand"
 	"crypto/sha1"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/binary"
 	"fmt"
@@ -106,7 +107,10 @@ func buildInitialHandshake(connID uint32, sslAvailable bool) ([]byte, []byte, er
 	b = append(b, make([]byte, 10)...)              // reserved
 	b = append(b, salt[8:20]...)                    // auth-plugin-data part2
 	b = append(b, 0)
-	b = append(b, []byte(nativePlugin)...)
+	// caching_sha2_password を広告する(MySQL 8.0 既定 / 9.x は native 廃止、#197)。
+	// 方式A では sashiki が app パスワードを持つので fast-auth スクランブルを自前で
+	// 検証でき、TLS/RSA なしで通せる。native クライアントは AuthSwitch でフォールバック。
+	b = append(b, []byte(sha2Plugin)...)
 	b = append(b, 0)
 	return b, salt, nil
 }
@@ -165,9 +169,10 @@ type handshakeResponse struct {
 	caps     uint32
 	maxLen   uint32
 	charset  byte
-	username string
-	database string
-	authResp []byte // 方式A(#51): salt に対するクライアント認証トークン
+	username   string
+	database   string
+	authResp   []byte // 方式A(#51): salt に対するクライアント認証トークン
+	authPlugin string // クライアントが使った認証プラグイン(caching_sha2 / native、#197)
 }
 
 func parseHandshakeResponse(body []byte) (handshakeResponse, error) {
@@ -233,8 +238,64 @@ func parseHandshakeResponse(body []byte) (handshakeResponse, error) {
 			end++
 		}
 		r.database = string(body[pos:end])
+		pos = end + 1
+	}
+	// auth plugin name (CLIENT_PLUGIN_AUTH)。どの方式で認証したかの判定に使う(#197)。
+	if r.caps&capPluginAuth != 0 && pos < len(body) {
+		end = pos
+		for end < len(body) && body[end] != 0 {
+			end++
+		}
+		r.authPlugin = string(body[pos:end])
 	}
 	return r, nil
+}
+
+// sha2Token は caching_sha2_password の fast-auth スクランブルを計算する:
+//
+//	XOR( SHA256(pw), SHA256( SHA256(SHA256(pw)) || nonce ) )
+//
+// 空パスワードは空トークン。方式A(#197): sashiki は app パスワードを持つので
+// クライアントと同じ計算をして定時間比較できる(TLS/RSA 不要)。
+func sha2Token(password string, nonce []byte) []byte {
+	if password == "" {
+		return nil
+	}
+	d1 := sha256.Sum256([]byte(password))
+	d2 := sha256.Sum256(d1[:])
+	h := sha256.New()
+	h.Write(d2[:])
+	h.Write(nonce)
+	scr := h.Sum(nil)
+	out := make([]byte, len(d1))
+	for i := range d1 {
+		out[i] = d1[i] ^ scr[i]
+	}
+	return out
+}
+
+// verifySHA2Password は caching_sha2_password のクライアント応答 token が
+// password と一致するかを定時間比較で検証する(#197)。
+func verifySHA2Password(password string, nonce, token []byte) bool {
+	return subtle.ConstantTimeCompare(sha2Token(password, nonce), token) == 1
+}
+
+// buildAuthMoreData は AuthMoreData パケット(先頭 0x01)を作る。caching_sha2 の
+// fast_auth_success は 0x03(この後に OK を送る)、perform_full_authentication は 0x04。
+func buildAuthMoreData(status byte) []byte {
+	return []byte{0x01, status}
+}
+
+// buildAuthSwitchRequest はクライアントに別プラグインでの再認証を求める(0xfe)。
+// caching_sha2 を広告しつつ、native しか話せない/native を明示したクライアントへ
+// mysql_native_password で切り替えて互換を保つ(#197)。
+func buildAuthSwitchRequest(plugin string, salt []byte) []byte {
+	b := []byte{0xfe}
+	b = append(b, []byte(plugin)...)
+	b = append(b, 0)
+	b = append(b, salt...)
+	b = append(b, 0)
+	return b
 }
 
 // parseBackendHandshake はバックエンド mysqld のハンドシェイクから salt と caps を取る。

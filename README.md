@@ -113,8 +113,9 @@ mysql -udev@pr-1 -pdev -h 127.0.0.1 -P3306   # :3306 固定エンドポイント
 ストレージは **APFS `clonefile`**、mysqld は **systemd を使わず直接 spawn**(process モード)。
 
 ```bash
-brew install mysql@8.0     # 方式A プロキシは mysql_native_password を使うため 8.0 必須
-                           # (MySQL 9.x は native_password を廃止していて接続認証が通らない)
+brew install mysql@8.0     # sashiki が起動する mysqld(バックエンド)。app_user を
+                           # native_password で作る現状は 8.0 系が前提(9.x は native 廃止)。
+                           # クライアント側は caching_sha2 / native どちらでも proxy を通る(#197)。
 curl -fsSL https://raw.githubusercontent.com/rikukaInoue/sashiki/main/install.sh | bash
 sashiki init --platform darwin --yes   # mysql@8.0 検出・base 初期化・baseline・config・launchd 常駐
 sashiki create pr-1
@@ -242,7 +243,7 @@ apply 完了時点で sashikid が稼働する。詳細は [deploy/terraform/REA
 
 - **branch lifecycle**: create / reset / recreate / delete / retry(hook 失敗などからの再実行)
 - **profile / lease**: 用途ごとの idle lifecycle(preview / ci / sandbox)+ `--ttl` / `lease renew` の絶対期限
-- **proxy(:3306 固定エンドポイント)**: `mysql -udev@<branch>` でルーティング。**認証終端(方式A)**——sashiki がパスワードを検証し、**認証後に** lazy create(認証前のリソース確保を防ぐ)。TLS 終端対応(`proxy.tls_cert`)
+- **proxy(:3306 固定エンドポイント)**: `mysql -udev@<branch>` でルーティング。**認証終端(方式A)**——sashiki がパスワードを検証し、**認証後に** lazy create(認証前のリソース確保を防ぐ)。**`caching_sha2_password`**(MySQL 8.0 既定 / 9.x)を広告し、sashiki が fast-auth スクランブルを自前検証(TLS/RSA 不要)。`mysql_native_password` クライアントは AuthSwitch でフォールバック。TLS 終端対応(`proxy.tls_cert`)
 - **アイドル管理**: 無接続で mysqld 停止(`sleeping`)、再接続で起床。engine ポーリングで接続を追跡するので proxy を通らない接続でも正しく判定。TTL / lease で自動削除
 - **baseline**: build → validate → publish。PII マスキングを必須化できる。`baseline set` で即ロールバック、`baseline promote` で検証済みブランチを次の baseline に昇格
 - **capacity 管理**: メモリ admission(不足時は新規を拒否して既存 mysqld を OOM から守る)、storage watermark、`sashiki capacity`

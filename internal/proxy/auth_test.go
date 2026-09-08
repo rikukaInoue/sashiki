@@ -97,6 +97,84 @@ func runAuth(t *testing.T, s *Server, username, password string) packet {
 	return resp
 }
 
+// runAuthSHA2 は caching_sha2_password のクライアントとして authTerminate を
+// 駆動する。fast_auth_success(AuthMoreData 0x01 0x03)が来たら消費し、その次の
+// 最終パケット(OK / ERR)を返す。fastAuth は 0x03 を観測したか。
+func runAuthSHA2(t *testing.T, s *Server, username, password string) (final packet, fastAuth bool) {
+	t.Helper()
+	serverConn, clientConn := net.Pipe()
+	defer func() { _ = clientConn.Close() }()
+	done := make(chan struct{})
+	go func() {
+		_ = clientConn.SetDeadline(time.Now().Add(3 * time.Second))
+		_ = serverConn.SetDeadline(time.Now().Add(3 * time.Second))
+		_ = s.authTerminate(context.Background(), serverConn)
+		_ = serverConn.Close()
+		close(done)
+	}()
+	hs, err := readPacket(clientConn)
+	if err != nil {
+		t.Fatalf("read handshake: %v", err)
+	}
+	salt, _, err := parseBackendHandshake(hs.body)
+	if err != nil {
+		t.Fatalf("parse handshake: %v", err)
+	}
+	hr := handshakeResponse{caps: capProtocol41 | capSecureConn | capPluginAuth, maxLen: 1 << 24, charset: 0xff, username: username}
+	body := buildBackendHandshakeResponse(hr, hr.caps, username, sha2Token(password, salt), sha2Plugin)
+	if err := writePacket(clientConn, packet{seq: 1, body: body}); err != nil {
+		t.Fatalf("write response: %v", err)
+	}
+	p, err := readPacket(clientConn)
+	if err != nil {
+		t.Fatalf("read auth result: %v", err)
+	}
+	// AuthMoreData(0x01)先頭なら fast_auth_success。消費して次を読む。
+	if len(p.body) >= 2 && p.body[0] == 0x01 {
+		fastAuth = p.body[1] == 0x03
+		if p, err = readPacket(clientConn); err != nil {
+			t.Fatalf("read final after AuthMoreData: %v", err)
+		}
+	}
+	<-done
+	return p, fastAuth
+}
+
+// caching_sha2 クライアントが正しいパスワードなら fast_auth_success を受け取り、
+// 認証後に branch へ route される(#197)。
+func TestAuthTerminateCachingSha2FastAuth(t *testing.T) {
+	r := &recordRouter{err: context.DeadlineExceeded} // route はさせるが未知 branch 扱い
+	s := newTestServer(t, Config{AppUser: "dev", AppPassword: "s3cret"})
+	s.router = r
+	final, fast := runAuthSHA2(t, s, "dev@pr-1", "s3cret")
+	if !fast {
+		t.Error("caching_sha2 の正パスワードは fast_auth_success (0x03) を返すはず")
+	}
+	if !isErr(final.body) {
+		t.Error("未知 branch なので最終パケットは ERR のはず")
+	}
+	if r.routeCount() != 1 || r.routed[0] != "pr-1" {
+		t.Errorf("認証成功後にちょうど 1 回 route されるはず (routed=%v)", r.routed)
+	}
+}
+
+// caching_sha2 の誤パスワードは route せず拒否(fast_auth_success も出さない)。
+func TestAuthTerminateCachingSha2WrongPassword(t *testing.T) {
+	r := &recordRouter{port: 3401}
+	s := newTestServer(t, Config{AppUser: "dev", AppPassword: "s3cret"})
+	s.router = r
+	final, fast := runAuthSHA2(t, s, "dev@pr-1", "wrong")
+	if fast {
+		t.Error("誤パスワードで fast_auth_success を出してはいけない")
+	}
+	if !isErr(final.body) {
+		t.Error("誤パスワードは ERR のはず")
+	}
+	if r.routeCount() != 0 {
+		t.Errorf("認証失敗時は route しないはず (DoS 不変条件), routed=%v", r.routed)
+	}
+}
+
 func TestAuthTerminateRejectsWrongPasswordWithoutRouting(t *testing.T) {
 	r := &recordRouter{port: 3401}
 	s := newTestServer(t, Config{AppUser: "dev", AppPassword: "s3cret"})

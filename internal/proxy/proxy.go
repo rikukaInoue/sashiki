@@ -142,6 +142,20 @@ func authErr(client net.Conn, seq byte, code uint16, state, msg string) error {
 	return fmt.Errorf("auth rejected: %s", msg)
 }
 
+// authSwitchNative はクライアントへ mysql_native_password での再認証を要求し、
+// 応答トークンとその seq を返す(caching_sha2 を話せない/native 明示の互換、#197)。
+func (s *Server) authSwitchNative(client net.Conn, seq byte, salt []byte) (token []byte, newSeq byte, err error) {
+	if err = writePacket(client, packet{seq: seq, body: buildAuthSwitchRequest(nativePlugin, salt)}); err != nil {
+		return nil, seq, err
+	}
+	resp, err := readPacket(client)
+	if err != nil {
+		return nil, seq, err
+	}
+	// AuthSwitchResponse の body はそのまま native トークン(空パスワードは空)。
+	return resp.body, resp.seq, nil
+}
+
 // authTerminate は方式A の認証フェーズ。クライアント認証を sashiki 自身が
 // 検証し、成功してから branch を route / create してバックエンドへ接続し直す。
 func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
@@ -190,9 +204,40 @@ func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
 
 	// 3. 認証終端: app パスワードで検証する。**ここを通るまで branch に触れない**
 	//    (認証前 lazy create の DoS 構造を解消 — #7 / #51)。
-	if !verifyNativePassword(s.cfg.AppPassword, salt, hr.authResp) {
+	//    既定は caching_sha2_password(広告に合わせる。MySQL 8.0/9.x 対応、#197)。
+	//    sashiki は app パスワードを持つので fast-auth スクランブルを自前検証でき、
+	//    成功時は AuthMoreData(0x03=fast_auth_success)を返してから OK を送る
+	//    (TLS/RSA 不要)。native_password クライアントは従来どおり検証する。
+	denied := func() error {
 		return authErr(client, seq+1, 1045, "28000",
 			fmt.Sprintf("Access denied for user '%s'@'%s' (using password: YES)", user, branch))
+	}
+	verified := false
+	switch {
+	case verifySHA2Password(s.cfg.AppPassword, salt, hr.authResp):
+		// caching_sha2 の fast-auth 成功。fast_auth_success を通知してから OK。
+		if err := writePacket(client, packet{seq: seq + 1, body: buildAuthMoreData(0x03)}); err != nil {
+			return err
+		}
+		seq++
+		verified = true
+	case verifyNativePassword(s.cfg.AppPassword, salt, hr.authResp):
+		// クライアントが native トークンを直接送ってきた(旧クライアント)。そのまま許可。
+		verified = true
+	case len(hr.authResp) == 0:
+		// 空応答(クライアントが AuthSwitch を待っている:native を要求する CLI や
+		// caching_sha2 を話せない古いクライアント)→ native へ切り替えて再認証する
+		// (互換維持、#197)。非空トークンの不一致は下の denied で単なる誤 pw 扱い。
+		tok, nseq, err := s.authSwitchNative(client, seq+1, salt)
+		if err != nil {
+			return err
+		}
+		seq = nseq
+		verified = verifyNativePassword(s.cfg.AppPassword, salt, tok)
+	}
+	if !verified {
+		// caching_sha2 を明示した非空トークンの不一致など:単なるパスワード誤り。
+		return denied()
 	}
 
 	// 4. 認証済み → branch 解決(必要なら lazy create)

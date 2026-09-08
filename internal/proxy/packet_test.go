@@ -107,6 +107,37 @@ func TestVerifyNativePassword(t *testing.T) {
 	}
 }
 
+func TestVerifySHA2Password(t *testing.T) {
+	nonce := bytes.Repeat([]byte{0x42}, 20)
+	tok := sha2Token("s3cret", nonce)
+	if !verifySHA2Password("s3cret", nonce, tok) {
+		t.Error("correct password should verify (caching_sha2)")
+	}
+	if verifySHA2Password("wrong", nonce, tok) {
+		t.Error("wrong password must not verify (caching_sha2)")
+	}
+	if !verifySHA2Password("", nonce, sha2Token("", nonce)) {
+		t.Error("empty password should verify against empty token")
+	}
+	if verifySHA2Password("s3cret", nonce, nil) {
+		t.Error("empty token must not verify against a real password")
+	}
+	// caching_sha2 と native のトークンは別物(取り違え防止)。
+	if verifySHA2Password("s3cret", nonce, nativeToken("s3cret", nonce)) {
+		t.Error("native token must not pass caching_sha2 verification")
+	}
+}
+
+func TestInitialHandshakeAdvertisesCachingSha2(t *testing.T) {
+	hs, _, err := buildInitialHandshake(1, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(hs, []byte(sha2Plugin)) {
+		t.Errorf("initial handshake should advertise %s", sha2Plugin)
+	}
+}
+
 func TestIsSSLRequest(t *testing.T) {
 	// SSLRequest: caps に SSL、username 無しの短いパケット。
 	ssl := binary.LittleEndian.AppendUint32(nil, uint32(capProtocol41|capSSL))

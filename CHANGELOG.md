@@ -6,6 +6,7 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 ## Unreleased
 
 ### Added / Changed
+- **proxy: `caching_sha2_password` 対応(#197)**: 初期ハンドシェイクで caching_sha2(MySQL 8.0 既定 / 9.x)を広告し、方式A の sashiki が fast-auth スクランブルを app パスワードから自前計算して定時間比較する(TLS/RSA 不要で fast-auth のみで通す)。`mysql_native_password` クライアントは空応答時に AuthSwitch でフォールバックし後方互換を維持。誤パスワードは従来どおり拒否し、認証成功まで branch に触れない DoS 不変条件も維持。実機(mysql 8.0 CLI: `--default-auth=caching_sha2_password` / `=mysql_native_password` / 既定、および誤 pw)で検証。「クライアントが MySQL 8.0 の native_password 前提」という最大の弱点を解消(9.x クライアント対応)。
 - **`baseline import` の高速化(#194)**: バルク投入セッションで `unique_checks` / `foreign_key_checks` / `sql_log_bin` を自動的に無効化する(セッション限定なので、import 後の実行時は FK/一意制約は通常どおり有効)。あわせて `--import-cnf <my.cnf>` を追加し、投入中だけ buffer pool や `innodb_flush_log_at_trx_commit` を緩めた mysqld で流し込める。実測(3M 行 / UNIQUE 索引 + FK、Apple Silicon): 約 25s → セッション変数のみ約 14.5s(-42%)→ `--import-cnf`(2G pool / trx_commit=0 / doublewrite off)併用で約 10s(-60%)。データ件数・FK 整合は不変。
 - **`baseline import` の並列投入(#194)**: `--from` にディレクトリを渡すと `*.sql` を並列投入する(mydumper 出力やテーブル単位の分割ダンプ向け)。名前に `schema` を含むファイルを先に順次投入して全テーブルを作り、残りのデータファイルを `--threads N`(既定 = CPU 数)の接続で並列に流す。実測(8 テーブル / 280 万行、Apple Silicon): 単一ファイル逐次 約 14s → ディレクトリ 8 並列 約 7s(約 2 倍)。件数・テーブル数は不変。
 
