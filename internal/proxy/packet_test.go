@@ -203,3 +203,31 @@ func TestBackendHandshakeMirrorsDeprecateEOF(t *testing.T) {
 		t.Error("client が DEPRECATE_EOF 有りなら backend にも申告する")
 	}
 }
+
+// #197: caching_sha2_password のスクランブル計算・検証・広告。
+func TestCachingSha2RoundTrip(t *testing.T) {
+	nonce := []byte("abcdefghijABCDEFGHIJ") // 20 byte
+	tok := cachingSha2Token("dev", nonce)
+	if len(tok) != 32 {
+		t.Fatalf("token len = %d, want 32", len(tok))
+	}
+	if !verifyCachingSha2Password("dev", nonce, tok) {
+		t.Error("正しいパスワードは検証を通るべき")
+	}
+	if verifyCachingSha2Password("wrong", nonce, tok) {
+		t.Error("誤ったパスワードは通ってはいけない")
+	}
+	if cachingSha2Token("", nonce) != nil {
+		t.Error("空パスワードは nil トークン")
+	}
+}
+
+func TestHandshakeAdvertisesCachingSha2(t *testing.T) {
+	hs, _, err := buildInitialHandshake(1, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(hs, []byte(sha2Plugin)) {
+		t.Error("初期ハンドシェイクは caching_sha2_password を広告するべき(#197)")
+	}
+}

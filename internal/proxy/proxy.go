@@ -190,7 +190,16 @@ func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
 
 	// 3. 認証終端: app パスワードで検証する。**ここを通るまで branch に触れない**
 	//    (認証前 lazy create の DoS 構造を解消 — #7 / #51)。
-	if !verifyNativePassword(s.cfg.AppPassword, salt, hr.authResp) {
+	// クライアントの応答長で認証方式を判別する(#197): 32byte=caching_sha2
+	// (MySQL 8.0 既定 / 9.x)、20byte=mysql_native_password(旧クライアント)。
+	sha2 := len(hr.authResp) != 20
+	verified := false
+	if sha2 {
+		verified = verifyCachingSha2Password(s.cfg.AppPassword, salt[:20], hr.authResp)
+	} else {
+		verified = verifyNativePassword(s.cfg.AppPassword, salt, hr.authResp)
+	}
+	if !verified {
 		return authErr(client, seq+1, 1045, "28000",
 			fmt.Sprintf("Access denied for user '%s'@'%s' (using password: YES)", user, branch))
 	}
@@ -216,9 +225,19 @@ func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
 		return authErr(client, seq+1, 2003, "HY000", "backend auth failed")
 	}
 
-	// 6. クライアントへ OK を返して認証完了
-	if err := writePacket(client, packet{seq: seq + 1, body: buildOK()}); err != nil {
-		return err
+	// 6. クライアントへ認証完了を返す。caching_sha2 は AuthMoreData(0x01 0x03 =
+	//    fast_auth_success)を先に送ってから OK(#197)。native は OK のみ。
+	if sha2 {
+		if err := writePacket(client, packet{seq: seq + 1, body: []byte{0x01, 0x03}}); err != nil {
+			return err
+		}
+		if err := writePacket(client, packet{seq: seq + 2, body: buildOK()}); err != nil {
+			return err
+		}
+	} else {
+		if err := writePacket(client, packet{seq: seq + 1, body: buildOK()}); err != nil {
+			return err
+		}
 	}
 
 	// 認証完了 → 素通し(接続終了までブロック)
