@@ -132,7 +132,11 @@ func RealOps() Ops {
 				return err
 			}
 			defer func() { _ = f.Close() }()
-			args := []string{"-uroot", "-S", s.Socket}
+			// migration/seed の投入も import と同じくバルクロード扱いにする(#194 publish 経路)。
+			// baseline build 中の一時 mysqld なので制約チェック/バイナリログは不要で、
+			// 大きな migration では体感が変わる。セッション限定なので runtime には残らない。
+			args := []string{"-uroot", "-S", s.Socket,
+				"--init-command=SET unique_checks=0, foreign_key_checks=0, sql_log_bin=0"}
 			if db != "" {
 				args = append(args, db)
 			}
