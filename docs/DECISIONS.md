@@ -72,7 +72,7 @@
 **背景**: ADR-006-4 / ADR-007 は proxy_user を `mysql_native_password` で作り、client 検証・backend 接続とも native を前提にしていた(「caching_sha2 は TLS 終端導入時に再検討」)。しかし **MySQL 8.4 は native をデフォルト無効**にし、**9.x は native を廃止**したため、`CREATE USER ... IDENTIFIED WITH mysql_native_password` が `ERROR 1524`(8.4)/ 作成不能(9.x)になり、baseline import が動かない。native 前提のままでは 8.4/9.x を backend mysqld に使えない。
 
 **決定**:
-1. **app_user(dev)は backend の版に応じたプラグインで作成**する(baseline import / `init --platform darwin`)。`SELECT @@version` の major を見て **8.0+ は `caching_sha2_password`、5.7 等(major<8)は `mysql_native_password`**(caching_sha2 は 8.0 で追加され 5.7 に無いため)。これで 5.7〜9.x を一本化する。
+1. **app_user(dev)は backend の版に応じたプラグインで作成**する(baseline import / `init --platform darwin`)。`SELECT @@version` を見て **MySQL 8.0+ は `caching_sha2_password`、5.7 等(major<8)は `mysql_native_password`**(caching_sha2 は 8.0 追加で 5.7 に無い)。**MariaDB** は version 文字列に `MariaDB` を含み major も 10+ だが caching_sha2 を持たない(native / ed25519)ため、名前で先に判定して native にする。判定不能時は既定 caching_sha2。正式サポートは MySQL 8.0〜9.x(実機検証 8.0/8.4)、**5.7 は best-effort(EOL・未検証)、MariaDB は非対応**(native を選ぶが他挙動未検証)。
 2. **client → proxy**: proxy は合成ハンドシェイクで caching_sha2 を名乗り、sashiki が app パスワードから fast-auth スクランブルを計算して検証(#197)。native クライアントは AuthSwitch でフォールバック。
 3. **proxy → backend**: sashiki が caching_sha2 で接続し直す。branch mysqld は起動直後でキャッシュが空のため full-auth になるが、**sashiki↔backend は localhost 平文 TCP** なので、TLS の代わりに **RSA 公開鍵手順**で送る(pubkey 要求 `0x02` → `0x01`+PEM 受領 → `password\0` を nonce で XOR → RSA-OAEP/SHA-1 で暗号化)。cleartext を平文回線に出さない。
 4. baseline の app_user が(旧版由来で)native の場合は、backend が返す AuthSwitchRequest の plugin にあわせて応答するため後方互換を保つ。

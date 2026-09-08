@@ -26,16 +26,30 @@ func TestMajorVersion(t *testing.T) {
 			t.Errorf("majorVersion(%q) = (%d, %v), want (%d, %v)", c.in, major, ok, c.major, c.ok)
 		}
 	}
-	// プラグイン選択の意味論: 5.7 は native、8.0+ は caching_sha2 になること。
-	// (5.7 は caching_sha2 プラグインが無い、8.4 は native 既定 OFF、9.x は native 廃止)
-	for _, c := range []struct {
-		v      string
-		native bool
-	}{{"5.7.44", true}, {"8.0.46", false}, {"8.4.11", false}, {"9.6.0", false}} {
-		major, ok := majorVersion(c.v)
-		gotNative := ok && major < 8
-		if gotNative != c.native {
-			t.Errorf("%s: native=%v, want %v", c.v, gotNative, c.native)
+}
+
+// pluginForVersion: 5.7 と MariaDB は native、MySQL 8.0+ は caching_sha2(#version-compat)。
+func TestPluginForVersion(t *testing.T) {
+	const sha2 = "caching_sha2_password"
+	const native = "mysql_native_password"
+	cases := []struct {
+		v    string
+		want string
+	}{
+		{"5.7.44", native},                        // caching_sha2 は 8.0 追加、5.7 に無い
+		{"5.7.44-log", native},                    //
+		{"8.0.46", sha2},                          //
+		{"8.1.0", sha2},                           // 間の版
+		{"8.3.0", sha2},                           //
+		{"8.4.11", sha2},                          // native 既定 OFF
+		{"9.6.0", sha2},                           // native 廃止
+		{"10.11.5-MariaDB", native},               // MariaDB は caching_sha2 非対応
+		{"11.4.2-MariaDB-1:11.4.2+maria", native}, //
+		{"", sha2},                                // 判定不能は既定 caching_sha2
+	}
+	for _, c := range cases {
+		if got := pluginForVersion(c.v); got != c.want {
+			t.Errorf("pluginForVersion(%q) = %s, want %s", c.v, got, c.want)
 		}
 	}
 }
