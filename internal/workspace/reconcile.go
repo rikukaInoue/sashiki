@@ -15,9 +15,10 @@ import (
 
 // ReconcileReport は突合結果。
 type ReconcileReport struct {
-	Demoted []string // running → sleeping(プロセス死亡・volume 健全)
-	Errored []string // dataset 消失など
-	Orphans []string // dataset だけあって state.db に無い branch 名
+	Demoted     []string // running → sleeping(プロセス死亡・volume 健全)
+	Errored     []string // dataset 消失など
+	Orphans     []string // dataset だけあって state.db に無い branch 名
+	Interrupted []string // creating/resetting/deleting のまま再起動で中断された残骸を回収
 }
 
 // Reconcile は state.db を ZFS / engine と突き合わせて整合させる(起動時に呼ぶ)。
@@ -30,6 +31,34 @@ func (m *Manager) Reconcile(ctx context.Context) (ReconcileReport, error) {
 	known := map[string]bool{}
 	for _, b := range branches {
 		known[b.Name] = true
+
+		// 遷移中状態(creating/resetting/deleting)で残っている = 再起動で中断された
+		// 残骸。sashikid は単一プロセスなので起動時に正当な mid-operation は無い(#53
+		// は operation テーブルの回収。ここは branch state を回収する)。
+		switch b.State {
+		case state.StateDeleting:
+			// 削除の途中で落ちた → 削除を完了させる(volume 欠損でも Delete が行を掃除する)。
+			if err := m.Delete(ctx, b.Name); err != nil {
+				log.Printf("reconcile: resume delete %s: %v", b.Name, err)
+				rep.Errored = append(rep.Errored, b.Name)
+			} else {
+				rep.Interrupted = append(rep.Interrupted, b.Name)
+			}
+			continue
+		case state.StateCreating, state.StateResetting:
+			// error(recoverable)にして `sashiki retry` で再駆動できるようにする。
+			// FailedOp は元操作にあわせる(retry がこの値で分岐する)。
+			op := "create"
+			if b.State == state.StateResetting {
+				op = "reset"
+			}
+			_ = m.db.SetError(b.Name, op, "interrupted", true,
+				op+" が再起動で中断されました",
+				[]string{"`sashiki retry " + b.Name + "` で再実行", "または `sashiki delete " + b.Name + "`"})
+			rep.Interrupted = append(rep.Interrupted, b.Name)
+			continue
+		}
+
 		vol, verr := m.resolveVolume(ctx, b)
 		if verr != nil {
 			// dataset が無い → recoverable=false の error(手動で消された等)
@@ -61,8 +90,9 @@ func (m *Manager) Reconcile(ctx context.Context) (ReconcileReport, error) {
 			}
 		}
 	}
-	if len(rep.Demoted)+len(rep.Errored)+len(rep.Orphans) > 0 {
-		log.Printf("reconcile: demoted=%v errored=%v orphans=%v", rep.Demoted, rep.Errored, rep.Orphans)
+	if len(rep.Demoted)+len(rep.Errored)+len(rep.Orphans)+len(rep.Interrupted) > 0 {
+		log.Printf("reconcile: demoted=%v errored=%v orphans=%v interrupted=%v",
+			rep.Demoted, rep.Errored, rep.Orphans, rep.Interrupted)
 	}
 	return rep, nil
 }
