@@ -254,11 +254,15 @@ func provisionDevUser(mysqldBin, baseData string) error {
 	}()
 
 	client := filepath.Join(filepath.Dir(mysqldBin), "mysql")
-	sql := "CREATE USER IF NOT EXISTS 'dev'@'%' IDENTIFIED WITH caching_sha2_password BY 'dev';" +
-		"GRANT ALL PRIVILEGES ON *.* TO 'dev'@'%' WITH GRANT OPTION;" +
-		"CREATE DATABASE IF NOT EXISTS app;FLUSH PRIVILEGES;"
 	var lastErr error
 	for i := 0; i < 100; i++ {
+		// backend の版でプラグインを選ぶ(8.0+ は caching_sha2、5.7 等は native)。
+		// server 未 ready の間は既定 caching_sha2 が返り CREATE も失敗するので retry で回る。
+		plugin := authPluginFor(client, sock)
+		sql := fmt.Sprintf(
+			"CREATE USER IF NOT EXISTS 'dev'@'%%' IDENTIFIED WITH %s BY 'dev';"+
+				"GRANT ALL PRIVILEGES ON *.* TO 'dev'@'%%' WITH GRANT OPTION;"+
+				"CREATE DATABASE IF NOT EXISTS app;FLUSH PRIVILEGES;", plugin)
 		out, err := exec.Command(client, "--socket="+sock, "-uroot", "-e", sql).CombinedOutput()
 		if err == nil {
 			return nil
