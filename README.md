@@ -225,9 +225,14 @@ module "db" {
   instance_class    = "m6i.large"    # RDS と同じ変数名
   allocated_storage = 100
   engine_version    = "8.0"
+  sashiki_ref       = "v0.4.2"       # ★ source の ?ref= と必ず同じ値に(#193)
 }
 # 出力: endpoint / port / username / password_secret_arn / api_url ...(RDS/Aurora 互換)
 ```
+
+> **バージョンの固定**: `source` の `?ref=` と `sashiki_ref` は**同じタグ**にする。`sashiki_ref` は
+> install.sh の取得元(バイナリ版)と直リンクの両方に使われるので、片方だけ古いと**旧版が走って
+> 新しい修正が効かない**。`"latest"` は再現性が無いため本番運用ではタグ固定を推奨。
 
 EC2 + EBS(prevent_destroy)+ SG + IAM + Route53 + Secrets/SSM を 1 apply。
 apply 完了時点で sashikid が稼働する。詳細は [deploy/terraform/README.md](deploy/terraform/)。

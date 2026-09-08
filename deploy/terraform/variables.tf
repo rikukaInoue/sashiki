@@ -102,7 +102,11 @@ variable "github_token" {
 }
 
 variable "sashiki_ref" {
-  description = "install.sh / モジュールが参照する sashiki のリリースタグ(バイナリとモジュールを同じ ref で固定する)"
+  # ★重要: この ref は「install.sh の取得元(=バイナリ版)」と「SASHIKI_RELEASE の
+  # 直リンク」の両方に使う。上げ忘れると旧版の install.sh/バイナリが走り、新しい版の
+  # 修正が効かない(#193)。再現性のため "latest" ではなく **バージョンタグ**(例
+  # "v0.4.2")で固定し、モジュール(source の ?ref=)と同じ値にすること。
+  description = "sashiki のリリースタグ。バイナリとモジュールを同じ ref で固定する(例 \"v0.4.2\"。\"latest\" は再現性が無いため非推奨)"
   type        = string
   default     = "latest"
 }
