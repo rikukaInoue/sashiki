@@ -1,0 +1,79 @@
+# sashikid の設定(PostgreSQL エンジン)。sashiki init --engine postgres が生成した初期値。
+listen:
+  api: "127.0.0.1:8080"     # Web UI もここ (GET /)
+  proxy: "0.0.0.0:5432"     # 固定エンドポイント。dev@<branch> でルーティング(#222)
+  metrics: "127.0.0.1:9100"
+
+state_db: /var/lib/sashiki/state.db
+run_dir: /run/sashiki          # socket / sentinel を置く実行時領域
+log_dir: /var/log/sashiki      # ログの基点(hooks.log_dir 等は未設定ならここから派生)
+log_format: text   # text | json(構造化ログ。operation ログに operation_id / branch が付く)
+domain: sashiki.internal
+
+storage:
+  backend: ebs-zfs
+  high_watermark: 0.8        # pool使用率がこれを超えるとwarning(メトリクス)
+  critical_watermark: 0.95   # これを超えるとcreate/wake/recreateを拒否
+  # default_storage_quota: 10G # branch ごとの refquota(暴走で pool を食い潰さない。空=無制限)
+  ebs-zfs:
+    pool: {{.Pool}}
+    base_dataset: {{.Pool}}/base
+    branch_parent: {{.Pool}}/branches
+    baseline_snapshot: baseline
+    # systemd デプロイでは sashikid は User=sashiki で動き、zfs は sudoers 経由で
+    # 実行する(sashiki init が /etc/sudoers.d/sashiki を生成)。root 直で動かす
+    # 構成(コンテナ等)では false にしてよい。
+    sudo: true
+
+engine:
+  type: postgres
+  postgres:
+    port_range: [5433, 5632]
+    bin_dir: {{.PgBinDir}}
+    # app_user / app_pass は baseline import が作る接続ロール。proxy はこの
+    # パスワードを SCRAM-SHA-256 で検証してから backend へ繋ぎ直す(#222)。
+    app_user: dev
+    app_pass: dev
+    # per-branch の <branch>.env は sashikid(User=sashiki)が書き、
+    # postgres-sashiki@.service が読む。/run/sashiki は sashikid.service の
+    # RuntimeDirectory=sashiki で sashiki 所有として作られる(#177)。
+    env_dir: /run/sashiki
+    listen_addresses: 127.0.0.1
+    # systemd デプロイでは postgres を systemctl 経由で起動する(要 root=sudoers)。
+    sudo: true
+    shared_buffers: 128M     # mysql の buffer_pool_size 相当(メモリ admission の見積もり)
+    # expected_rss / memory_headroom / max_running でメモリ admission を調整できる
+    # initdb_args: []        # baseline import 時の initdb 追加引数(locale 等)
+
+branches:
+  name_pattern: "^[a-z0-9-]{1,32}$"
+  max_branches: 50
+  lazy_create: true
+  lazy_create_max_wait: 20s
+  idle_stop_after: 30m      # 接続なしで postgres を停止(データは残る、再接続で起床)
+  delete_after_idle: 168h   # 7日間接続なしで削除。PR close 取りこぼしの保険
+  operation_retention: 168h # 完了した operation を7日で掃除(0=無期限)
+  default_profile: preview
+  profiles:
+    preview: { idle_stop_after: 30m, delete_after_idle: 168h }
+    ci:      { idle_stop_after: 5m,  delete_after_idle: 1h }
+    sandbox: { idle_stop_after: 1h,  delete_after_idle: 720h }
+
+baseline:
+  # refresh の実行方法(#101): refresh_script があればそれを実行する。
+  # source_dir の組み込みローダーは現状 mysql エンジンのみ(#226)。
+  # refresh_script: /etc/sashiki/refresh.sh
+  require_masked: false      # true にすると masked でない baseline の publish を拒否
+  require_validated: false   # true にすると validate 未通過の publish を拒否
+  validate_port: 5999
+  keep_last: 3               # baseline GC で残す直近 N
+  retention: 0s              # baseline GC で残す期間(0=無期限)
+
+hooks:
+  dir: /etc/sashiki/hooks
+  # log_dir: 未設定なら log_dir/hooks に派生
+
+auth:
+  api_token_env: SASHIKI_API_TOKEN   # このenv変数からBearerトークンを読む
+  # api_token_ssm: /sashiki/api-token # 設定するとSSM(SecureString)から読み、envより優先
+  # trust_loopback: false             # loopback でも Bearer トークンを必須にする(#198)

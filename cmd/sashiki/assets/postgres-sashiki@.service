@@ -1,0 +1,23 @@
+[Unit]
+Description=sashiki PostgreSQL instance %i
+After=network.target zfs-mount.service
+
+[Service]
+Type=simple
+User=postgres
+Group=postgres
+# <branch>.env は sashikid(User=sashiki)が /run/sashiki に書く(RuntimeDirectory、#177)。
+EnvironmentFile=/run/sashiki/%i.env
+# LISTEN_ADDRESSES は sashikid が env ファイルに書く(engine.postgres.listen_addresses)。
+# 既定 127.0.0.1。リモート接続を許す場合は base の pg_hba.conf に host 行も必要。
+ExecStart=/bin/sh -c 'exec ${PGBIN}/postgres -D ${DATADIR} -p ${PORT} -c listen_addresses=${LISTEN_ADDRESSES:-127.0.0.1} -c unix_socket_directories=/tmp'
+# fast shutdown を明示する(systemd 既定の SIGTERM は smart shutdown となり
+# 接続が残ると無期限に待つ)。TimeoutStopSec 超過で SIGKILL されると @init が
+# dirty になりうるため、余裕を持たせる。
+ExecStop=/bin/sh -c '${PGBIN}/pg_ctl stop -D ${DATADIR} -m fast'
+TimeoutStopSec=120
+Restart=no
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

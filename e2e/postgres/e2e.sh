@@ -28,18 +28,38 @@ rm -f "$POOL_IMG"
 rm -rf /etc/sashiki-pg /var/lib/sashiki-pg /var/log/sashiki-pg
 mkdir -p /etc/sashiki-pg/hooks /var/lib/sashiki-pg/branches /var/log/sashiki-pg/hooks
 
-log "zpool (recordsize=8k for postgres)"
+log "zpool"
 truncate -s 3G "$POOL_IMG"
 zpool create -o ashift=12 $POOL "$POOL_IMG"
 zfs set compression=lz4 atime=off $POOL
-zfs create -o recordsize=8k -o logbias=throughput $POOL/base
-# クローンのプロパティは origin ではなく名前空間上の親から継承されるため、
-# branch_parent にも recordsize=8k が必要
-zfs create -o recordsize=8k -o logbias=throughput $POOL/branches
 
-log "install unit + config + start sashikid"
+log "install binaries"
 install -m 755 "$SASHIKID_BIN" /usr/local/bin/sashikid-pg
 install -m 755 "$SASHIKI_BIN" /usr/local/bin/sashiki-pg
+
+log "sashiki init --engine postgres (#224)"
+# データセット作成・unit 配置・config 生成を init に任せて実機で検証する
+# (パッケージはこのスクリプトが先に入れているので --skip-packages)。
+rm -f /etc/sashiki/config.yaml
+sashiki-pg init --engine postgres --pool $POOL --skip-packages --yes \
+  || fail "sashiki init --engine postgres が失敗した"
+# postgres は 8KB ページ。base だけでなく branches 側にも要る(クローンは
+# origin ではなく名前空間上の親からプロパティを継承するため)。
+for ds in $POOL/base $POOL/branches; do
+  rs=$(zfs get -H -o value recordsize $ds)
+  [ "$rs" = "8K" ] || fail "$ds の recordsize が 8K でない (got: $rs)"
+done
+echo "  base / branches とも recordsize=8K"
+grep -q "type: postgres" /etc/sashiki/config.yaml || fail "生成 config が postgres になっていない"
+[ -f /etc/systemd/system/postgres-sashiki@.service ] || fail "postgres unit が配置されていない"
+echo "  config(engine: postgres)と unit を生成済み"
+# 冪等性: 2 回目は全ステップがスキップされて成功する
+sashiki-pg init --engine postgres --pool $POOL --skip-packages --yes > /tmp/init2.log 2>&1 \
+  || { cat /tmp/init2.log; fail "init の 2 回目(冪等)が失敗した"; }
+grep -q "済み・スキップ" /tmp/init2.log || fail "2 回目にスキップされたステップが無い(冪等でない)"
+echo "  2 回目は既存ステップをスキップ(冪等)"
+
+log "install unit override + config"
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 UNIT_SRC="$SCRIPT_DIR/../../deploy/systemd/postgres-sashiki@.service"
 [ -f "$UNIT_SRC" ] || UNIT_SRC="$SCRIPT_DIR/postgres-sashiki@.service"
