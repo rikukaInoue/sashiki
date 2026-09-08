@@ -7,6 +7,15 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 > [Conventional Commits](https://www.conventionalcommits.org/) から自動生成する(手動編集不要)。
 > リリース手順は [docs/RELEASING.md](docs/RELEASING.md) を参照。v0.5.0 までは手書き。
 
+## [0.5.1](https://github.com/rikukaInoue/sashiki/compare/v0.5.0...v0.5.1) (2026-09-08)
+
+
+### Bug Fixes
+
+* **engine/proxy:** support MySQL 8.4/9.x via caching_sha2 for proxy-&gt;backend auth ([#197](https://github.com/rikukaInoue/sashiki/issues/197) follow-up) ([#209](https://github.com/rikukaInoue/sashiki/issues/209)) ([c94de34](https://github.com/rikukaInoue/sashiki/commit/c94de3498dbbf726e0010a7e22b0e9fa9548fa58))
+* **engine:** pick app_user auth plugin by backend version (MySQL 5.7..9.x) ([#211](https://github.com/rikukaInoue/sashiki/issues/211)) ([23bb406](https://github.com/rikukaInoue/sashiki/commit/23bb4069c9222636dd8ba1904b7ed38918597341))
+* **security:** bump Go toolchain to 1.26.6 to clear stdlib TLS/x509 advisories ([#212](https://github.com/rikukaInoue/sashiki/issues/212)) ([02550ad](https://github.com/rikukaInoue/sashiki/commit/02550adcdba23ad0d1bbc59f1044c92e9972f8c2))
+
 ## v0.5.0 — (2026-09-08)
 
 ### Added
