@@ -5,9 +5,12 @@
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -y
+# 起動直後は unattended-upgrades / cloud-init が dpkg ロックを握っていることがある。
+# DPkg::Lock::Timeout でロック解放を最大 5 分待ち、set -e での即中断を避ける(#192)。
+APT_LOCK="-o DPkg::Lock::Timeout=300"
+apt-get $APT_LOCK update -y
 # awscli は Ubuntu 24.04 の apt に無いため公式 v2 を導入する(#164)。unzip が要る。
-apt-get install -y curl ca-certificates unzip jq
+apt-get $APT_LOCK install -y curl ca-certificates unzip jq
 if ! command -v aws >/dev/null 2>&1; then
   curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip
   unzip -q /tmp/awscliv2.zip -d /tmp
@@ -36,6 +39,15 @@ curl -fsSL -H "Authorization: Bearer ${github_token}" \
 %{ else ~}
 curl -fsSL "https://raw.githubusercontent.com/rikukaInoue/sashiki/${sashiki_ref}/install.sh" \
   | SASHIKI_RELEASE="${sashiki_ref}" bash
+%{ endif ~}
+
+# --- sashiki_ref と実際に入った版が食い違っていないか確認(ref の上げ忘れ検出、#193)---
+%{ if sashiki_ref != "latest" && sashiki_ref != "main" ~}
+INST_VER="$(sashiki version 2>/dev/null || true)"
+case "$INST_VER" in
+  *"${trimprefix(sashiki_ref, "v")}"*) : ;;  # 一致(version は "sashiki X.Y.Z+commit")
+  *) echo "sashiki: 警告 install された版 [$INST_VER] が sashiki_ref=${sashiki_ref} と一致しません。ref の上げ忘れの可能性があります。" >&2 ;;
+esac
 %{ endif ~}
 
 # --- データ EBS のデバイスを解決する。Nitro 世代は /dev/xvdf でなく /dev/nvmeXn1 に

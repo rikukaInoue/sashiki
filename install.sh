@@ -61,7 +61,9 @@ Linux)
   trap 'rm -rf "$tmp"' EXIT
   echo "downloading sashiki (linux/${ARCH}) ..."
   curl -fsSL "${auth[@]}" -H "Accept: application/octet-stream" -o "$tmp/sashiki.deb" "$url"
-  dpkg -i "$tmp/sashiki.deb"
+  # 起動直後は dpkg ロックを他プロセスが握っていることがある。apt-get 経由なら
+  # DPkg::Lock::Timeout でロック解放を待てる(#192)。古い apt では dpkg にフォールバック。
+  apt-get -o DPkg::Lock::Timeout=300 install -y "$tmp/sashiki.deb" || dpkg -i "$tmp/sashiki.deb"
   echo "installed: $(sashiki version)"
   echo "next: sudo sashiki init --pool dbpool --device <dev>  (lsblk でデバイス確認)"
   ;;
