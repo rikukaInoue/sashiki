@@ -26,6 +26,18 @@ jobs:
         with:
           version: latest
 
+  # 既知の脆弱性(Go の脆弱性 DB)チェック。必須 check にはしない
+  # (新規 CVE 公開で無関係な PR がブロックされるのを避けるため advisory 運用)。
+  vuln:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - run: govulncheck ./...
+
   # 実 ZFS + mysqld での E2E。GitHub の ubuntu ランナーは sudo と
   # ZFS カーネルモジュールが使えるため、loopback zpool で完結する。
   e2e:
