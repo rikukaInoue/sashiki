@@ -7,6 +7,13 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 > [Conventional Commits](https://www.conventionalcommits.org/) から自動生成する(手動編集不要)。
 > リリース手順は [docs/RELEASING.md](docs/RELEASING.md) を参照。v0.5.0 までは手書き。
 
+## [0.5.2](https://github.com/rikukaInoue/sashiki/compare/v0.5.1...v0.5.2) (2026-09-08)
+
+
+### Bug Fixes
+
+* **engine:** don't pick caching_sha2 for MariaDB backends ([#219](https://github.com/rikukaInoue/sashiki/issues/219)) ([ece7b38](https://github.com/rikukaInoue/sashiki/commit/ece7b38a55588f6fc93b5db6032890805c2a0bb4))
+
 ## [0.5.1](https://github.com/rikukaInoue/sashiki/compare/v0.5.0...v0.5.1) (2026-09-08)
 
 
