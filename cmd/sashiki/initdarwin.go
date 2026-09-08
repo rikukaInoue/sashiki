@@ -165,9 +165,9 @@ sashiki baseline refresh を使ってください。
 	return exitOK
 }
 
-// resolveMysqld は Homebrew / PATH から mysqld を探す。方式A プロキシは
-// mysql_native_password を使うため、それを持つ mysql@8.0 を優先する
-// (MySQL 9.x は native_password を廃止しており接続認証が通らない)。
+// resolveMysqld は Homebrew / PATH から mysqld を探す。app_user は
+// caching_sha2_password で作るので 8.0 / 8.4 / 9.x いずれでも動く(#version-compat)。
+// 既定の探索順として広く入っている mysql@8.0 を最初に見るだけで、要件ではない。
 func resolveMysqld() (string, error) {
 	// mysql@8.0 を最優先。
 	if out, err := exec.Command("brew", "--prefix", "mysql@8.0").Output(); err == nil {
@@ -254,7 +254,7 @@ func provisionDevUser(mysqldBin, baseData string) error {
 	}()
 
 	client := filepath.Join(filepath.Dir(mysqldBin), "mysql")
-	sql := "CREATE USER IF NOT EXISTS 'dev'@'%' IDENTIFIED WITH mysql_native_password BY 'dev';" +
+	sql := "CREATE USER IF NOT EXISTS 'dev'@'%' IDENTIFIED WITH caching_sha2_password BY 'dev';" +
 		"GRANT ALL PRIVILEGES ON *.* TO 'dev'@'%' WITH GRANT OPTION;" +
 		"CREATE DATABASE IF NOT EXISTS app;FLUSH PRIVILEGES;"
 	var lastErr error

@@ -113,9 +113,9 @@ mysql -udev@pr-1 -pdev -h 127.0.0.1 -P3306   # :3306 固定エンドポイント
 ストレージは **APFS `clonefile`**、mysqld は **systemd を使わず直接 spawn**(process モード)。
 
 ```bash
-brew install mysql@8.0     # backend の dev ユーザーが native_password を要るため 8.0 を推奨
-                           # (proxy→backend は native、MySQL 9.x は native を廃止。クライアント側は
-                           #  caching_sha2 に対応済み #197 なので接続元ドライバは 8.0 既定でよい)
+brew install mysql@8.0     # 8.0 / 8.4 / 9.x いずれでも可(app_user は caching_sha2 で作り、
+                           # proxy→backend も caching_sha2 なので 8.4 の native 既定 OFF /
+                           # 9.x の native 廃止でも動く。クライアント側も caching_sha2/native 両対応)
 curl -fsSL https://raw.githubusercontent.com/rikukaInoue/sashiki/main/install.sh | bash
 sashiki init --platform darwin --yes   # mysql@8.0 検出・base 初期化・baseline・config・launchd 常駐
 sashiki create pr-1
@@ -301,7 +301,7 @@ sashiki は「汎用エンジン + MySQL/PR の完成した adapter」。コア�
 | | 状態 |
 |---|---|
 | MySQL + GitHub PR プレビュー | ✅ 実機検証済み(create / reset / recreate / delete / lazy create / proxy / baseline 更新 / スキーマ比較) |
-| macOS ネイティブ(APFS + process) | ✅ 実機検証済み(VM 無し。要 mysql@8.0)。`sashiki init --platform darwin` |
+| macOS ネイティブ(APFS + process) | ✅ 実機検証済み(VM 無し。MySQL 8.0 / 8.4 で実機確認、9.x も同プロトコル)。`sashiki init --platform darwin` |
 | コンテナ(XFS reflink, VM 無し) | ✅ 実機検証済み(sashikid フルコンテナ化。create / reset / delete / lazy create。Docker 互換ランタイム全般。[deploy/orbstack/](deploy/orbstack/)) |
 | PostgreSQL | 🔶 engine 対応。接続は**直接ポートのみ**(proxy / lazy create は MySQL のみ) |
 | EBS-ZFS バックエンド | ✅ default(Linux)。単一ホスト |

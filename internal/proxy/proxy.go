@@ -11,7 +11,12 @@ package proxy
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha1"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log"
@@ -288,7 +293,9 @@ func enableKeepAlive(c net.Conn) {
 }
 
 // authenticateBackend は sashiki がクライアントとして backend mysqld へ
-// mysql_native_password で認証する(方式A)。backend の dev は native_password。
+// caching_sha2_password で認証する(方式A)。backend の dev は caching_sha2 で
+// 作成される(#version-compat)。平文 TCP の cold cache では full-auth になるため
+// RSA 公開鍵でパスワードを送る。AuthSwitch には plugin にあわせて応答する。
 func (s *Server) authenticateBackend(backend net.Conn, clientCaps uint32, database string) error {
 	bhs, err := readPacket(backend)
 	if err != nil {
@@ -315,8 +322,12 @@ func (s *Server) authenticateBackend(backend net.Conn, clientCaps uint32, databa
 	} else {
 		hr.caps &^= capConnectWithDB
 	}
-	token := nativeToken(s.cfg.AppPassword, salt)
-	resp := buildBackendHandshakeResponse(hr, backendCaps, s.cfg.AppUser, token, nativePlugin)
+	// backend の dev は caching_sha2_password で作成される(MySQL 8.0/8.4/9.x 共通。
+	// 8.4 は native 既定 OFF、9.x は native 廃止のため、#version-compat)。初回応答は
+	// caching_sha2 の fast-auth スクランブル。nonce は AuthSwitch で更新され得る。
+	nonce := salt
+	token := cachingSha2Token(s.cfg.AppPassword, nonce)
+	resp := buildBackendHandshakeResponse(hr, backendCaps, s.cfg.AppUser, token, sha2Plugin)
 	if err := writePacket(backend, packet{seq: bhs.seq + 1, body: resp}); err != nil {
 		return err
 	}
@@ -330,9 +341,26 @@ func (s *Server) authenticateBackend(backend net.Conn, clientCaps uint32, databa
 			return nil
 		case isErr(p.body):
 			return fmt.Errorf("backend rejected app credential: %s", errText(p.body))
-		case len(p.body) > 0 && p.body[0] == 0xfe: // AuthSwitchRequest → native で応答し直す
-			swSalt := parseAuthSwitchSalt(p.body)
-			tok := nativeToken(s.cfg.AppPassword, swSalt)
+		case len(p.body) >= 2 && p.body[0] == 0x01: // AuthMoreData(caching_sha2)
+			switch p.body[1] {
+			case 0x03: // fast_auth_success → 次は OK
+				continue
+			case 0x04: // perform_full_authentication → 平文 TCP なので RSA 公開鍵で送る
+				if err := s.backendFullAuthRSA(backend, p.seq+1, nonce); err != nil {
+					return err
+				}
+			default:
+				return fmt.Errorf("unexpected caching_sha2 auth status 0x%02x", p.body[1])
+			}
+		case len(p.body) > 0 && p.body[0] == 0xfe: // AuthSwitchRequest → 指定 plugin で応答
+			plugin, swSalt := parseAuthSwitch(p.body)
+			nonce = swSalt
+			var tok []byte
+			if plugin == nativePlugin {
+				tok = nativeToken(s.cfg.AppPassword, swSalt)
+			} else {
+				tok = cachingSha2Token(s.cfg.AppPassword, swSalt)
+			}
 			if err := writePacket(backend, packet{seq: p.seq + 1, body: tok}); err != nil {
 				return err
 			}
@@ -342,16 +370,67 @@ func (s *Server) authenticateBackend(backend net.Conn, clientCaps uint32, databa
 	}
 }
 
-// parseAuthSwitchSalt は AuthSwitchRequest(0xfe + plugin\0 + salt)から salt を取る。
-func parseAuthSwitchSalt(body []byte) []byte {
+// backendFullAuthRSA は caching_sha2 の full-auth を平文接続で完了させる。公開鍵を
+// 要求(0x02)→ PEM 受領 → パスワード(null 終端)を nonce で XOR して RSA-OAEP で
+// 暗号化して送る(TLS 無しでも安全に送るための標準手順)。
+func (s *Server) backendFullAuthRSA(backend net.Conn, seq byte, nonce []byte) error {
+	if err := writePacket(backend, packet{seq: seq, body: []byte{0x02}}); err != nil {
+		return err
+	}
+	p, err := readPacket(backend)
+	if err != nil {
+		return fmt.Errorf("read backend rsa public key: %w", err)
+	}
+	if len(p.body) < 2 || p.body[0] != 0x01 {
+		return fmt.Errorf("unexpected backend public-key packet 0x%02x", firstByte(p.body))
+	}
+	block, _ := pem.Decode(p.body[1:])
+	if block == nil {
+		return fmt.Errorf("backend public key not PEM")
+	}
+	pubAny, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return fmt.Errorf("parse backend public key: %w", err)
+	}
+	pub, ok := pubAny.(*rsa.PublicKey)
+	if !ok {
+		return fmt.Errorf("backend public key is not RSA")
+	}
+	if len(nonce) == 0 {
+		return fmt.Errorf("empty auth nonce for backend full-auth")
+	}
+	plain := append([]byte(s.cfg.AppPassword), 0) // null 終端
+	xored := make([]byte, len(plain))
+	for i := range plain {
+		xored[i] = plain[i] ^ nonce[i%len(nonce)]
+	}
+	enc, err := rsa.EncryptOAEP(sha1.New(), rand.Reader, pub, xored, nil)
+	if err != nil {
+		return fmt.Errorf("rsa encrypt backend password: %w", err)
+	}
+	return writePacket(backend, packet{seq: p.seq + 1, body: enc})
+}
+
+func firstByte(b []byte) byte {
+	if len(b) == 0 {
+		return 0
+	}
+	return b[0]
+}
+
+// parseAuthSwitch は AuthSwitchRequest(0xfe + plugin\0 + salt)から plugin 名と
+// salt を取る。
+func parseAuthSwitch(body []byte) (plugin string, salt []byte) {
 	pos := 1
+	start := pos
 	for pos < len(body) && body[pos] != 0 { // plugin name
 		pos++
 	}
+	plugin = string(body[start:pos])
 	pos++ // null
-	salt := body[pos:]
+	salt = body[pos:]
 	for len(salt) > 0 && salt[len(salt)-1] == 0 { // 末尾 null を落とす
 		salt = salt[:len(salt)-1]
 	}
-	return salt
+	return plugin, salt
 }

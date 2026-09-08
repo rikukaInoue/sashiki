@@ -145,6 +145,30 @@ func TestBackendHandshakeResponseKeepsUserAndDB(t *testing.T) {
 	}
 }
 
+func TestParseAuthSwitch(t *testing.T) {
+	// 0xfe + plugin\0 + salt(+末尾 null)
+	salt := bytes.Repeat([]byte{0x07}, 20)
+	body := []byte{0xfe}
+	body = append(body, []byte("mysql_native_password")...)
+	body = append(body, 0)
+	body = append(body, salt...)
+	body = append(body, 0)
+	plugin, got := parseAuthSwitch(body)
+	if plugin != "mysql_native_password" {
+		t.Errorf("plugin = %q", plugin)
+	}
+	if !bytes.Equal(got, salt) {
+		t.Errorf("salt = %x, want %x", got, salt)
+	}
+	// caching_sha2 でも取れる
+	body2 := append([]byte{0xfe}, []byte("caching_sha2_password")...)
+	body2 = append(body2, 0)
+	body2 = append(body2, salt...)
+	if p2, _ := parseAuthSwitch(body2); p2 != "caching_sha2_password" {
+		t.Errorf("plugin2 = %q", p2)
+	}
+}
+
 func TestErrPacket(t *testing.T) {
 	b := buildErr(1049, "42000", "Unknown branch 'x'")
 	if !isErr(b) {
