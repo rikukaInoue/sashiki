@@ -524,6 +524,10 @@ func runLocalBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 }
 
 func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
+	// postgres は initdb / psql / pg_restore を使う別経路(baseline_postgres.go、#223)。
+	if cfg.Engine.Type == "postgres" {
+		return runPostgresBaselineImport(cfg, opts)
+	}
 	// apfs / reflink はローカル CoW backend(zfs コマンドを使わない)。
 	if cfg.Storage.Backend == "apfs" || cfg.Storage.Backend == "reflink" {
 		return runLocalBaselineImport(cfg, opts)

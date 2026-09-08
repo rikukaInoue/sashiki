@@ -37,24 +37,6 @@ zfs create -o recordsize=8k -o logbias=throughput $POOL/base
 # branch_parent にも recordsize=8k が必要
 zfs create -o recordsize=8k -o logbias=throughput $POOL/branches
 
-log "base postgres"
-mkdir -p /$POOL/base/data
-chown -R postgres:postgres /$POOL/base
-chmod 700 /$POOL/base/data
-sudo -u postgres $PGBIN/initdb -D /$POOL/base/data --auth-host=trust --auth-local=trust > /dev/null
-sudo -u postgres $PGBIN/pg_ctl start -D /$POOL/base/data -o "-p 5499 -c listen_addresses=127.0.0.1 -c unix_socket_directories=/tmp" -w > /dev/null
-sudo -u postgres psql -h 127.0.0.1 -p 5499 -d postgres <<'SQL' > /dev/null
-CREATE ROLE dev LOGIN SUPERUSER;
-CREATE DATABASE app OWNER dev;
-SQL
-sudo -u postgres psql -h 127.0.0.1 -p 5499 -d app <<'SQL' > /dev/null
-CREATE TABLE items (id SERIAL PRIMARY KEY, name TEXT);
-INSERT INTO items (name) VALUES ('alpha'), ('beta'), ('gamma');
-SQL
-# 正常終了してから snapshot を取得する(不変条件)
-sudo -u postgres $PGBIN/pg_ctl stop -D /$POOL/base/data -m fast -w > /dev/null
-zfs snapshot $POOL/base@baseline
-
 log "install unit + config + start sashikid"
 install -m 755 "$SASHIKID_BIN" /usr/local/bin/sashikid-pg
 install -m 755 "$SASHIKI_BIN" /usr/local/bin/sashiki-pg
@@ -99,6 +81,21 @@ hooks:
   dir: /etc/sashiki-pg/hooks
   log_dir: /var/log/sashiki-pg/hooks
 YAML
+
+log "baseline import (#223)"
+# 手で initdb する代わりに sashiki baseline import を使う。initdb → ダンプ投入 →
+# ロール作成 → 正常終了 → snapshot までを実コマンドで通し、これ自体を検証する。
+cat > /var/tmp/sashiki-pg-dump.sql <<'SQL'
+CREATE TABLE items (id SERIAL PRIMARY KEY, name TEXT);
+INSERT INTO items (name) VALUES ('alpha'), ('beta'), ('gamma');
+SQL
+mkdir -p /$POOL/base
+chown postgres:postgres /$POOL/base
+sashiki-pg baseline import --config /etc/sashiki-pg/config.yaml \
+  --from /var/tmp/sashiki-pg-dump.sql --db app || fail "baseline import が失敗した"
+zfs list -t snapshot $POOL/base@baseline > /dev/null || fail "@baseline が取得されていない"
+echo "  @baseline を取得済み"
+
 /usr/local/bin/sashikid-pg --config /etc/sashiki-pg/config.yaml > /var/log/sashiki-pg/sashikid.log 2>&1 &
 SASHIKID_PID=$!
 trap 'kill $SASHIKID_PID 2>/dev/null || true' EXIT
@@ -106,7 +103,9 @@ for _ in $(seq 1 30); do curl -sf http://127.0.0.1:8090/v1/healthz > /dev/null 2
 curl -sf http://127.0.0.1:8090/v1/healthz > /dev/null || fail "sashikid did not start"
 
 export SASHIKI_API_URL=http://127.0.0.1:8090
-q() { sudo -u postgres psql -h 127.0.0.1 -p "$1" -d app -t -A -c "$2" 2>/dev/null; }
+# import が host 認証を scram-sha-256 にするので、直ポート接続もパスワードが要る
+# (以前の手動 initdb は trust だった)。dev ロールのパスワードは app_pass。
+q() { PGPASSWORD=dev psql -h 127.0.0.1 -p "$1" -U dev -d app -t -A -c "$2" 2>/dev/null; }
 
 log "create pg-1"
 time sashiki-pg create pg-1
