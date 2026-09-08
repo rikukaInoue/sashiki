@@ -61,7 +61,14 @@ install -m 755 "$SASHIKI_BIN" /usr/local/bin/sashiki-pg
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 UNIT_SRC="$SCRIPT_DIR/../../deploy/systemd/postgres-sashiki@.service"
 [ -f "$UNIT_SRC" ] || UNIT_SRC="$SCRIPT_DIR/postgres-sashiki@.service"
-sed "s|/etc/sashiki/%i.env|/etc/sashiki-pg/%i.env|" "$UNIT_SRC" > /etc/systemd/system/postgres-sashiki@.service
+# EnvironmentFile を e2e 専用ディレクトリ(config の env_dir)へ向ける。unit 側の
+# 既定パスは変わり得る(#177 で /etc/sashiki → /run/sashiki へ移動した)ので、
+# 特定パスではなく行ごと置換し、置換できたことを検証する。パターン不一致で
+# 無言の no-op になると env が読まれず systemd の起動が謎に失敗するため。
+sed -E "s|^EnvironmentFile=.*|EnvironmentFile=/etc/sashiki-pg/%i.env|" "$UNIT_SRC" \
+  > /etc/systemd/system/postgres-sashiki@.service
+grep -q '^EnvironmentFile=/etc/sashiki-pg/%i.env$' /etc/systemd/system/postgres-sashiki@.service \
+  || fail "unit の EnvironmentFile を書き換えられなかった ($UNIT_SRC)"
 systemctl daemon-reload
 
 cat > /etc/sashiki-pg/config.yaml <<YAML
