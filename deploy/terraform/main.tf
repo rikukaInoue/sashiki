@@ -25,8 +25,9 @@ locals {
   tags     = merge(var.tags, { "app" = "sashiki", "Name" = var.name })
   # sashiki_ref: 明示指定が無ければモジュール同梱の VERSION(= その module ref の
   # タグ)を使う。これで利用側は source の ?ref= を固定するだけでよく、ref の二重
-  # 指定(#193)が消える(#199)。
-  sashiki_ref = var.sashiki_ref != "" ? var.sashiki_ref : trimspace(file("${path.module}/VERSION"))
+  # 指定(#193)が消える(#199)。VERSION は release-please が更新するため
+  # `0.5.0 # x-release-please-version` の形。先頭トークンだけ取り出し `v` を前置する。
+  sashiki_ref = var.sashiki_ref != "" ? var.sashiki_ref : "v${trimspace(split(" ", file("${path.module}/VERSION"))[0])}"
 }
 
 # --- secrets: dev パスワード(Secrets Manager)/ API トークン(SSM SecureString) ---

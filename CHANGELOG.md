@@ -3,7 +3,9 @@
 本プロジェクトのバージョニングは [Semantic Versioning](https://semver.org/lang/ja/) に従う。
 v0.x の間は API / config が安定しておらず、マイナー版で破壊的変更があり得る。
 
-## Unreleased
+> v0.6.0 以降のエントリは [release-please](https://github.com/googleapis/release-please) が
+> [Conventional Commits](https://www.conventionalcommits.org/) から自動生成する(手動編集不要)。
+> リリース手順は [docs/RELEASING.md](docs/RELEASING.md) を参照。v0.5.0 までは手書き。
 
 ## v0.5.0 — (2026-09-08)
 

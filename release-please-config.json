@@ -1,0 +1,31 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "go",
+      "package-name": "sashiki",
+      "include-v-in-tag": true,
+      "include-component-in-tag": false,
+      "changelog-path": "CHANGELOG.md",
+      "draft": false,
+      "prerelease": false,
+      "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": false,
+      "extra-files": [
+        { "type": "generic", "path": "deploy/terraform/VERSION" },
+        { "type": "generic", "path": "README.md" }
+      ]
+    }
+  },
+  "changelog-sections": [
+    { "type": "feat", "section": "Features" },
+    { "type": "fix", "section": "Bug Fixes" },
+    { "type": "perf", "section": "Performance" },
+    { "type": "refactor", "section": "Refactoring" },
+    { "type": "docs", "section": "Documentation" },
+    { "type": "revert", "section": "Reverts" },
+    { "type": "test", "section": "Tests", "hidden": true },
+    { "type": "ci", "section": "CI", "hidden": true },
+    { "type": "chore", "section": "Chores", "hidden": true }
+  ]
+}

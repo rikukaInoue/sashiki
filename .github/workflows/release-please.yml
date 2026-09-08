@@ -1,0 +1,53 @@
+name: release-please
+
+# リリース運用の中心。main への push ごとに release-please が
+# Conventional Commits を集計して「Release vX.Y.Z」PR を開き続ける。
+# その PR をマージした瞬間に、release-please がタグと GitHub Release(本文=
+# CHANGELOG の該当節)を作る。続けて同じ run 内で goreleaser が、その
+# タグにバイナリ(deb / tar.gz / darwin)を append する。
+#
+# なぜ 1 workflow に 2 job か: release-please が既定 GITHUB_TOKEN で作った
+# タグ push は他 workflow を起動しない(GitHub の再帰防止仕様)。そこで
+# goreleaser を needs でぶら下げ、release_created 出力で発火させる。
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: rp
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  goreleaser:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # release-please が作った Release に append する(本文=CHANGELOG は触らない)。
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
