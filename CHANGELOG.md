@@ -5,12 +5,25 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 
 ## Unreleased
 
-### Fixed
-- **reconcile: 再起動で中断された遷移中ブランチを回収する**。sashikid が create/reset/delete の途中でクラッシュすると、ブランチが `creating` / `resetting` / `deleting` 状態のまま取り残され、reaper(running/sleeping しか触らない)にも起動時 reconcile(running→sleeping と dataset 欠損のみ扱う)にも回収されず永久に使えなくなっていた。reconcile が `creating`→error(op=create, recoverable)/ `resetting`→error(op=reset, recoverable)/ `deleting`→削除を完了、として回収するようにした(error 状態は `sashiki retry` で再駆動できる)。`ReconcileReport.Interrupted` と起動ログに件数を追加。
+## v0.5.0 — (2026-09-08)
 
-### Added / Changed
+### Added
+- **caching_sha2_password 対応(#197)** — これまで proxy(認証終端方式)が `mysql_native_password` しか話せず「MySQL 8.0 で native を有効にした構成限定」だったのを解消。ハンドシェイクで `caching_sha2_password` を advertise し、クライアントの応答長(32B=caching_sha2 / 20B=native)で判定して検証、caching_sha2 成功時は `AuthMoreData(fast_auth_success)` + `OK` を返す。これで **MySQL 8.0 のデフォルト認証や 9.x(native 廃止)** のクライアント/baseline でそのまま繋がる。go-sql-driver / PyMySQL / mysql CLI(8.0)で実機検証。
+- **`auth.trust_loopback`(#198)** — 既定では loopback(127.0.0.1)からの API はトークン無しで通す(CLI 用)が、これを `false` にすると **loopback でも Bearer トークンを必須**にできる。同一ホストに信頼できない同居プロセスがいる環境向け。
+
+### Changed
 - **`baseline import` の高速化(#194)**: バルク投入セッションで `unique_checks` / `foreign_key_checks` / `sql_log_bin` を自動的に無効化する(セッション限定なので、import 後の実行時は FK/一意制約は通常どおり有効)。あわせて `--import-cnf <my.cnf>` を追加し、投入中だけ buffer pool や `innodb_flush_log_at_trx_commit` を緩めた mysqld で流し込める。実測(3M 行 / UNIQUE 索引 + FK、Apple Silicon): 約 25s → セッション変数のみ約 14.5s(-42%)→ `--import-cnf`(2G pool / trx_commit=0 / doublewrite off)併用で約 10s(-60%)。データ件数・FK 整合は不変。
 - **`baseline import` の並列投入(#194)**: `--from` にディレクトリを渡すと `*.sql` を並列投入する(mydumper 出力やテーブル単位の分割ダンプ向け)。名前に `schema` を含むファイルを先に順次投入して全テーブルを作り、残りのデータファイルを `--threads N`(既定 = CPU 数)の接続で並列に流す。実測(8 テーブル / 280 万行、Apple Silicon): 単一ファイル逐次 約 14s → ディレクトリ 8 並列 約 7s(約 2 倍)。件数・テーブル数は不変。
+- **baseline build の publish 経路も高速化(#194)**: `baseline build` が migration/seed を流し込む経路(`ApplyFile`)にも import と同じバルクロード用フラグを適用。大きな migration の投入が速くなる(build 用の使い捨て mysqld なのでセッション限定で安全)。
+- **Terraform: `sashiki_ref` を VERSION から導出(#199)**: モジュールに `deploy/terraform/VERSION` を同梱し、`sashiki_ref` 未指定時はそこから解決する。利用側は `source` の `?ref=vX.Y.Z` を固定するだけでよく、バイナリ版がモジュールと自動一致(ref の二重指定 #193 が不要に)。
+
+### Fixed
+- **reconcile: 再起動で中断された遷移中ブランチを回収する(#206)**。sashikid が create/reset/delete の途中でクラッシュすると、ブランチが `creating` / `resetting` / `deleting` 状態のまま取り残され、reaper(running/sleeping しか触らない)にも起動時 reconcile(running→sleeping と dataset 欠損のみ扱う)にも回収されず永久に使えなくなっていた。reconcile が `creating`→error(op=create, recoverable)/ `resetting`→error(op=reset, recoverable)/ `deleting`→削除を完了、として回収するようにした(error 状態は `sashiki retry` で再駆動できる)。`ReconcileReport.Interrupted` と起動ログに件数を追加。
+- **Terraform / install.sh の実戦修正(#192, #193)**: `apt-get` の dpkg ロック競合を待つ(`DPkg::Lock::Timeout`)/ `sashiki_ref` のピン留めを強調(module の `?ref=` と VERSION 由来値を一致させる)。
+
+### Docs
+- **apfs / reflink の per-branch quota ギャップ(#200)**: ZFS の `refquota` 相当が無いため `storage.default_storage_quota` が効かず、暴走ブランチへの storage admission は pool 使用率 watermark のみになることを `docs/LOCAL-DEV.md` に明記。
+- README にコンテナ利用手順を追記し、フルコンテナ対応を「完了」に(#191)。
 
 ## v0.4.2 — (2026-09-07)
 
