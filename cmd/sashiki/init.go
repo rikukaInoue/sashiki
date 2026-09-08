@@ -27,6 +27,7 @@ type initOpts struct {
 	yes          bool
 	platform     string // linux(既定) | darwin
 	root         string // darwin: storage.local.root(既定 ~/Library/Application Support/sashiki)
+	engine       string // mysql(既定) | postgres(#224)
 }
 
 // initStep は 1 ステップ。done が true を返したらスキップする。
@@ -37,7 +38,7 @@ type initStep struct {
 }
 
 func cmdInit(args []string) int {
-	opts := initOpts{pool: "dbpool", platform: runtime.GOOS}
+	opts := initOpts{pool: "dbpool", platform: runtime.GOOS, engine: "mysql"}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--pool":
@@ -64,6 +65,12 @@ func cmdInit(args []string) int {
 				return usage()
 			}
 			opts.root = args[i]
+		case "--engine":
+			i++
+			if i >= len(args) {
+				return usage()
+			}
+			opts.engine = args[i]
 		case "--skip-packages":
 			opts.skipPackages = true
 		case "--yes", "-y":
@@ -80,8 +87,18 @@ func cmdInit(args []string) int {
 		return exitError
 	}
 
-	steps := initSteps(opts)
-	fmt.Printf("sashiki init: pool=%s device=%s\n", opts.pool, orDash(opts.device))
+	var steps []initStep
+	switch opts.engine {
+	case "", "mysql":
+		opts.engine = "mysql"
+		steps = initSteps(opts)
+	case "postgres":
+		steps = initStepsPostgres(opts)
+	default:
+		fmt.Fprintf(os.Stderr, "sashiki init: --engine %q は未対応です (mysql | postgres)\n", opts.engine)
+		return exitError
+	}
+	fmt.Printf("sashiki init: engine=%s pool=%s device=%s\n", opts.engine, opts.pool, orDash(opts.device))
 	if !opts.yes {
 		fmt.Print("続行する? [y/N]: ")
 		var ans string
@@ -102,14 +119,19 @@ func cmdInit(args []string) int {
 			return exitError
 		}
 	}
-	fmt.Println(`
+	// baseline は mysql / postgres とも `sashiki baseline import` で作れる
+	// (postgres は #223 で対応)。手順を engine に依らず同じ形で案内する。
+	dump := "prod-dump.sql"
+	if opts.engine == "postgres" {
+		dump = "prod-dump.sql   # pg_dump のカスタム形式 / ディレクトリも可"
+	}
+	fmt.Printf(`
 init 完了。次のステップ:
-  1. ベースデータを投入して baseline の snapshot を取得する:
-       mysqld を ` + "`/" + opts.pool + "/base/data`" + ` で初期化・起動 → データ投入 → 正常終了 →
-       zfs snapshot ` + opts.pool + `/base@baseline
-     (examples/ の baseline スクリプト参照)
+  1. ベースデータを投入して baseline を作る:
+       sashiki baseline import --from %s
   2. sashikid を起動: systemctl enable --now sashikid
-  3. ブランチを作る: sashiki create pr-1`)
+  3. ブランチを作る: sashiki create pr-1
+`, dump)
 	return exitOK
 }
 

@@ -46,7 +46,7 @@ func usage() int {
   sashiki list   [--json]
   sashiki show   <name> [--json]
   sashiki connect <name>
-  sashiki init   --pool <p> [--device <dev>] [--skip-packages] [--yes]
+  sashiki init   --pool <p> [--device <dev>] [--engine mysql|postgres] [--skip-packages] [--yes]
   sashiki baseline import|list|refresh|promote|set|delete|build|validate|publish|gc   (詳細は sashiki baseline)
   sashiki token create|list|revoke
   sashiki op list | show <id> | wait <id>
