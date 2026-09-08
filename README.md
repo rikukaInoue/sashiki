@@ -1,8 +1,8 @@
 # sashiki
 
-![status](https://img.shields.io/badge/status-v0.4%20(public%20preview)-orange) ![license](https://img.shields.io/badge/license-Apache--2.0-blue)
+![status](https://img.shields.io/badge/status-v0.5%20(public%20preview)-orange) ![license](https://img.shields.io/badge/license-Apache--2.0-blue)
 
-> **成熟度**: v0.4(public preview)。MySQL + GitHub PR プレビューの経路は実機で検証済み。
+> **成熟度**: v0.5(public preview)。MySQL + GitHub PR プレビューの経路は実機で検証済み。
 > API / config は**まだ固定していない**(マイナー版で破壊的変更があり得る)。本番 DB には使わない。
 
 **開発環境向けの、ブランチできる RDS。**
@@ -113,8 +113,9 @@ mysql -udev@pr-1 -pdev -h 127.0.0.1 -P3306   # :3306 固定エンドポイント
 ストレージは **APFS `clonefile`**、mysqld は **systemd を使わず直接 spawn**(process モード)。
 
 ```bash
-brew install mysql@8.0     # 方式A プロキシは mysql_native_password を使うため 8.0 必須
-                           # (MySQL 9.x は native_password を廃止していて接続認証が通らない)
+brew install mysql@8.0     # backend の dev ユーザーが native_password を要るため 8.0 を推奨
+                           # (proxy→backend は native、MySQL 9.x は native を廃止。クライアント側は
+                           #  caching_sha2 に対応済み #197 なので接続元ドライバは 8.0 既定でよい)
 curl -fsSL https://raw.githubusercontent.com/rikukaInoue/sashiki/main/install.sh | bash
 sashiki init --platform darwin --yes   # mysql@8.0 検出・base 初期化・baseline・config・launchd 常駐
 sashiki create pr-1
@@ -215,7 +216,7 @@ PR open/reopen で create、close で delete。接続情報を出力するので
 
 ```hcl
 module "db" {
-  source = "github.com/rikukaInoue/sashiki//deploy/terraform?ref=v0.4.2"
+  source = "github.com/rikukaInoue/sashiki//deploy/terraform?ref=v0.5.0"
 
   name           = "myapp-preview"
   vpc_id         = var.vpc_id
@@ -295,7 +296,7 @@ sashiki は「汎用エンジン + MySQL/PR の完成した adapter」。コア�
 
 「設定 3 行で完成」ではなく「1 日で組めるフレームワーク」と考えてほしい。
 
-## 対応状況(v0.4)
+## 対応状況(v0.5)
 
 | | 状態 |
 |---|---|
@@ -307,7 +308,7 @@ sashiki は「汎用エンジン + MySQL/PR の完成した adapter」。コア�
 | FSx-ZFS / multi-host / Spot | 🔶 実装済み・**本番運用実績なし**。必要になったら(§FAQ) |
 | API / config の安定性 | ⚠️ 未固定。v0.x の間はマイナー版で破壊的変更があり得る |
 
-> **プロキシとドライバ**: `:3306` プロキシ(方式A)はクライアントの capability に追従するので、**DEPRECATE_EOF を要求しないドライバ(PHP mysqlnd / Node / PyMySQL 等)でも正しく動く**(v0.4.1 で修正、[#125](https://github.com/rikukaInoue/sashiki/issues/125))。go-sql-driver と合わせて実機検証済み。
+> **プロキシとドライバ**: `:3306` プロキシ(方式A)はクライアントの capability に追従するので、**DEPRECATE_EOF を要求しないドライバ(PHP mysqlnd / Node / PyMySQL 等)でも正しく動く**(v0.4.1 で修正、[#125](https://github.com/rikukaInoue/sashiki/issues/125))。また **`caching_sha2_password` を advertise する**ので、MySQL 8.0 既定認証や 9.x のクライアントもそのまま繋がる(v0.5.0、[#197](https://github.com/rikukaInoue/sashiki/issues/197)。backend の dev ユーザーは引き続き native)。go-sql-driver / PyMySQL / mysql CLI(8.0)で実機検証済み。
 
 ## 向かない用途
 
