@@ -91,8 +91,11 @@ INSERT INTO items (name) VALUES ('alpha'), ('beta'), ('gamma');
 SQL
 mkdir -p /$POOL/base
 chown postgres:postgres /$POOL/base
-sashiki-pg baseline import --config /etc/sashiki-pg/config.yaml \
-  --from /var/tmp/sashiki-pg-dump.sql --db app || fail "baseline import が失敗した"
+# timeout を噛ませる: 万一ぶら下がっても CI を待たせず、サーバログを添えて落とす。
+timeout 300 sashiki-pg baseline import --config /etc/sashiki-pg/config.yaml \
+  --from /var/tmp/sashiki-pg-dump.sql --db app \
+  || { echo "--- postgres baseline log ---"; tail -40 /tmp/sashiki-baseline-pg.log 2>/dev/null; \
+       fail "baseline import が失敗した"; }
 zfs list -t snapshot $POOL/base@baseline > /dev/null || fail "@baseline が取得されていない"
 echo "  @baseline を取得済み"
 

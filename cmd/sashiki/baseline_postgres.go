@@ -25,6 +25,9 @@ import (
 const (
 	pgBaselinePort   = "5499" // socket 名 .s.PGSQL.5499 に使うだけで LISTEN しない
 	pgBaselineSocket = "/tmp"
+	// サーバ出力の逃がし先。データセット内に置くと snapshot に含まれて
+	// 全ブランチへ複製されるので外に置く。
+	pgBaselineLog = "/tmp/sashiki-baseline-pg.log"
 )
 
 func runPostgresBaselineImport(cfg config.Config, opts baselineImportOpts) error {
@@ -88,8 +91,12 @@ func runPostgresBaselineImport(cfg config.Config, opts baselineImportOpts) error
 	fmt.Println("→ postgres 起動")
 	startOpts := fmt.Sprintf("-p %s -c listen_addresses='' -c unix_socket_directories=%s",
 		pgBaselinePort, pgBaselineSocket)
-	if err := runAsUser(uid, gid, pgCtl, "start", "-D", dataDir, "-o", startOpts, "-w"); err != nil {
-		return fmt.Errorf("pg_ctl start: %w", err)
+	// -l でサーバ出力をファイルへ逃がす。これが無いと postgres はデーモン化した
+	// あとも親から継いだ stdout/stderr を握り続けるため、出力をパイプで捕まえる
+	// 実行方法(CombinedOutput)だとパイプが閉じず永久にブロックする。
+	if err := runAsUserNoPipe(uid, gid, pgCtl, "start", "-D", dataDir,
+		"-o", startOpts, "-l", pgBaselineLog, "-w"); err != nil {
+		return fmt.Errorf("pg_ctl start: %w (詳細は %s)", err, pgBaselineLog)
 	}
 	stopped := false
 	defer func() {
@@ -161,17 +168,17 @@ func pgLoadDump(uid, gid uint32, psql, pgRestore, from, db string, threads int) 
 	if fi.IsDir() {
 		// pg_dump -Fd(ディレクトリ形式)。-j で並列復元できる。
 		fmt.Printf("→ ダンプ投入 (%s, ディレクトリ形式, %d 並列)\n", from, threads)
-		args := []string{"-d", db, "--no-owner", "-j", strconv.Itoa(max(threads, 1)), from}
+		args := []string{"-w", "-d", db, "--no-owner", "-j", strconv.Itoa(max(threads, 1)), from}
 		return runAsUserWithEnv(uid, gid, pgEnv(), pgRestore, args...)
 	}
 	if isPgCustomDump(from) {
 		fmt.Printf("→ ダンプ投入 (%s, カスタム形式)\n", from)
-		return runAsUserWithEnv(uid, gid, pgEnv(), pgRestore, "-d", db, "--no-owner", from)
+		return runAsUserWithEnv(uid, gid, pgEnv(), pgRestore, "-w", "-d", db, "--no-owner", from)
 	}
 	fmt.Printf("→ ダンプ投入 (%s, プレーン SQL)\n", from)
 	// ON_ERROR_STOP が無いと途中のエラーを黙って飛ばして「成功」してしまう。
 	return runAsUserWithEnv(uid, gid, pgEnv(), psql,
-		"-v", "ON_ERROR_STOP=1", "-d", db, "-f", from)
+		"-w", "-v", "ON_ERROR_STOP=1", "-d", db, "-f", from)
 }
 
 // isPgCustomDump は pg_dump のカスタム形式(先頭が "PGDMP")かを判定する。
@@ -191,12 +198,18 @@ func isPgCustomDump(path string) bool {
 // pgSQL は一時クラスタへ SQL を 1 本流す(local trust なのでパスワード不要)。
 func pgSQL(uid, gid uint32, psql, db, sql string) error {
 	return runAsUserWithEnv(uid, gid, pgEnv(), psql,
-		"-v", "ON_ERROR_STOP=1", "-d", db, "-c", sql)
+		"-w", "-v", "ON_ERROR_STOP=1", "-d", db, "-c", sql)
 }
 
-// pgEnv は一時クラスタへ unix socket 経由で繋ぐための環境変数。
+// pgEnv は一時クラスタへ unix socket 経由で繋ぐための環境変数。接続タイムアウトも
+// 入れて、繋がらないときに CI で無限に待たないようにする(psql/pg_restore には
+// -w も渡してパスワードプロンプトで固まるのを防いでいる)。
 func pgEnv() []string {
-	return []string{"PGHOST=" + pgBaselineSocket, "PGPORT=" + pgBaselinePort}
+	return []string{
+		"PGHOST=" + pgBaselineSocket,
+		"PGPORT=" + pgBaselinePort,
+		"PGCONNECT_TIMEOUT=10",
+	}
 }
 
 // pgBin は bin_dir 配下のツールを返す。bin_dir 未設定なら PATH に任せる。
@@ -228,6 +241,17 @@ func quoteIdent(s string) string {
 
 func quoteLiteral(s string) string {
 	return `'` + strings.ReplaceAll(s, `'`, `''`) + `'`
+}
+
+// runAsUserNoPipe は出力をパイプで捕まえずに実行する。pg_ctl start のように
+// 「子がデーモン化して親の stdout/stderr を握ったまま生き続ける」場合、
+// CombinedOutput はパイプが閉じるまで待ち続けて永久にブロックするため。
+func runAsUserNoPipe(uid, gid uint32, name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uid, Gid: gid}}
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 // runAsUserWithEnv は runAsUser に環境変数を足したもの(postgres のツールは
