@@ -360,10 +360,25 @@ func loadDumpDir(mysqlBin, sock, dir, db string, threads int) error {
 // caching_sha2(sashiki の既定 mysqld は 8.0+)。
 func authPluginFor(mysqlBin, sock string) string {
 	out, err := exec.Command(mysqlBin, "-uroot", "-S", sock, "-N", "-B", "-e", "SELECT @@version").Output()
-	if err == nil {
-		if major, ok := majorVersion(strings.TrimSpace(string(out))); ok && major < 8 {
-			return "mysql_native_password"
-		}
+	if err != nil {
+		return "caching_sha2_password" // 判定不能時の既定(sashiki の既定 mysqld は 8.0+)
+	}
+	return pluginForVersion(strings.TrimSpace(string(out)))
+}
+
+// pluginForVersion は @@version 文字列から app_user の認証プラグインを選ぶ(純関数)。
+//   - MariaDB(10.x/11.x など)は caching_sha2 を持たない(native / ed25519)ので native。
+//     ※ MariaDB は best-effort。他の挙動は未検証で正式サポート対象ではない。
+//   - MySQL 5.7 等(major<8)も caching_sha2 が 8.0 追加のため無く native。
+//   - MySQL 8.0+(8.1〜8.3 / 8.4 / 9.x)は caching_sha2(8.4 native 既定 OFF・9.x native 廃止)。
+//
+// major は 10 でも MariaDB 名を先に見るので、MariaDB を MySQL 8+ と誤判定しない(#version-compat)。
+func pluginForVersion(v string) string {
+	if strings.Contains(v, "MariaDB") {
+		return "mysql_native_password"
+	}
+	if major, ok := majorVersion(v); ok && major < 8 {
+		return "mysql_native_password"
 	}
 	return "caching_sha2_password"
 }

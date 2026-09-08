@@ -113,10 +113,11 @@ mysql -udev@pr-1 -pdev -h 127.0.0.1 -P3306   # :3306 固定エンドポイント
 ストレージは **APFS `clonefile`**、mysqld は **systemd を使わず直接 spawn**(process モード)。
 
 ```bash
-brew install mysql@8.0     # 5.7 / 8.0〜8.4 / 9.x いずれでも可。app_user は backend の版に
-                           # 応じて 8.0+ は caching_sha2 / 5.7 は native で作る(8.4 は native
+brew install mysql@8.0     # MySQL 8.0〜8.4 / 9.x を推奨(実機検証は 8.0 / 8.4)。app_user は
+                           # backend の版で 8.0+=caching_sha2 / 5.7=native を選ぶ(8.4 は native
                            # 既定 OFF、9.x は native 廃止)。proxy→backend もそれに追従。
-                           # クライアント側も caching_sha2/native 両対応(#197)
+                           # MySQL 5.7 は best-effort(EOL・未検証。動くはず)。
+                           # MariaDB は caching_sha2 非対応で native を選ぶが、他挙動が未検証のため非対応。
 curl -fsSL https://raw.githubusercontent.com/rikukaInoue/sashiki/main/install.sh | bash
 sashiki init --platform darwin --yes   # mysql@8.0 検出・base 初期化・baseline・config・launchd 常駐
 sashiki create pr-1
