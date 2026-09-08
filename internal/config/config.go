@@ -84,15 +84,35 @@ type Engine struct {
 }
 
 // PostgresEngine は postgres エンジンの設定。
-// 注意: プロトコルプロキシは MySQL 専用のため、postgres ブランチへの接続は
-// 直接ポート(sashiki show <name>)になる。リモート接続する場合は
-// listen_addresses を広げ、base の pg_hba.conf に host 行を入れておくこと。
+// 注意: プロトコルプロキシは現状 MySQL 専用のため、postgres ブランチへの接続は
+// 直接ポート(sashiki show <name>)になる(#222 で pgproxy 予定)。リモート接続する
+// 場合は listen_addresses を広げ、base の pg_hba.conf に host 行を入れておくこと。
 type PostgresEngine struct {
 	PortRange       [2]int `yaml:"port_range"` // 既定 [5433, 5632]
 	BinDir          string `yaml:"bin_dir"`    // 既定 /usr/lib/postgresql/16/bin
 	EnvDir          string `yaml:"env_dir"`
 	ListenAddresses string `yaml:"listen_addresses"` // 既定 127.0.0.1
 	Sudo            bool   `yaml:"sudo"`
+	// AppUser / AppPass はブランチへ接続するアプリ用ロール(mysql の app_user 相当)。
+	// baseline import / provisioning がこの名前でロールを作り、将来 pgproxy が
+	// `<app_user>@<branch>` のルーティングとパスワード検証に使う(#222/#223/#224)。
+	AppUser string `yaml:"app_user"`
+	AppPass string `yaml:"app_pass"`
+	// Mode は起動方式。"systemd"(既定)か "process"(systemd の無い環境で postgres を
+	// 直接 spawn、#227)。
+	Mode string `yaml:"mode"`
+	// RunUser は root で sashikid を動かすときに降格する OS ユーザー。postgres は
+	// root では起動を拒むため既定 "postgres"。
+	RunUser string `yaml:"run_user"`
+	// SharedBuffers は mysql の buffer_pool_size 相当。メモリ admission の見積もりと
+	// 起動パラメータに使う。
+	SharedBuffers string `yaml:"shared_buffers"`
+	// ExpectedRSS / MemoryHeadroom / MaxRunning は mysql と同じ意味のメモリ admission。
+	ExpectedRSS    string `yaml:"expected_rss"`
+	MemoryHeadroom string `yaml:"memory_headroom"`
+	MaxRunning     int    `yaml:"max_running"`
+	// InitdbArgs は baseline 構築時の initdb 追加引数(locale / encoding / checksums 等、#223)。
+	InitdbArgs []string `yaml:"initdb_args"`
 }
 
 // MysqlEngine は mysql エンジンの設定。
@@ -226,6 +246,10 @@ func Default() Config {
 				EnvDir:          "/etc/sashiki",
 				ListenAddresses: "127.0.0.1",
 				Sudo:            true,
+				AppUser:         "dev",
+				AppPass:         "dev",
+				RunUser:         "postgres",
+				SharedBuffers:   "128M",
 			},
 		},
 		Proxy: Proxy{MaxConnPerBranch: 50},
@@ -354,6 +378,13 @@ func (c Config) Validate() error {
 			return fmt.Errorf("engine.postgres.port_range must be [low, high]")
 		}
 	}
+	// mode は未設定(= systemd)を許しつつ、綴り間違いは弾く(#225)。
+	if m := c.Engine.Mysql.Mode; m != "" && m != "systemd" && m != "process" {
+		return fmt.Errorf("engine.mysql.mode %q is not supported (systemd | process)", m)
+	}
+	if m := c.Engine.Postgres.Mode; m != "" && m != "systemd" && m != "process" {
+		return fmt.Errorf("engine.postgres.mode %q is not supported (systemd | process)", m)
+	}
 	return nil
 }
 
@@ -363,4 +394,85 @@ func (c Config) PortRange() [2]int {
 		return c.Engine.Postgres.PortRange
 	}
 	return c.Engine.Mysql.PortRange
+}
+
+// 以降は「選択中エンジンの設定」を engine 非依存に取り出すアクセサ(#225)。
+// 呼び出し側(sashikid の admission 配線など)が Engine.Mysql.* を直接読むと
+// postgres で常に既定値/ゼロになってしまうため、ここで一段挟む。
+
+// AppUser はブランチへ接続するアプリ用ユーザー/ロール名を返す。
+func (c Config) AppUser() string {
+	if c.Engine.Type == "postgres" {
+		return c.Engine.Postgres.AppUser
+	}
+	return c.Engine.Mysql.ProxyUser // normalize で app_user が反映済み
+}
+
+// AppPass は AppUser のパスワードを返す。
+func (c Config) AppPass() string {
+	if c.Engine.Type == "postgres" {
+		return c.Engine.Postgres.AppPass
+	}
+	return c.Engine.Mysql.ProxyPass
+}
+
+// EngineMode は起動方式("systemd" か "process")を返す。未設定は "systemd"。
+func (c Config) EngineMode() string {
+	m := c.Engine.Mysql.Mode
+	if c.Engine.Type == "postgres" {
+		m = c.Engine.Postgres.Mode
+	}
+	if m == "" {
+		return "systemd"
+	}
+	return m
+}
+
+// EngineEnvDir は per-branch の env ファイルを書くディレクトリを返す。
+func (c Config) EngineEnvDir() string {
+	if c.Engine.Type == "postgres" {
+		return c.Engine.Postgres.EnvDir
+	}
+	return c.Engine.Mysql.EnvDir
+}
+
+// EngineRunUser は root 起動時に降格する OS ユーザーを返す。
+func (c Config) EngineRunUser() string {
+	if c.Engine.Type == "postgres" {
+		return c.Engine.Postgres.RunUser
+	}
+	return c.Engine.Mysql.RunUser
+}
+
+// ExpectedRSS は 1 インスタンスあたりの想定 RSS(メモリ admission 用)を返す。
+func (c Config) ExpectedRSS() string {
+	if c.Engine.Type == "postgres" {
+		return c.Engine.Postgres.ExpectedRSS
+	}
+	return c.Engine.Mysql.ExpectedRSS
+}
+
+// MemoryHeadroom は空けておくメモリ量を返す。
+func (c Config) MemoryHeadroom() string {
+	if c.Engine.Type == "postgres" {
+		return c.Engine.Postgres.MemoryHeadroom
+	}
+	return c.Engine.Mysql.MemoryHeadroom
+}
+
+// MemoryBaselineSize はインスタンスが確保する主バッファのサイズを返す
+// (mysql は buffer_pool_size、postgres は shared_buffers)。
+func (c Config) MemoryBaselineSize() string {
+	if c.Engine.Type == "postgres" {
+		return c.Engine.Postgres.SharedBuffers
+	}
+	return c.Engine.Mysql.BufferPoolSize
+}
+
+// MaxRunning は同時に起動してよいインスタンス数の上限(0 は無制限)を返す。
+func (c Config) MaxRunning() int {
+	if c.Engine.Type == "postgres" {
+		return c.Engine.Postgres.MaxRunning
+	}
+	return c.Engine.Mysql.MaxRunning
 }

@@ -683,7 +683,7 @@ storage:
     mount_root: /mnt/sashiki
 
 engine:
-  type: mysql
+  type: mysql                     # mysql | postgres
   mysql:
     binary: /usr/sbin/mysqld
     port_range: [3401, 3600]
@@ -691,6 +691,19 @@ engine:
     expected_rss: 600M
     memory_headroom: 1G
     app_user: dev                 # baseline に作っておく
+  postgres:                       # engine.type: postgres のときに読まれる
+    port_range: [5433, 5632]
+    bin_dir: /usr/lib/postgresql/16/bin
+    listen_addresses: 127.0.0.1
+    app_user: dev                 # baseline に作っておくロール(mysql の app_user 相当)
+    app_pass: dev
+    shared_buffers: 128M          # mysql の buffer_pool_size 相当
+    expected_rss: 600M            # 以下 3 つは mysql と同じ意味のメモリ admission
+    memory_headroom: 1G
+    max_running: 10
+    mode: systemd                 # systemd | process(process は #227 で対応予定)
+    run_user: postgres            # root 起動時に降格する OS ユーザー
+    initdb_args: []               # baseline 構築時の initdb 追加引数(#223)
 
 branches:
   name_pattern: "^[a-z0-9-]{1,32}$"

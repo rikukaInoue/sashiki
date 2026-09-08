@@ -167,26 +167,28 @@ func main() {
 	hr := hooks.NewRunner(cfg.Hooks.Dir, cfg.Hooks.LogDir, cfg.Hooks.Timeout)
 
 	mgr, err := workspace.New(workspace.Config{
-		NamePattern:              cfg.Branches.NamePattern,
-		MaxBranches:              cfg.Branches.MaxBranches,
-		PortLow:                  cfg.PortRange()[0],
-		PortHigh:                 cfg.PortRange()[1],
-		EngineType:               cfg.Engine.Type,
-		MysqldBin:                cfg.Engine.Mysql.MysqldBin,
-		MysqlExtraCnf:            cfg.Engine.Mysql.ExtraCnf,
-		StateDir:                 "/var/lib/sashiki/branches",
-		LazyCreate:               cfg.Branches.LazyCreate,
-		LazyMaxWait:              cfg.Branches.LazyCreateMaxWait,
-		IdleStopAfter:            cfg.Branches.IdleStopAfter,
-		DeleteAfterIdle:          cfg.Branches.DeleteAfterIdle,
-		OperationRetention:       cfg.Branches.OperationRetention,
-		Profiles:                 profilePolicies(cfg.Branches.Profiles),
-		DefaultProfile:           cfg.Branches.DefaultProfile,
-		AvailableMem:             availableMem,
-		ExpectedRSSBytes:         parseSize(cfg.Engine.Mysql.ExpectedRSS),
-		MemoryHeadroomBytes:      parseSize(cfg.Engine.Mysql.MemoryHeadroom),
-		BufferPoolBytes:          parseSize(cfg.Engine.Mysql.BufferPoolSize),
-		MaxRunning:               cfg.Engine.Mysql.MaxRunning,
+		NamePattern:        cfg.Branches.NamePattern,
+		MaxBranches:        cfg.Branches.MaxBranches,
+		PortLow:            cfg.PortRange()[0],
+		PortHigh:           cfg.PortRange()[1],
+		EngineType:         cfg.Engine.Type,
+		MysqldBin:          cfg.Engine.Mysql.MysqldBin,
+		MysqlExtraCnf:      cfg.Engine.Mysql.ExtraCnf,
+		StateDir:           "/var/lib/sashiki/branches",
+		LazyCreate:         cfg.Branches.LazyCreate,
+		LazyMaxWait:        cfg.Branches.LazyCreateMaxWait,
+		IdleStopAfter:      cfg.Branches.IdleStopAfter,
+		DeleteAfterIdle:    cfg.Branches.DeleteAfterIdle,
+		OperationRetention: cfg.Branches.OperationRetention,
+		Profiles:           profilePolicies(cfg.Branches.Profiles),
+		DefaultProfile:     cfg.Branches.DefaultProfile,
+		AvailableMem:       availableMem,
+		// メモリ admission は engine 非依存のアクセサ経由で取る(#225)。
+		// 直接 Engine.Mysql.* を読むと postgres で 0 になり admission が無効化される。
+		ExpectedRSSBytes:         parseSize(cfg.ExpectedRSS()),
+		MemoryHeadroomBytes:      parseSize(cfg.MemoryHeadroom()),
+		BufferPoolBytes:          parseSize(cfg.MemoryBaselineSize()),
+		MaxRunning:               cfg.MaxRunning(),
 		HighWatermark:            cfg.Storage.HighWatermark,
 		CriticalWatermark:        cfg.Storage.CriticalWatermark,
 		BaselineKeepLast:         cfg.Baseline.KeepLast,
@@ -198,7 +200,9 @@ func main() {
 	}
 
 	token := resolveAPIToken(cfg)
-	srv := api.New(mgr, cfg.Domain, cfg.Engine.Type, cfg.Engine.Mysql.ProxyUser, cfg.Engine.Mysql.ProxyPass, token, db)
+	// app credential も engine 非依存に取る(#225)。postgres では
+	// engine.postgres.app_user/app_pass を使う(従来は mysql 側を読んでいた)。
+	srv := api.New(mgr, cfg.Domain, cfg.Engine.Type, cfg.AppUser(), cfg.AppPass(), token, db)
 	srv.SetOps(ops.New(db))
 	srv.SetTrustLoopback(cfg.Auth.TrustLoopback)
 	mgr.SetBaselinePolicy(workspace.RefreshConfig{
