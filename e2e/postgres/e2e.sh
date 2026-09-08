@@ -74,7 +74,7 @@ systemctl daemon-reload
 cat > /etc/sashiki-pg/config.yaml <<YAML
 listen:
   api: "127.0.0.1:8090"
-  proxy: ""
+  proxy: "127.0.0.1:15432"
 state_db: /var/lib/sashiki-pg/state.db
 storage:
   backend: ebs-zfs
@@ -90,6 +90,8 @@ engine:
     bin_dir: $PGBIN
     env_dir: /etc/sashiki-pg
     sudo: false
+    app_user: dev
+    app_pass: dev
 branches:
   name_pattern: "^[a-z0-9-]{1,32}$"
   max_branches: 5
@@ -124,6 +126,23 @@ grep -qi "database system was not properly shut down" <<<"$pg_journal" \
 # チェック自体が生きていることの確認: 正常起動ログは journal に必ず出る
 grep -qi "database system is ready to accept connections" <<<"$pg_journal" \
   || fail "journal に postgres のログが見つからない(crash recovery チェックが機能していない)"
+
+log "pgproxy: 固定エンドポイント経由 + lazy create (#222)"
+# 未作成の pg-2 へ dev@pg-2 で接続すると、認証(SCRAM-SHA-256)が通ってから
+# lazy create されてそのブランチに繋がる。psql は既定で SSL を試すので、
+# proxy が 'N' を返して平文へ落ちる経路も同時に確認できる。
+pq() { PGPASSWORD=dev psql -h 127.0.0.1 -p 15432 -U "$1" -d app -t -A -c "$2" 2>&1; }
+proxy_count=$(pq 'dev@pg-2' 'SELECT COUNT(*) FROM items') \
+  || fail "proxy 経由の接続に失敗: $proxy_count"
+[ "$proxy_count" = "3" ] || fail "proxy 経由で 3 件見えるはず (got: $proxy_count)"
+sashiki-pg show pg-2 > /dev/null || fail "lazy create で pg-2 が作られるはず"
+
+# 認証終端: パスワードが違えば失敗し、かつブランチは作られない
+bad=$(PGPASSWORD=wrong psql -h 127.0.0.1 -p 15432 -U 'dev@pg-3' -d app -t -A -c 'SELECT 1' 2>&1 || true)
+grep -qi "authentication failed" <<<"$bad" || fail "誤パスワードは弾かれるはず (got: $bad)"
+sashiki-pg show pg-3 > /dev/null 2>&1 && fail "認証前に lazy create してはいけない (#7/#51)"
+
+sashiki-pg delete pg-2 > /dev/null
 
 log "delete"
 time sashiki-pg delete pg-1

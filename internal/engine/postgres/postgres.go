@@ -1,7 +1,8 @@
 // Package postgres は PostgreSQL の engine.Engine 実装。
 // systemd テンプレートユニット(postgres-sashiki@<branch>)でブランチごとの
-// postgres を起動する。MySQL プロトコルプロキシは使えないため、接続は
-// 直接ポート(sashiki show <name> で確認)になる(既知の制限)。
+// postgres を起動する。接続は直接ポート(sashiki show <name> で確認)のほか、
+// listen.proxy を設定すれば internal/pgproxy の固定エンドポイント経由でも
+// できる(`<user>@<branch>` でルーティング + lazy create、#222)。
 //
 // リモート接続する場合は engine.postgres.listen_addresses を "*" 等に広げ、
 // かつ base の pg_hba.conf にクライアント側ネットワークの host 行が必要

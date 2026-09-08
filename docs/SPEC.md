@@ -757,7 +757,8 @@ PR open で create(fsx-zfs では常に必須。ebs-zfs は lazy create でも�
 
 ### 22-2. プレビュー環境への接続情報
 
-proxy なし構成(postgres / fsx 直結): branch ごとに port が違う。Action が API から `{host, port}` を取り、プレビュー環境の env に渡す。
+proxy なし構成(fsx 直結など): branch ごとに port が違う。Action が API から `{host, port}` を取り、プレビュー環境の env に渡す。
+(postgres も #222 で proxy に対応したため、`listen.proxy` を設定すれば MySQL と同じ固定エンドポイント運用ができる。)
 
 ```
 DB_HOST=shop-sashiki.corp.example.com

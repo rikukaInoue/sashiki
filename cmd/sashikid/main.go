@@ -21,6 +21,7 @@ import (
 	enginepostgres "github.com/rikukaInoue/sashiki/internal/engine/postgres"
 	"github.com/rikukaInoue/sashiki/internal/hooks"
 	"github.com/rikukaInoue/sashiki/internal/ops"
+	"github.com/rikukaInoue/sashiki/internal/pgproxy"
 	"github.com/rikukaInoue/sashiki/internal/proxy"
 	"github.com/rikukaInoue/sashiki/internal/state"
 	"github.com/rikukaInoue/sashiki/internal/storage"
@@ -252,12 +253,9 @@ func main() {
 		}()
 	}
 
-	if cfg.Listen.Proxy != "" && cfg.Engine.Type != "mysql" {
-		log.Printf("sashikid: プロキシは MySQL 専用のため engine=%s では起動しません(警告を消すには listen.proxy: \"\")", cfg.Engine.Type)
-	}
-	if cfg.Listen.Proxy != "" && cfg.Engine.Type == "mysql" {
-		// 方式A(#51): proxy が app 認証を終端する。app credential は
-		// engine.mysql の proxy_user/proxy_pass(本番は Secrets 由来)を使う。
+	if cfg.Listen.Proxy != "" {
+		// 方式A(#51): proxy が app 認証を終端する。app credential は engine 別の
+		// app_user / app_pass(本番は Secrets 由来)を使う(#225 のアクセサ経由)。
 		var tlsCfg *tls.Config
 		if cfg.Proxy.TLSCert != "" && cfg.Proxy.TLSKey != "" {
 			cert, cerr := tls.LoadX509KeyPair(cfg.Proxy.TLSCert, cfg.Proxy.TLSKey)
@@ -269,29 +267,51 @@ func main() {
 		}
 		// allowed_user: 未設定(nil)なら app_user のみ許可、明示指定(空=任意)なら
 		// その値を使う(管理ユーザー接続などのため、#131)。
-		allowedUser := cfg.Engine.Mysql.ProxyUser
+		allowedUser := cfg.AppUser()
 		if cfg.Proxy.AllowedUser != nil {
 			allowedUser = *cfg.Proxy.AllowedUser
 		}
-		px, err := proxy.New(proxy.Config{
-			Listen:           cfg.Listen.Proxy,
-			NamePattern:      cfg.Branches.NamePattern,
-			MaxConnPerBranch: cfg.Proxy.MaxConnPerBranch,
-			AllowedUser:      allowedUser,
-			AppUser:          cfg.Engine.Mysql.ProxyUser,
-			AppPassword:      cfg.Engine.Mysql.ProxyPass,
-			TLSConfig:        tlsCfg,
-		}, mgr)
-		if err != nil {
-			log.Fatalf("proxy: %v", err)
+		// エンジンごとにワイヤプロトコルが違うので実装を選ぶ(#222)。
+		// どちらも Router(RouteBranch/TouchConn)と ActiveConns の形は同じ。
+		var listen func(context.Context) error
+		var activeConns func(string) int
+		switch cfg.Engine.Type {
+		case "postgres":
+			px, err := pgproxy.New(pgproxy.Config{
+				Listen:           cfg.Listen.Proxy,
+				NamePattern:      cfg.Branches.NamePattern,
+				MaxConnPerBranch: cfg.Proxy.MaxConnPerBranch,
+				AllowedUser:      allowedUser,
+				AppUser:          cfg.AppUser(),
+				AppPassword:      cfg.AppPass(),
+				TLSConfig:        tlsCfg,
+			}, mgr)
+			if err != nil {
+				log.Fatalf("pgproxy: %v", err)
+			}
+			listen, activeConns = px.Listen, px.ActiveConns
+		default:
+			px, err := proxy.New(proxy.Config{
+				Listen:           cfg.Listen.Proxy,
+				NamePattern:      cfg.Branches.NamePattern,
+				MaxConnPerBranch: cfg.Proxy.MaxConnPerBranch,
+				AllowedUser:      allowedUser,
+				AppUser:          cfg.AppUser(),
+				AppPassword:      cfg.AppPass(),
+				TLSConfig:        tlsCfg,
+			}, mgr)
+			if err != nil {
+				log.Fatalf("proxy: %v", err)
+			}
+			listen, activeConns = px.Listen, px.ActiveConns
 		}
-		mgr.SetActiveConns(px.ActiveConns)
+		mgr.SetActiveConns(activeConns)
 		go func() {
-			if err := px.Listen(ctx); err != nil {
+			if err := listen(ctx); err != nil {
 				log.Fatalf("proxy: %v", err)
 			}
 		}()
-		log.Printf("sashikid: proxy listening on %s", cfg.Listen.Proxy)
+		log.Printf("sashikid: proxy listening on %s (engine=%s)", cfg.Listen.Proxy, cfg.Engine.Type)
 	}
 
 	log.Printf("sashikid: listening on %s (backend=%s engine=%s)",

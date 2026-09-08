@@ -305,7 +305,7 @@ sashiki は「汎用エンジン + MySQL/PR の完成した adapter」。コア�
 | MySQL + GitHub PR プレビュー | ✅ 実機検証済み(create / reset / recreate / delete / lazy create / proxy / baseline 更新 / スキーマ比較) |
 | macOS ネイティブ(APFS + process) | ✅ 実機検証済み(VM 無し。MySQL 8.0 / 8.4 で実機確認、9.x も同プロトコル)。`sashiki init --platform darwin` |
 | コンテナ(XFS reflink, VM 無し) | ✅ 実機検証済み(sashikid フルコンテナ化。create / reset / delete / lazy create。Docker 互換ランタイム全般。[deploy/orbstack/](deploy/orbstack/)) |
-| PostgreSQL | 🔶 engine 対応。接続は**直接ポートのみ**(proxy / lazy create は MySQL のみ) |
+| PostgreSQL | 🔶 engine 対応 + **proxy / lazy create 対応**(:5432 固定エンドポイント、SCRAM-SHA-256 認証終端)。baseline import / init は未対応で手動構築が必要([#230](https://github.com/rikukaInoue/sashiki/issues/230)) |
 | EBS-ZFS バックエンド | ✅ default(Linux)。単一ホスト |
 | FSx-ZFS / multi-host / Spot | 🔶 実装済み・**本番運用実績なし**。必要になったら(§FAQ) |
 | API / config の安定性 | ⚠️ 未固定。v0.x の間はマイナー版で破壊的変更があり得る |
@@ -337,7 +337,7 @@ A. profile は「無接続が続いたら止める/消す」寿命ポリシー(p
 
 **Q. PostgreSQL は?**
 
-A. engine として対応(接続は直接ポート)。proxy / lazy create は MySQL のみ。idle 管理は engine ポーリングで両対応。
+A. engine として対応。**proxy(固定エンドポイント)と lazy create も MySQL と同様に動く**(SCRAM-SHA-256 で認証終端)。idle 管理は engine ポーリングで両対応。baseline import / `init` の自動構築はまだ MySQL のみで、Postgres の baseline は手動で用意する([#230](https://github.com/rikukaInoue/sashiki/issues/230) で対応中)。
 
 **Q. FSx バックエンドはいつ使う?**
 
