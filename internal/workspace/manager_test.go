@@ -1033,6 +1033,81 @@ func TestReconcileDemotesDeadRunningBranch(t *testing.T) {
 	}
 }
 
+func reconcileHas(list []string, name string) bool {
+	for _, s := range list {
+		if s == name {
+			return true
+		}
+	}
+	return false
+}
+
+// 再起動で creating のまま残ったブランチは reconcile で error(recoverable, op=create)
+// に回収され、retry で再駆動できる(#reconcile-interrupted)。
+func TestReconcileRecoversInterruptedCreating(t *testing.T) {
+	ctx := context.Background()
+	m := newTestManager(t, &mockStorage{}, &mockEngine{}, "")
+	if _, err := m.Create(ctx, "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	_ = m.db.SetState("pr-1", state.StateCreating, "") // クラッシュ残骸を模す
+	rep, err := m.Reconcile(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reconcileHas(rep.Interrupted, "pr-1") {
+		t.Errorf("interrupted = %v, want [pr-1]", rep.Interrupted)
+	}
+	b, _ := m.db.GetBranch("pr-1")
+	if b.State != state.StateError || b.FailedOp != "create" || !b.Recoverable {
+		t.Errorf("branch = state:%s op:%s recoverable:%v, want error/create/true", b.State, b.FailedOp, b.Recoverable)
+	}
+	if _, err := m.Retry(ctx, "pr-1"); err != nil {
+		t.Errorf("retry after interrupted create should work: %v", err)
+	}
+}
+
+// resetting のまま残ったブランチは error(op=reset)に回収される。
+func TestReconcileRecoversInterruptedResetting(t *testing.T) {
+	ctx := context.Background()
+	m := newTestManager(t, &mockStorage{}, &mockEngine{}, "")
+	if _, err := m.Create(ctx, "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	_ = m.db.SetState("pr-1", state.StateResetting, "")
+	rep, err := m.Reconcile(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reconcileHas(rep.Interrupted, "pr-1") {
+		t.Errorf("interrupted = %v, want [pr-1]", rep.Interrupted)
+	}
+	b, _ := m.db.GetBranch("pr-1")
+	if b.State != state.StateError || b.FailedOp != "reset" || !b.Recoverable {
+		t.Errorf("branch = state:%s op:%s recoverable:%v, want error/reset/true", b.State, b.FailedOp, b.Recoverable)
+	}
+}
+
+// deleting のまま残ったブランチは reconcile で削除を完了する(行が消える)。
+func TestReconcileResumesInterruptedDelete(t *testing.T) {
+	ctx := context.Background()
+	m := newTestManager(t, &mockStorage{}, &mockEngine{}, "")
+	if _, err := m.Create(ctx, "pr-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	_ = m.db.SetState("pr-1", state.StateDeleting, "")
+	rep, err := m.Reconcile(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reconcileHas(rep.Interrupted, "pr-1") {
+		t.Errorf("interrupted = %v, want [pr-1]", rep.Interrupted)
+	}
+	if _, err := m.db.GetBranch("pr-1"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("interrupted-deleting branch should be removed, got err=%v", err)
+	}
+}
+
 func TestReconcileDetectsOrphans(t *testing.T) {
 	st := &mockStorage{volumes: []string{"pr-1", "pr-orphan"}}
 	m := newTestManager(t, st, &mockEngine{}, "")
