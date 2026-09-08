@@ -149,6 +149,11 @@ mysql -udev@pr-1 -pdev -h 127.0.0.1 -P 3306   # proxy 経由。未知ブラン�
 > 停止/削除: `launchctl unload ~/Library/LaunchAgents/dev.sashiki.sashikid.plist`。
 > この VM レス経路の回帰テストは `make e2e-darwin`(使い捨て temp root で完結、launchd 非使用)。
 
+> **per-branch quota の注意(#200)**: apfs / reflink には ZFS の refquota に相当する
+> per-branch quota が無いため、`storage.default_storage_quota` は効かない。1 ブランチの
+> 暴走に対する storage admission は **pool 使用率の watermark(high/critical)だけ**になる。
+> Mac は個人用途なので通常は問題ないが、共有マシンで使うなら空き容量に余裕を持たせること。
+
 ### process モードと実行ユーザー(`run_user`)
 
 process モードは `sashikid` を動かしているユーザーで `mysqld` を起動する。

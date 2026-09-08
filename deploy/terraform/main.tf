@@ -23,6 +23,10 @@ locals {
   # endpoint: Route53 を作るならその FQDN、無ければ private IP。
   endpoint = var.route53_zone_id != "" && var.dns_name != "" ? var.dns_name : aws_instance.this.private_ip
   tags     = merge(var.tags, { "app" = "sashiki", "Name" = var.name })
+  # sashiki_ref: 明示指定が無ければモジュール同梱の VERSION(= その module ref の
+  # タグ)を使う。これで利用側は source の ?ref= を固定するだけでよく、ref の二重
+  # 指定(#193)が消える(#199)。
+  sashiki_ref = var.sashiki_ref != "" ? var.sashiki_ref : trimspace(file("${path.module}/VERSION"))
 }
 
 # --- secrets: dev パスワード(Secrets Manager)/ API トークン(SSM SecureString) ---
@@ -208,7 +212,7 @@ resource "aws_instance" "this" {
     engine_version     = var.engine_version
     proxy_user         = var.proxy_user
     github_token       = var.github_token
-    sashiki_ref        = var.sashiki_ref
+    sashiki_ref        = local.sashiki_ref
     dev_secret_arn     = aws_secretsmanager_secret.dev_password.arn
     api_token_ssm_path = aws_ssm_parameter.api_token.name
   })
