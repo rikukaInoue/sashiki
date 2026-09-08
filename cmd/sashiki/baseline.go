@@ -14,8 +14,11 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -136,7 +139,8 @@ func cmdBaselineStage(args []string, stage string) int {
 
 func usageBaseline() int {
 	fmt.Fprint(os.Stderr, `Usage:
-  sashiki baseline import --from <dump.sql> [--db <name>] [--import-cnf <my.cnf>] [--config <path>]   ベース構築 + @baseline 取得 (zfs は root)
+  sashiki baseline import --from <dump.sql|dir> [--db <name>] [--import-cnf <my.cnf>] [--threads N] [--config <path>]   ベース構築 + @baseline 取得 (zfs は root)
+      --from がディレクトリなら *.sql を並列投入(名前に schema を含むファイルを先に投入。既定 --threads = CPU 数)
   sashiki baseline list [--json]                                snapshot 一覧 (sashikid 経由)
   sashiki baseline refresh                                      refresh_script / source_dir で更新
   sashiki baseline promote <branch>                             migrate 済み branch を新 baseline に昇格 (#129)
@@ -152,10 +156,11 @@ type baselineImportOpts struct {
 	configPath string
 	db         string // 投入先 DB(#170)。USE を含まない単体 DB ダンプ向け
 	importCnf  string // import 中だけ使う my.cnf(buffer pool 等を緩める、#194)
+	threads    int    // --from がディレクトリのときの並列投入数(#194)
 }
 
 func cmdBaselineImport(args []string) int {
-	opts := baselineImportOpts{configPath: "/etc/sashiki/config.yaml"}
+	opts := baselineImportOpts{configPath: "/etc/sashiki/config.yaml", threads: runtime.NumCPU()}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--from":
@@ -182,6 +187,17 @@ func cmdBaselineImport(args []string) int {
 				return usageBaseline()
 			}
 			opts.importCnf = args[i]
+		case "--threads":
+			i++
+			if i >= len(args) {
+				return usageBaseline()
+			}
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n < 1 {
+				fmt.Fprintln(os.Stderr, "sashiki baseline import: --threads は 1 以上の整数")
+				return exitError
+			}
+			opts.threads = n
 		default:
 			return usageBaseline()
 		}
@@ -223,8 +239,7 @@ func cmdBaselineImport(args []string) int {
 // loadDump は dump を mysqld(socket)へ投入する(#170)。db 指定時は先に
 // CREATE DATABASE し、その DB を default に選んで投入する(USE を含まない単体 DB
 // ダンプ向け)。無指定ならダンプ内の CREATE/USE に従う(従来動作)。
-func loadDump(mysqlBin, sock, from, db string) error {
-	fmt.Printf("→ ダンプ投入 (%s)\n", from)
+func loadDump(mysqlBin, sock, from, db string, threads int) error {
 	if db != "" {
 		mk := exec.Command(mysqlBin, "-uroot", "-S", sock, "-e",
 			fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", db))
@@ -232,15 +247,28 @@ func loadDump(mysqlBin, sock, from, db string) error {
 			return fmt.Errorf("create database %s: %w: %s", db, err, strings.TrimSpace(string(out)))
 		}
 	}
-	dump, err := os.Open(from)
+	fi, err := os.Stat(from)
+	if err != nil {
+		return err
+	}
+	if fi.IsDir() {
+		return loadDumpDir(mysqlBin, sock, from, db, threads)
+	}
+	fmt.Printf("→ ダンプ投入 (%s)\n", from)
+	return loadOneFile(mysqlBin, sock, from, db)
+}
+
+// loadOneFile は 1 本の .sql を mysqld へ投入する。バルク投入の高速化(#194):
+// unique / FK チェックと binlog 書き込みをこの投入セッションだけ無効化する
+// (baseline は使い捨てブランチの元でダンプ自体が整合しているので再チェックは
+// 不要。セッション限定なので import 後の実行時は制約が有効)。--init-command は
+// stdin を読む前に 1 度だけ実行される。
+func loadOneFile(mysqlBin, sock, path, db string) error {
+	dump, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = dump.Close() }()
-	// バルク投入の高速化(#194): unique / FK チェックと binlog 書き込みをこの投入
-	// セッションだけ無効化する。baseline は使い捨てブランチの元なので整合性は
-	// ダンプ自体が保証しており、投入時の再チェックは不要。--init-command は
-	// stdin を読む前に 1 度だけ実行される。
 	args := []string{
 		"-uroot", "-S", sock,
 		"--init-command=SET unique_checks=0, foreign_key_checks=0, sql_log_bin=0",
@@ -251,9 +279,77 @@ func loadDump(mysqlBin, sock, from, db string) error {
 	load := exec.Command(mysqlBin, args...)
 	load.Stdin = dump
 	if out, err := load.CombinedOutput(); err != nil {
-		return fmt.Errorf("load dump: %w: %s", err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("load %s: %w: %s", filepath.Base(path), err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// loadDumpDir はディレクトリ内の *.sql を並列投入する(#194)。mydumper 出力や
+// テーブル単位に分割したダンプを想定。名前に "schema" を含むファイル(mydumper の
+// *-schema.sql / *-schema-create.sql 等)を先に順次投入して全テーブルを作ってから、
+// 残りのデータファイルを threads 本の接続で並列投入する。FK チェックは投入中
+// 無効なので、データファイル間の投入順序は問わない。
+func loadDumpDir(mysqlBin, sock, dir, db string, threads int) error {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	var schema, data []string
+	for _, e := range ents {
+		if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".sql") {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		if strings.Contains(strings.ToLower(e.Name()), "schema") {
+			schema = append(schema, p)
+		} else {
+			data = append(data, p)
+		}
+	}
+	if len(schema) == 0 && len(data) == 0 {
+		return fmt.Errorf("%s に *.sql がありません", dir)
+	}
+	sort.Strings(schema)
+	sort.Strings(data)
+	// スキーマ(テーブル定義)を先に、依存順が読めないので順次。
+	for _, p := range schema {
+		fmt.Printf("→ スキーマ投入 (%s)\n", filepath.Base(p))
+		if err := loadOneFile(mysqlBin, sock, p, db); err != nil {
+			return err
+		}
+	}
+	if threads < 1 {
+		threads = 1
+	}
+	fmt.Printf("→ データ投入 (%d ファイルを %d 並列)\n", len(data), threads)
+	sem := make(chan struct{}, threads)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var firstErr error
+	for _, p := range data {
+		p := p
+		mu.Lock()
+		stop := firstErr != nil
+		mu.Unlock()
+		if stop {
+			break
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := loadOneFile(mysqlBin, sock, p, db); err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	return firstErr
 }
 
 // mysqldBinOr は設定の mysqld パス(未設定なら /usr/sbin/mysqld)を返す。
@@ -344,7 +440,7 @@ func runLocalBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 		return err
 	}
 	if opts.from != "" {
-		if err := loadDump(mysqlBin, sock, opts.from, opts.db); err != nil {
+		if err := loadDump(mysqlBin, sock, opts.from, opts.db, opts.threads); err != nil {
 			return err
 		}
 	}
@@ -465,7 +561,7 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	}
 
 	if opts.from != "" {
-		if err := loadDump(mysqlBin, sock, opts.from, opts.db); err != nil {
+		if err := loadDump(mysqlBin, sock, opts.from, opts.db, opts.threads); err != nil {
 			return err
 		}
 	}
