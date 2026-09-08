@@ -45,7 +45,7 @@ jobs:
         with:
           go-version-file: go.mod
       # release-please が作った Release に append する(本文=CHANGELOG は触らない)。
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
           args: release --clean
