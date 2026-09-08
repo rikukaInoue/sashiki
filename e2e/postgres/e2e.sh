@@ -132,15 +132,22 @@ log "pgproxy: 固定エンドポイント経由 + lazy create (#222)"
 # lazy create されてそのブランチに繋がる。psql は既定で SSL を試すので、
 # proxy が 'N' を返して平文へ落ちる経路も同時に確認できる。
 pq() { PGPASSWORD=dev psql -h 127.0.0.1 -p 15432 -U "$1" -d app -t -A -c "$2" 2>&1; }
+# 「本当に lazy create されたか」を言えるように、接続前に存在しないことを確かめる。
+sashiki-pg show pg-2 > /dev/null 2>&1 && fail "pg-2 は接続前には存在しないはず"
+echo "  接続前: pg-2 は存在しない"
+
 proxy_count=$(pq 'dev@pg-2' 'SELECT COUNT(*) FROM items') \
   || fail "proxy 経由の接続に失敗: $proxy_count"
+echo "  proxy 経由 SELECT COUNT(*) FROM items => $proxy_count"
 [ "$proxy_count" = "3" ] || fail "proxy 経由で 3 件見えるはず (got: $proxy_count)"
 sashiki-pg show pg-2 > /dev/null || fail "lazy create で pg-2 が作られるはず"
+echo "  接続後: pg-2 が lazy create されている"
 
-# 認証終端: パスワードが違えば失敗し、かつブランチは作られない
+# 認証終端: パスワードが違えば失敗し、かつブランチは作られない(#7/#51)
 bad=$(PGPASSWORD=wrong psql -h 127.0.0.1 -p 15432 -U 'dev@pg-3' -d app -t -A -c 'SELECT 1' 2>&1 || true)
 grep -qi "authentication failed" <<<"$bad" || fail "誤パスワードは弾かれるはず (got: $bad)"
 sashiki-pg show pg-3 > /dev/null 2>&1 && fail "認証前に lazy create してはいけない (#7/#51)"
+echo "  誤パスワードは拒否され、pg-3 は作られていない"
 
 sashiki-pg delete pg-2 > /dev/null
 
