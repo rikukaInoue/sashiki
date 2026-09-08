@@ -352,6 +352,35 @@ func loadDumpDir(mysqlBin, sock, dir, db string, threads int) error {
 	return firstErr
 }
 
+// authPluginFor は backend の版に応じて app_user の認証プラグインを選ぶ。
+// caching_sha2_password は MySQL 8.0 で追加されたため 5.7 以前には無い。8.0 以降
+// (8.1〜8.3 / 8.4 / 9.x を含む)は caching_sha2、5.7 等(major<8)は
+// mysql_native_password を使う。8.4 は native 既定 OFF・9.x は native 廃止なので、
+// この分岐で全域(5.7〜9.x)を一本化する(#version-compat)。判定不能時は既定の
+// caching_sha2(sashiki の既定 mysqld は 8.0+)。
+func authPluginFor(mysqlBin, sock string) string {
+	out, err := exec.Command(mysqlBin, "-uroot", "-S", sock, "-N", "-B", "-e", "SELECT @@version").Output()
+	if err == nil {
+		if major, ok := majorVersion(strings.TrimSpace(string(out))); ok && major < 8 {
+			return "mysql_native_password"
+		}
+	}
+	return "caching_sha2_password"
+}
+
+// majorVersion は "8.0.46" / "5.7.44-log" / "9.6.0" 等から先頭の major を取る。
+func majorVersion(v string) (int, bool) {
+	dot := strings.IndexByte(v, '.')
+	if dot <= 0 {
+		return 0, false
+	}
+	n, err := strconv.Atoi(v[:dot])
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
 // mysqldBinOr は設定の mysqld パス(未設定なら /usr/sbin/mysqld)を返す。
 func mysqldBinOr(cfg config.Config) string {
 	if b := cfg.Engine.Mysql.MysqldBin; b != "" {
@@ -445,9 +474,10 @@ func runLocalBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 		}
 	}
 	fmt.Printf("→ 接続ユーザー %s 作成\n", cfg.Engine.Mysql.ProxyUser)
+	plugin := authPluginFor(mysqlBin, sock)
 	createUser := fmt.Sprintf(
-		"CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED WITH caching_sha2_password BY '%s'; GRANT ALL PRIVILEGES ON *.* TO '%s'@'%%'; FLUSH PRIVILEGES;",
-		cfg.Engine.Mysql.ProxyUser, cfg.Engine.Mysql.ProxyPass, cfg.Engine.Mysql.ProxyUser)
+		"CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED WITH %s BY '%s'; GRANT ALL PRIVILEGES ON *.* TO '%s'@'%%'; FLUSH PRIVILEGES;",
+		cfg.Engine.Mysql.ProxyUser, plugin, cfg.Engine.Mysql.ProxyPass, cfg.Engine.Mysql.ProxyUser)
 	if out, err := exec.Command(mysqlBin, "-uroot", "-S", sock, "-e", createUser).CombinedOutput(); err != nil {
 		return fmt.Errorf("create user: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -567,12 +597,14 @@ func runBaselineImport(cfg config.Config, opts baselineImportOpts) error {
 	}
 
 	fmt.Printf("→ 接続ユーザー %s 作成\n", cfg.Engine.Mysql.ProxyUser)
-	// caching_sha2_password で作る(MySQL 8.0/8.4/9.x 共通。8.4 は native 既定 OFF、
-	// 9.x は native 廃止なので native では作れない)。proxy は client 認証を自前検証し、
-	// backend へは caching_sha2 で接続し直す(平文 TCP は RSA full-auth)。
+	// backend の版で認証プラグインを選ぶ: 8.0+ は caching_sha2(8.4 native 既定 OFF /
+	// 9.x native 廃止)、5.7 等は caching_sha2 が無いので mysql_native_password。
+	// proxy は client 認証を自前検証し、backend へは選んだプラグインで接続し直す
+	// (caching_sha2 の平文 TCP cold cache は RSA full-auth、native は AuthSwitch)。
+	plugin := authPluginFor(mysqlBin, sock)
 	createUser := fmt.Sprintf(
-		"CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED WITH caching_sha2_password BY '%s'; GRANT ALL PRIVILEGES ON *.* TO '%s'@'%%'; FLUSH PRIVILEGES;",
-		cfg.Engine.Mysql.ProxyUser, cfg.Engine.Mysql.ProxyPass, cfg.Engine.Mysql.ProxyUser)
+		"CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED WITH %s BY '%s'; GRANT ALL PRIVILEGES ON *.* TO '%s'@'%%'; FLUSH PRIVILEGES;",
+		cfg.Engine.Mysql.ProxyUser, plugin, cfg.Engine.Mysql.ProxyPass, cfg.Engine.Mysql.ProxyUser)
 	userCmd := exec.Command(mysqlBin, "-uroot", "-S", sock, "-e", createUser)
 	if out, err := userCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("create user: %w: %s", err, strings.TrimSpace(string(out)))
