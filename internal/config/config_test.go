@@ -256,3 +256,141 @@ func TestProxyAllowedUser(t *testing.T) {
 		t.Errorf("allowed_user: admin, got %v", cfg.Proxy.AllowedUser)
 	}
 }
+
+// engine 非依存アクセサ(#225): postgres 選択時に postgres 側の設定を返し、
+// mysql 選択時は従来どおり mysql 側を返すこと。
+func TestEngineAccessorsPostgres(t *testing.T) {
+	cfg := load(t, `
+storage:
+  backend: ebs-zfs
+  ebs-zfs:
+    pool: p
+    base_dataset: p/base
+    branch_parent: p/branches
+    baseline_snapshot: baseline
+engine:
+  type: postgres
+  postgres:
+    app_user: appuser
+    app_pass: apppass
+    mode: process
+    run_user: pg
+    shared_buffers: 512M
+    expected_rss: 700M
+    memory_headroom: 1G
+    max_running: 7
+    env_dir: /etc/sashiki-pg
+`)
+	if got := cfg.AppUser(); got != "appuser" {
+		t.Errorf("AppUser = %q, want appuser", got)
+	}
+	if got := cfg.AppPass(); got != "apppass" {
+		t.Errorf("AppPass = %q, want apppass", got)
+	}
+	if got := cfg.EngineMode(); got != "process" {
+		t.Errorf("EngineMode = %q, want process", got)
+	}
+	if got := cfg.EngineRunUser(); got != "pg" {
+		t.Errorf("EngineRunUser = %q, want pg", got)
+	}
+	if got := cfg.MemoryBaselineSize(); got != "512M" {
+		t.Errorf("MemoryBaselineSize = %q, want 512M", got)
+	}
+	if got := cfg.ExpectedRSS(); got != "700M" {
+		t.Errorf("ExpectedRSS = %q, want 700M", got)
+	}
+	if got := cfg.MemoryHeadroom(); got != "1G" {
+		t.Errorf("MemoryHeadroom = %q, want 1G", got)
+	}
+	if got := cfg.MaxRunning(); got != 7 {
+		t.Errorf("MaxRunning = %d, want 7", got)
+	}
+	if got := cfg.EngineEnvDir(); got != "/etc/sashiki-pg" {
+		t.Errorf("EngineEnvDir = %q, want /etc/sashiki-pg", got)
+	}
+	if got := cfg.PortRange(); got[0] != 5433 {
+		t.Errorf("PortRange = %v, want postgres default low 5433", got)
+	}
+}
+
+func TestEngineAccessorsMysqlUnchanged(t *testing.T) {
+	cfg := load(t, `
+storage:
+  backend: ebs-zfs
+  ebs-zfs:
+    pool: p
+    base_dataset: p/base
+    branch_parent: p/branches
+    baseline_snapshot: baseline
+engine:
+  type: mysql
+  mysql:
+    app_user: mysqluser
+    app_pass: mysqlpass
+    buffer_pool_size: 256M
+    max_running: 3
+`)
+	if got := cfg.AppUser(); got != "mysqluser" {
+		t.Errorf("AppUser = %q, want mysqluser", got)
+	}
+	if got := cfg.AppPass(); got != "mysqlpass" {
+		t.Errorf("AppPass = %q, want mysqlpass", got)
+	}
+	if got := cfg.MemoryBaselineSize(); got != "256M" {
+		t.Errorf("MemoryBaselineSize = %q, want 256M", got)
+	}
+	if got := cfg.MaxRunning(); got != 3 {
+		t.Errorf("MaxRunning = %d, want 3", got)
+	}
+	// mode 未設定は systemd 扱い
+	if got := cfg.EngineMode(); got != "systemd" {
+		t.Errorf("EngineMode = %q, want systemd", got)
+	}
+}
+
+// postgres 既定値: app_user/app_pass と shared_buffers が入っていること。
+func TestPostgresDefaults(t *testing.T) {
+	cfg := load(t, `
+storage:
+  backend: ebs-zfs
+  ebs-zfs:
+    pool: p
+    base_dataset: p/base
+    branch_parent: p/branches
+    baseline_snapshot: baseline
+engine:
+  type: postgres
+`)
+	if cfg.AppUser() != "dev" || cfg.AppPass() != "dev" {
+		t.Errorf("postgres default app credential = %q/%q, want dev/dev", cfg.AppUser(), cfg.AppPass())
+	}
+	if cfg.MemoryBaselineSize() != "128M" {
+		t.Errorf("postgres default shared_buffers = %q, want 128M", cfg.MemoryBaselineSize())
+	}
+	if cfg.EngineRunUser() != "postgres" {
+		t.Errorf("postgres default run_user = %q, want postgres", cfg.EngineRunUser())
+	}
+}
+
+func TestInvalidEngineMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	yaml := `
+storage:
+  backend: ebs-zfs
+  ebs-zfs:
+    pool: p
+    base_dataset: p/base
+    branch_parent: p/branches
+    baseline_snapshot: baseline
+engine:
+  type: postgres
+  postgres:
+    mode: bogus
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("engine.postgres.mode: bogus should be rejected")
+	}
+}
