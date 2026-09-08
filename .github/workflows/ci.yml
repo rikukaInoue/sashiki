@@ -59,3 +59,27 @@ jobs:
           zfs version
       - name: Run E2E
         run: sudo ./e2e/e2e.sh bin/sashikid bin/sashiki
+
+  # PostgreSQL エンジンの E2E(create / reset / delete + crash-recovery 判定)。
+  # スクリプトが postgresql を apt 導入し PGBIN を自動検出、loopback zpool
+  # (recordsize=8k)で完結する。現状 postgres は proxy/lazy-create 未対応なので
+  # 直ポート接続で検証する。ブランチ保護の required には未追加(安定するまで advisory)。
+  e2e-postgres:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build binaries
+        run: |
+          go build -o bin/sashikid ./cmd/sashikid
+          go build -o bin/sashiki ./cmd/sashiki
+      - name: Load ZFS kernel module
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q zfsutils-linux
+          sudo modprobe zfs
+          zfs version
+      - name: Run Postgres E2E
+        run: sudo ./e2e/postgres/e2e.sh bin/sashikid bin/sashiki
