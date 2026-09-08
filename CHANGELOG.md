@@ -5,6 +5,9 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 
 ## Unreleased
 
+### Added / Changed
+- **`baseline import` の高速化(#194)**: バルク投入セッションで `unique_checks` / `foreign_key_checks` / `sql_log_bin` を自動的に無効化する(セッション限定なので、import 後の実行時は FK/一意制約は通常どおり有効)。あわせて `--import-cnf <my.cnf>` を追加し、投入中だけ buffer pool や `innodb_flush_log_at_trx_commit` を緩めた mysqld で流し込める。実測(3M 行 / UNIQUE 索引 + FK、Apple Silicon): 約 25s → セッション変数のみ約 14.5s(-42%)→ `--import-cnf`(2G pool / trx_commit=0 / doublewrite off)併用で約 10s(-60%)。データ件数・FK 整合は不変。
+
 ## v0.4.2 — (2026-09-07)
 
 > v0.3.0〜v0.4.1 の詳細な差分は各 [GitHub Release](https://github.com/rikukaInoue/sashiki/releases)(自動生成ノート)を参照。ここでは主な追加・修正をまとめる。
