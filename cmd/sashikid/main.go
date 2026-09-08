@@ -200,6 +200,7 @@ func main() {
 	token := resolveAPIToken(cfg)
 	srv := api.New(mgr, cfg.Domain, cfg.Engine.Type, cfg.Engine.Mysql.ProxyUser, cfg.Engine.Mysql.ProxyPass, token, db)
 	srv.SetOps(ops.New(db))
+	srv.SetTrustLoopback(cfg.Auth.TrustLoopback)
 	mgr.SetBaselinePolicy(workspace.RefreshConfig{
 		Script:           cfg.Baseline.RefreshScript,
 		Timeout:          cfg.Baseline.RefreshTimeout,

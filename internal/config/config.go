@@ -186,6 +186,10 @@ type Auth struct {
 	// APITokenSSM を設定すると、起動時に SSM Parameter Store(SecureString)から
 	// API トークンを読み、環境変数より優先する(仕様 21章、リモート運用向け)。
 	APITokenSSM string `yaml:"api_token_ssm"`
+	// TrustLoopback が true(既定)なら loopback からのリクエストを無認証で通す。
+	// リバースプロキシ越しに公開すると接続元が 127.0.0.1 に見えて素通しになるため、
+	// 外部公開時は false にして loopback でも Bearer トークンを必須にする(#198)。
+	TrustLoopback bool `yaml:"trust_loopback"`
 }
 
 // Default は既定値。
@@ -248,7 +252,7 @@ func Default() Config {
 		Hooks: Hooks{
 			Dir: "/etc/sashiki/hooks",
 		},
-		Auth: Auth{APITokenEnv: "SASHIKI_API_TOKEN"},
+		Auth: Auth{APITokenEnv: "SASHIKI_API_TOKEN", TrustLoopback: true},
 	}
 }
 
