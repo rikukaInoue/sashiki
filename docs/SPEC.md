@@ -701,7 +701,7 @@ engine:
     expected_rss: 600M            # 以下 3 つは mysql と同じ意味のメモリ admission
     memory_headroom: 1G
     max_running: 10
-    mode: systemd                 # systemd | process(process は #227 で対応予定)
+    mode: systemd                 # systemd | process(process は systemd 不要。macOS/コンテナ向け)
     run_user: postgres            # root 起動時に降格する OS ユーザー
     initdb_args: []               # baseline 構築時の initdb 追加引数(#223)
 

@@ -136,6 +136,10 @@ func main() {
 			BinDir:          cfg.Engine.Postgres.BinDir,
 			ListenAddresses: cfg.Engine.Postgres.ListenAddresses,
 			Sudo:            cfg.Engine.Postgres.Sudo,
+			Mode:            cfg.Engine.Postgres.Mode,
+			RunUser:         cfg.Engine.Postgres.RunUser,
+			SharedBuffers:   cfg.Engine.Postgres.SharedBuffers,
+			LogDir:          cfg.LogDir,
 		})
 		// postgres の idle 回収は #41 の capability 判定(下)に一本化した。
 		// postgres は ConnCounter を実装しているので connpoll が last_conn_at を

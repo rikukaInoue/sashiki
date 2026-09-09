@@ -34,7 +34,25 @@ type Config struct {
 	ListenAddresses string // 既定 127.0.0.1。リモート接続を許すなら "*" 等
 	ReadyTimeout    time.Duration
 	Sudo            bool
+
+	// Mode は起動方式。"systemd"(既定)は systemd テンプレートユニット、
+	// "process" は pg_ctl で直接起動する(systemd の無い macOS ネイティブ /
+	// コンテナ向け、#227)。
+	Mode string
+	// RunUser は root で動かすときに降格する OS ユーザー(既定 "postgres")。
+	// postgres は root では起動を拒むため。root でなければ無視する。
+	RunUser string
+	// SharedBuffers は process モードで postgres に渡す shared_buffers。
+	SharedBuffers string
+	// LogDir は process モードのサーバログの置き場(既定 os.TempDir())。
+	// datadir 配下に置くと snapshot に入ってしまうので外に出す。
+	LogDir string
 }
+
+const (
+	ModeSystemd = "systemd"
+	ModeProcess = "process"
+)
 
 // Engine は engine.Engine の PostgreSQL + systemd 実装。
 type Engine struct {
@@ -79,8 +97,11 @@ func (e *Engine) unit(branch string) string {
 	return fmt.Sprintf("%s@%s", e.cfg.UnitTemplate, branch)
 }
 
-// Start は env ファイルを書いて systemd ユニットを起動する。
+// Start はインスタンスを起動する(mode により systemd / pg_ctl 直起動)。
 func (e *Engine) Start(ctx context.Context, ins engine.Instance) error {
+	if e.cfg.Mode == ModeProcess {
+		return e.startProcess(ctx, ins)
+	}
 	// env_dir を確保する(systemd の RuntimeDirectory が無い root 直起動でも動くように、#177)。
 	if err := os.MkdirAll(e.cfg.EnvDir, 0o755); err != nil {
 		return fmt.Errorf("ensure env_dir %s: %w", e.cfg.EnvDir, err)
@@ -94,8 +115,11 @@ func (e *Engine) Start(ctx context.Context, ins engine.Instance) error {
 	return err
 }
 
-// Stop は systemd 経由で停止する(ユニット側で pg_ctl の fast shutdown を使う)。
+// Stop は正常終了(graceful)させる。snapshot の一貫性はこれに依存する。
 func (e *Engine) Stop(ctx context.Context, ins engine.Instance) error {
+	if e.cfg.Mode == ModeProcess {
+		return e.stopProcess(ctx, ins)
+	}
 	if _, err := e.run(ctx, "systemctl", "stop", e.unit(ins.Branch)); err != nil {
 		return err
 	}
@@ -105,6 +129,9 @@ func (e *Engine) Stop(ctx context.Context, ins engine.Instance) error {
 
 // Kill は即時停止(immediate)。dirty state を捨てる rollback 用。
 func (e *Engine) Kill(ctx context.Context, ins engine.Instance) error {
+	if e.cfg.Mode == ModeProcess {
+		return e.killProcess(ctx, ins)
+	}
 	_, _ = e.run(ctx, "systemctl", "kill", "-s", "SIGKILL", e.unit(ins.Branch))
 	_, _ = e.run(ctx, "systemctl", "stop", e.unit(ins.Branch))
 	_ = os.Remove(filepath.Join(e.cfg.EnvDir, ins.Branch+".env"))
@@ -129,8 +156,11 @@ func (e *Engine) WaitReady(ctx context.Context, ins engine.Instance) error {
 		ins.Branch, ins.Port, e.cfg.ReadyTimeout)
 }
 
-// IsRunning は systemctl is-active で判定する。
+// IsRunning は起動中かどうか(mode により systemctl / pidfile)。
 func (e *Engine) IsRunning(ctx context.Context, ins engine.Instance) (bool, error) {
+	if e.cfg.Mode == ModeProcess {
+		return e.isRunningProcess(ins), nil
+	}
 	out, _ := e.run(ctx, "systemctl", "is-active", e.unit(ins.Branch))
 	return out == "active", nil
 }
