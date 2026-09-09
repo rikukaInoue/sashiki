@@ -7,6 +7,16 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 > [Conventional Commits](https://www.conventionalcommits.org/) から自動生成する(手動編集不要)。
 > リリース手順は [docs/RELEASING.md](docs/RELEASING.md) を参照。v0.5.0 までは手書き。
 
+## [0.6.0](https://github.com/rikukaInoue/sashiki/compare/v0.5.2...v0.6.0) (2026-09-08)
+
+
+### Features
+
+* **baseline:** Postgres baseline import via initdb/psql/pg_restore ([#223](https://github.com/rikukaInoue/sashiki/issues/223)) ([#236](https://github.com/rikukaInoue/sashiki/issues/236)) ([67298ac](https://github.com/rikukaInoue/sashiki/commit/67298ac1b1155f890527f5646583388aea7f5403))
+* **config:** expand PostgresEngine and make engine settings accessor-based ([#225](https://github.com/rikukaInoue/sashiki/issues/225)) ([#232](https://github.com/rikukaInoue/sashiki/issues/232)) ([863c6cd](https://github.com/rikukaInoue/sashiki/commit/863c6cdb262e8f7a05b140b8463e3e58bb6c2518))
+* **init:** sashiki init --engine postgres ([#224](https://github.com/rikukaInoue/sashiki/issues/224)) ([#237](https://github.com/rikukaInoue/sashiki/issues/237)) ([4b345d4](https://github.com/rikukaInoue/sashiki/commit/4b345d4425dda4f585f490dd7d6be6896f9b74d8))
+* **pgproxy:** Postgres wire proxy with SCRAM auth termination and lazy create ([#222](https://github.com/rikukaInoue/sashiki/issues/222)) ([#235](https://github.com/rikukaInoue/sashiki/issues/235)) ([a0829cc](https://github.com/rikukaInoue/sashiki/commit/a0829ccac86f0cd9e801bf78b0611931894644e4))
+
 ## [0.5.2](https://github.com/rikukaInoue/sashiki/compare/v0.5.1...v0.5.2) (2026-09-08)
 
 
