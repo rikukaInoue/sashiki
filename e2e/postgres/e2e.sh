@@ -204,9 +204,20 @@ SASHIKID_PID=$!
 for _ in $(seq 1 30); do curl -sf http://127.0.0.1:8090/v1/healthz > /dev/null 2>&1 && break; sleep 0.5; done
 curl -sf http://127.0.0.1:8090/v1/healthz > /dev/null || fail "refresh 用 sashikid が起動しない"
 
+# refresh は非同期(202 を返して裏で走る)。完了は refreshing が false に戻るまで待つ。
 timeout 180 sashiki-pg baseline refresh \
-  || { tail -30 /var/log/sashiki-pg/sashikid-refresh.log; fail "baseline refresh が失敗した"; }
-echo "  refresh 完了"
+  || { tail -30 /var/log/sashiki-pg/sashikid-refresh.log; fail "baseline refresh の起動が失敗した"; }
+for _ in $(seq 1 120); do
+  curl -s http://127.0.0.1:8090/v1/baseline | grep -q '"refreshing":false' && break
+  sleep 1
+done
+curl -s http://127.0.0.1:8090/v1/baseline | grep -q '"refreshing":false' \
+  || { tail -40 /var/log/sashiki-pg/sashikid-refresh.log; fail "refresh が終わらない"; }
+# current が新しい baseline(タグ付き)に切り替わっていること
+curl -s http://127.0.0.1:8090/v1/baseline | grep -q "baseline-" \
+  || { curl -s http://127.0.0.1:8090/v1/baseline; tail -40 /var/log/sashiki-pg/sashikid-refresh.log; \
+       fail "current が新しい baseline に切り替わっていない"; }
+echo "  refresh 完了・current 切り替え済み"
 # 新しい baseline から作ったブランチに列が入っていること
 sashiki-pg create pg-ref > /dev/null || fail "refresh 後の create に失敗"
 RPORT=$(sashiki-pg show pg-ref --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["port"])')
@@ -214,7 +225,13 @@ RPORT=$(sashiki-pg show pg-ref --json | python3 -c 'import json,sys;print(json.l
   || fail "refresh で追加した列が新ブランチに反映されていない"
 echo "  新ブランチに追加列が反映されている"
 # 冪等: もう一度 refresh しても二重適用にならない
-timeout 180 sashiki-pg baseline refresh > /dev/null || fail "2 回目の refresh が失敗した"
+timeout 180 sashiki-pg baseline refresh > /dev/null || fail "2 回目の refresh の起動が失敗した"
+for _ in $(seq 1 120); do
+  curl -s http://127.0.0.1:8090/v1/baseline | grep -q '"refreshing":false' && break
+  sleep 1
+done
+curl -s http://127.0.0.1:8090/v1/baseline | grep -q '"refreshing":false' \
+  || { tail -40 /var/log/sashiki-pg/sashikid-refresh.log; fail "2 回目の refresh が終わらない"; }
 echo "  2 回目の refresh も成功(適用記録で冪等)"
 sashiki-pg delete pg-ref > /dev/null
 
