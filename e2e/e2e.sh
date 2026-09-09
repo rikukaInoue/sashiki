@@ -530,7 +530,7 @@ grep -q "ブランチが" /tmp/is.log || { cat /tmp/is.log; fail "拒否理由�
 echo "  ブランチ残存時は拒否される"
 
 # ブランチを片付けてから受け入れる
-for b in $(sashiki list --json | python3 -c 'import json,sys;print(" ".join(x["name"] for x in json.load(sys.stdin)))'); do
+for b in $(sashiki list --json | python3 -c 'import json,sys;d=json.load(sys.stdin);print(" ".join(x["name"] for x in d.get("branches") or []))'); do
   sashiki delete "$b" > /dev/null
 done
 sashiki baseline import-stream --from /var/tmp/baseline.zfs --force \
