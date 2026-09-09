@@ -157,9 +157,19 @@ func runBaselineImportStream(cfg config.Config, opts baselineStreamOpts) error {
 	}
 
 	baseExists := exec.Command("zfs", "list", base).Run() == nil
-	if baseExists && opts.force == "" {
-		return fmt.Errorf("%s が既に存在します。置き換えるなら --force を付けてください"+
-			"(既存の baseline snapshot は失われます)", base)
+	if baseExists {
+		if opts.force == "" {
+			return fmt.Errorf("%s が既に存在します。置き換えるなら --force を付けてください"+
+				"(既存の baseline snapshot は失われます)", base)
+		}
+		// 完全ストリームの受け入れは、宛先に snapshot があると -F でも
+		// "destination has snapshots ... must destroy them to overwrite it" で
+		// 拒否される。clone(ブランチ)が無いことは上で確認済みなので、
+		// ここで base を破棄してから受け入れる。
+		fmt.Fprintf(os.Stderr, "→ 既存の %s を破棄して受け入れます(--force)\n", base)
+		if out, err := exec.Command("zfs", "destroy", "-r", base).CombinedOutput(); err != nil {
+			return fmt.Errorf("既存 base の破棄に失敗: %w: %s", err, strings.TrimSpace(string(out)))
+		}
 	}
 
 	src, err := openSource(opts.path)
@@ -169,13 +179,9 @@ func runBaselineImportStream(cfg config.Config, opts baselineStreamOpts) error {
 	defer func() { _ = src.Close() }()
 
 	fmt.Fprintf(os.Stderr, "→ zfs recv %s ← %s\n", base, opts.path)
-	args := []string{"recv"}
-	if baseExists {
-		// -F は受信前に対象を最新 snapshot まで巻き戻す(既存 snapshot は消える)。
-		args = append(args, "-F")
-	}
-	args = append(args, base)
-	cmd := exec.Command("zfs", args...)
+	// ここに来た時点で base は存在しない(--force なら直前に破棄した)ので、
+	// 素の recv でよい。
+	cmd := exec.Command("zfs", "recv", base)
 	cmd.Stdin = src
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

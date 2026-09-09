@@ -520,7 +520,9 @@ sashiki baseline export --to /var/tmp/baseline.zfs || fail "baseline export に�
 [ -s /var/tmp/baseline.zfs ] || fail "export したストリームが空"
 echo "  export したストリーム: $(du -h /var/tmp/baseline.zfs | cut -f1)"
 
-# ブランチが居るうちは import-stream を拒否すること(安全側)
+# ブランチが居るうちは import-stream を拒否すること(安全側)。
+# この節は e2e 末尾にあり既存ブランチが片付いているので、判定用に 1 本作る。
+sashiki create pr-guard > /dev/null || fail "拒否テスト用のブランチを作れない"
 if sashiki baseline import-stream --from /var/tmp/baseline.zfs --force > /tmp/is.log 2>&1; then
   cat /tmp/is.log; fail "ブランチが残っている間は import-stream を拒否すべき"
 fi
