@@ -96,3 +96,31 @@ func TestPgVersionOrdering(t *testing.T) {
 		t.Error("17 は 16 より新しいはず")
 	}
 }
+
+// #246: init の zpool ステップは、既存 pool があれば create ではなく import に
+// 倒す。インスタンス差し替えでデータ EBS が残っている状況で init が止まらない
+// ようにするための分岐で、mysql / postgres の両方に入っていること。
+func TestZpoolStepMentionsImportForBothEngines(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		steps []initStep
+	}{
+		{"mysql", initSteps(initOpts{pool: "p", skipPackages: true})},
+		{"postgres", initStepsPostgres(initOpts{pool: "p", skipPackages: true})},
+	} {
+		found := false
+		for _, s := range tc.steps {
+			if strings.Contains(s.name, "zpool p") {
+				found = true
+				// device 未指定なら、import を試す前に分かるエラーで止まること
+				err := s.run()
+				if err == nil || !strings.Contains(err.Error(), "--device") {
+					t.Errorf("%s: device 未指定時は --device を促すエラーになるべき: %v", tc.name, err)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s: zpool ステップが見つからない", tc.name)
+		}
+	}
+}

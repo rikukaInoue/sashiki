@@ -192,7 +192,14 @@ func initSteps(opts initOpts) []initStep {
 				if opts.device == "" {
 					return fmt.Errorf("pool %q が存在しません。--device <dev> を指定してください (lsblk で確認)", opts.pool)
 				}
-				if err := runCmd(nil, "zpool", "create", "-o", "ashift=12", opts.pool, opts.device); err != nil {
+				// 既存 pool があれば作り直さず import する(#246)。terraform で
+				// インスタンスを差し替えるとデータ EBS は prevent_destroy で残るが、
+				// 新しいインスタンスでは pool が未 import なので done の zpool list に
+				// 引っかからない。この分岐が無いと zpool create が既存 pool を拒否して
+				// init がそこで止まる(データは無事だが手作業になる)。
+				if importExistingPool(opts.pool, opts.device) {
+					fmt.Println("    既存の pool を import しました(インスタンス差し替え)")
+				} else if err := runCmd(nil, "zpool", "create", "-o", "ashift=12", opts.pool, opts.device); err != nil {
 					return err
 				}
 				return runCmd(nil, "zfs", "set", "compression=lz4", "atime=off", opts.pool)
@@ -292,4 +299,20 @@ func orDash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+// importExistingPool はデバイス上に既存の zpool があれば import して true を返す。
+// インスタンスを作り直してもデータ EBS は残る運用(terraform の prevent_destroy)で、
+// init が zpool create に進んで止まらないようにするため(#246)。
+//
+// -f が要るのは「最後に別システムで使われた」pool を取り込むため。インスタンスを
+// 差し替えると hostid が変わり、force 無しでは import が拒否される。EBS は 1 台の
+// インスタンスにしか attach されないので、他ホストと同時にマウントする事故は起きない。
+func importExistingPool(pool, device string) bool {
+	// まずデバイスを直接探す。見つからなければ既定の探索パスに任せる
+	// (by-id とパーティションの対応が環境で違うため 2 段構え)。
+	if runCmd(nil, "zpool", "import", "-f", "-d", device, pool) == nil {
+		return true
+	}
+	return runCmd(nil, "zpool", "import", "-f", pool) == nil
 }

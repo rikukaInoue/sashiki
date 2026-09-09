@@ -239,6 +239,13 @@ module "db" {
 EC2 + EBS(prevent_destroy)+ SG + IAM + Route53 + Secrets/SSM を 1 apply。
 apply 完了時点で sashikid が稼働する。詳細は [deploy/terraform/README.md](deploy/terraform/)。
 
+> **インスタンスを差し替えてもブランチデータは残る**(#246)。`user_data` や AMI を変えて
+> EC2 が作り直されても、データ EBS は `prevent_destroy` で保持される。新しいインスタンスの
+> `sashiki init` は **既存の zpool を検出して `import` し、そのまま再利用する**(pool が無い
+> ときだけ `zpool create`)。ブランチも baseline もそのまま使える。
+> ※ import は `-f` 付き(インスタンス差し替えで hostid が変わるため)。EBS は 1 台にしか
+> attach されないので、他ホストと同時にマウントする事故は起きない。
+
 ---
 
 ## 機能
