@@ -17,6 +17,10 @@ ExecStart=/usr/sbin/mysqld $MYSQLD_DEFAULTS \
   --innodb-buffer-pool-size=256M \
   --skip-mysqlx
 Restart=no
+# 停止に時間がかかっても SIGKILL しない(#245)。systemd 既定の 90 秒で
+# 強制終了されると、buffer pool の大きいブランチは書き出しが終わらず
+# 次回起動が crash recovery になる。@init snapshot も dirty になりうる。
+TimeoutStopSec=600
 LimitNOFILE=65535
 
 [Install]

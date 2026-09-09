@@ -108,6 +108,12 @@ apply 後にサイズが戻ったら通常運用に戻る。
 
 - データ EBS は `prevent_destroy = true`。`terraform destroy` では消えない
   (故意に消すときは state から外すか lifecycle を一時的に外す)。
+- **インスタンス差し替え時もデータは残り、init が pool を再 import する**(#246)。
+  `user_data` や AMI を変えて EC2 が作り直されても、データ EBS は保持される。
+  新インスタンスの `sashiki init` は既存 zpool を検出して `zpool import -f` で
+  再利用し(pool が無いときだけ `zpool create`)、ブランチと baseline はそのまま
+  使える。`-f` はインスタンス差し替えで hostid が変わるため必要で、EBS は 1 台に
+  しか attach されないので他ホストとの同時マウントは起きない。
 - API トークンは SSM SecureString(`api_token_ssm_path`)。dev パスワードは
   Secrets Manager(`password_secret_arn`)。どちらも平文で state に近い形で
   持たない運用にすること(`terraform.tfstate` の暗号化・アクセス制限は前提)。

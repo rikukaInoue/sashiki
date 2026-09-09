@@ -55,7 +55,14 @@ func initStepsPostgres(opts initOpts) []initStep {
 				if opts.device == "" {
 					return fmt.Errorf("pool %q が存在しません。--device <dev> を指定してください (lsblk で確認)", opts.pool)
 				}
-				if err := runCmd(nil, "zpool", "create", "-o", "ashift=12", opts.pool, opts.device); err != nil {
+				// 既存 pool があれば作り直さず import する(#246)。terraform で
+				// インスタンスを差し替えるとデータ EBS は prevent_destroy で残るが、
+				// 新しいインスタンスでは pool が未 import なので done の zpool list に
+				// 引っかからない。この分岐が無いと zpool create が既存 pool を拒否して
+				// init がそこで止まる(データは無事だが手作業になる)。
+				if importExistingPool(opts.pool, opts.device) {
+					fmt.Println("    既存の pool を import しました(インスタンス差し替え)")
+				} else if err := runCmd(nil, "zpool", "create", "-o", "ashift=12", opts.pool, opts.device); err != nil {
 					return err
 				}
 				return runCmd(nil, "zfs", "set", "compression=lz4", "atime=off", opts.pool)
