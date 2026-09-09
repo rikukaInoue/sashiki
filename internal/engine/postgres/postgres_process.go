@@ -68,9 +68,24 @@ func (e *Engine) startProcess(ctx context.Context, ins engine.Instance) error {
 	args := []string{"start", "-D", ins.DataDir, "-o", e.startOptions(ins),
 		"-l", e.logPath(ins), "-w", "-t", strconv.Itoa(int(e.cfg.ReadyTimeout.Seconds()))}
 	if err := e.runProcess(ctx, args...); err != nil {
-		return fmt.Errorf("pg_ctl start (詳細は %s): %w", e.logPath(ins), err)
+		// pg_ctl の終了コードだけでは原因が分からない(本当の理由はサーバログに
+		// 出る)。運用者がログを探しに行かなくて済むよう末尾を添える。
+		return fmt.Errorf("pg_ctl start: %w\n--- %s ---\n%s", err, e.logPath(ins), tailFile(e.logPath(ins), 20))
 	}
 	return nil
+}
+
+// tailFile はファイル末尾の n 行を返す(エラー添付用。失敗しても空を返すだけ)。
+func tailFile(path string, n int) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "(ログを読めませんでした: " + err.Error() + ")"
+	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // stopProcess は fast shutdown で正常終了させる。snapshot の一貫性はこれに依存

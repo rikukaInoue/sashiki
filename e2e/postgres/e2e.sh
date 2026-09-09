@@ -189,7 +189,10 @@ SASHIKID_PID=$!
 for _ in $(seq 1 30); do curl -sf http://127.0.0.1:8090/v1/healthz > /dev/null 2>&1 && break; sleep 0.5; done
 curl -sf http://127.0.0.1:8090/v1/healthz > /dev/null || fail "process モードで sashikid が起動しない"
 
-time sashiki-pg create pg-proc || fail "process モードで create できない"
+time sashiki-pg create pg-proc \
+  || { echo "--- postgres server log ---"; tail -30 /var/log/sashiki/postgres-pg-proc.log 2>/dev/null; \
+       ls -ld /var/log/sashiki /tpgpool/branches/pg-proc/data 2>/dev/null; \
+       fail "process モードで create できない"; }
 PPORT=$(sashiki-pg show pg-proc --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["port"])')
 [ "$(q $PPORT 'SELECT COUNT(*) FROM items')" = "3" ] || fail "process モードのブランチに接続できない"
 # systemd ユニットを使っていないこと(= 本当に直起動している)
