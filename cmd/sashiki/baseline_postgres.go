@@ -120,7 +120,12 @@ func runPostgresBaselineImport(cfg config.Config, opts baselineImportOpts) error
 		}
 	}
 	if opts.from != "" {
-		if err := pgLoadDump(uid, gid, psql, pgRestore, opts.from, db, opts.threads); err != nil {
+		from, cleanup, err := pgResolveDump(opts.from)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+		if err := pgLoadDump(uid, gid, psql, pgRestore, from, db, opts.threads); err != nil {
 			return err
 		}
 	}
@@ -391,21 +396,26 @@ func runLocalPostgresBaselineImport(cfg config.Config, opts baselineImportOpts) 
 		}
 	}
 	if opts.from != "" {
-		fi, err := os.Stat(opts.from)
+		fromPath, cleanup, err := pgResolveDump(opts.from)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+		fi, err := os.Stat(fromPath)
 		if err != nil {
 			return err
 		}
 		switch {
 		case fi.IsDir():
-			fmt.Printf("→ ダンプ投入 (%s, ディレクトリ形式, %d 並列)\n", opts.from, max(opts.threads, 1))
+			fmt.Printf("→ ダンプ投入 (%s, ディレクトリ形式, %d 並列)\n", fromPath, max(opts.threads, 1))
 			err = runEnv(pgRestore, "-w", "-d", db, "--no-owner",
-				"-j", strconv.Itoa(max(opts.threads, 1)), opts.from)
-		case isPgCustomDump(opts.from):
-			fmt.Printf("→ ダンプ投入 (%s, カスタム形式)\n", opts.from)
-			err = runEnv(pgRestore, "-w", "-d", db, "--no-owner", opts.from)
+				"-j", strconv.Itoa(max(opts.threads, 1)), fromPath)
+		case isPgCustomDump(fromPath):
+			fmt.Printf("→ ダンプ投入 (%s, カスタム形式)\n", fromPath)
+			err = runEnv(pgRestore, "-w", "-d", db, "--no-owner", fromPath)
 		default:
-			fmt.Printf("→ ダンプ投入 (%s, プレーン SQL)\n", opts.from)
-			err = runEnv(psql, "-w", "-v", "ON_ERROR_STOP=1", "-d", db, "-f", opts.from)
+			fmt.Printf("→ ダンプ投入 (%s, プレーン SQL)\n", fromPath)
+			err = runEnv(psql, "-w", "-v", "ON_ERROR_STOP=1", "-d", db, "-f", fromPath)
 		}
 		if err != nil {
 			return err
@@ -445,4 +455,21 @@ func runLocalPostgresBaselineImport(cfg config.Config, opts baselineImportOpts) 
 	registerImportedBaseline(cfg.StateDB, string(snap), baselineTag)
 	fmt.Println("baseline import 完了。sashiki create <name> でブランチを作れます")
 	return nil
+}
+
+// pgResolveDump は --from が s3:// / -(標準入力)のときの取り扱いを決める(#242)。
+// プレーン SQL ならストリームのまま流したいが、pg_restore のカスタム形式は
+// シーク可能なファイルを要求するため、その場合だけ一時ファイルへ落とす。
+// 判定には先頭 5 byte("PGDMP")を覗く必要があるので、いったん取得してから見る。
+//
+// 戻り値はローカルパス(ストリームでも一時ファイル経由)と後片付け関数。
+func pgResolveDump(from string) (string, func(), error) {
+	if !isS3(from) && !isStdio(from) {
+		return from, func() {}, nil
+	}
+	// psql はストリームでも動くが、カスタム形式かどうかは中身を見ないと分からず、
+	// 判定のために先頭を読むと巻き戻せない。ここは素直に一時ファイルへ落とし、
+	// 形式判定と pg_restore の要件(シーク)を両立させる。
+	fmt.Printf("→ %s を取得中(形式判定と pg_restore のためローカルへ)\n", from)
+	return materialize(from, "sashiki-pg-dump-*.dump")
 }

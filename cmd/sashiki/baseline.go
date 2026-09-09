@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -50,6 +51,10 @@ func cmdBaseline(args []string) int {
 		return cmdBaselineStage(args[1:], "publish")
 	case "delete":
 		return cmdBaselineStage(args[1:], "delete")
+	case "export":
+		return cmdBaselineExport(args[1:])
+	case "import-stream":
+		return cmdBaselineImportStream(args[1:])
 	case "promote":
 		return cmdBaselinePromote(args[1:])
 	default:
@@ -139,8 +144,11 @@ func cmdBaselineStage(args []string, stage string) int {
 
 func usageBaseline() int {
 	fmt.Fprint(os.Stderr, `Usage:
-  sashiki baseline import --from <dump.sql|dir> [--db <name>] [--import-cnf <my.cnf>] [--threads N] [--config <path>]   ベース構築 + @baseline 取得 (zfs は root)
+  sashiki baseline import --from <dump.sql|dir|s3://...|-> [--db <name>] [--import-cnf <my.cnf>] [--threads N] [--config <path>]   ベース構築 + @baseline 取得 (zfs は root)
       --from がディレクトリなら *.sql を並列投入(名前に schema を含むファイルを先に投入。既定 --threads = CPU 数)
+      --from に s3:// URL や -(標準入力)も渡せる(ホストに落とさず投入、#242)
+  sashiki baseline export --to <path|s3://...|-> [--snapshot <tag>]        baseline を zfs send で書き出す (#243)
+  sashiki baseline import-stream --from <path|s3://...|-> [--force]        書き出した baseline を zfs recv して current にする (#243)
   sashiki baseline list [--json]                                snapshot 一覧 (sashikid 経由)
   sashiki baseline refresh                                      refresh_script / source_dir で更新
   sashiki baseline promote <branch>                             migrate 済み branch を新 baseline に昇格 (#129)
@@ -202,7 +210,8 @@ func cmdBaselineImport(args []string) int {
 			return usageBaseline()
 		}
 	}
-	if opts.from != "" {
+	// s3:// / -(標準入力)はローカルに実体が無いので存在チェックしない(#242)。
+	if opts.from != "" && !isS3(opts.from) && !isStdio(opts.from) {
 		if _, err := os.Stat(opts.from); err != nil {
 			fmt.Fprintf(os.Stderr, "sashiki baseline import: --from %s: %v\n", opts.from, err)
 			return exitError
@@ -247,6 +256,20 @@ func loadDump(mysqlBin, sock, from, db string, threads int) error {
 			return fmt.Errorf("create database %s: %w: %s", db, err, strings.TrimSpace(string(out)))
 		}
 	}
+	// s3:// / -(標準入力)はホストに落とさずそのまま流し込む(#242)。
+	// mysql が受けるのはプレーン SQL なので、ストリームのまま投入できる。
+	if isS3(from) || isStdio(from) {
+		src, err := openSource(from)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = src.Close() }()
+		fmt.Printf("→ ダンプ投入 (%s, ストリーム)\n", from)
+		if err := loadReader(mysqlBin, sock, src, db); err != nil {
+			return err
+		}
+		return src.Close() // S3 側の失敗をここで拾う
+	}
 	fi, err := os.Stat(from)
 	if err != nil {
 		return err
@@ -256,6 +279,24 @@ func loadDump(mysqlBin, sock, from, db string, threads int) error {
 	}
 	fmt.Printf("→ ダンプ投入 (%s)\n", from)
 	return loadOneFile(mysqlBin, sock, from, db)
+}
+
+// loadReader は任意の io.Reader を mysql の標準入力へ流し込む(#242)。
+// loadOneFile と同じセッション設定(バルクロード用フラグ)を使う。
+func loadReader(mysqlBin, sock string, r io.Reader, db string) error {
+	args := []string{
+		"-uroot", "-S", sock,
+		"--init-command=SET unique_checks=0, foreign_key_checks=0, sql_log_bin=0",
+	}
+	if db != "" {
+		args = append(args, db)
+	}
+	load := exec.Command(mysqlBin, args...)
+	load.Stdin = r
+	if out, err := load.CombinedOutput(); err != nil {
+		return fmt.Errorf("load stream: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // loadOneFile は 1 本の .sql を mysqld へ投入する。バルク投入の高速化(#194):
