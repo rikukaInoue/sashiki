@@ -218,7 +218,7 @@ PR open/reopen で create、close で delete。接続情報を出力するので
 
 ```hcl
 module "db" {
-  source = "github.com/rikukaInoue/sashiki//deploy/terraform?ref=v0.6.0" # x-release-please-version
+  source = "github.com/rikukaInoue/sashiki//deploy/terraform?ref=v0.7.0" # x-release-please-version
 
   name           = "myapp-preview"
   vpc_id         = var.vpc_id

@@ -7,6 +7,13 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 > [Conventional Commits](https://www.conventionalcommits.org/) から自動生成する(手動編集不要)。
 > リリース手順は [docs/RELEASING.md](docs/RELEASING.md) を参照。v0.5.0 までは手書き。
 
+## [0.7.0](https://github.com/rikukaInoue/sashiki/compare/v0.6.0...v0.7.0) (2026-09-09)
+
+
+### Features
+
+* **engine/postgres:** process mode and CoW-backend baseline import ([#227](https://github.com/rikukaInoue/sashiki/issues/227)) ([#239](https://github.com/rikukaInoue/sashiki/issues/239)) ([012fb04](https://github.com/rikukaInoue/sashiki/commit/012fb04c1b2d467b0c8e278f6a2b8b09dc73c1a4))
+
 ## [0.6.0](https://github.com/rikukaInoue/sashiki/compare/v0.5.2...v0.6.0) (2026-09-08)
 
 
