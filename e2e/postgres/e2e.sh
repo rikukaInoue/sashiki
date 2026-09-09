@@ -177,6 +177,32 @@ log "delete"
 time sashiki-pg delete pg-1
 grep -q pg- <<<"$(zfs list -r $POOL/branches)" && fail "dataset should be destroyed"
 
+log "process モード: systemd 無しで起動する (#227)"
+# 起動方式は storage backend と直交するので、ここでは zfs のまま mode だけ
+# 差し替えて pg_ctl 直起動を検証する(macOS/コンテナで使う経路の本質は同じ)。
+kill $SASHIKID_PID 2>/dev/null || true
+for _ in $(seq 1 20); do curl -sf http://127.0.0.1:8090/v1/healthz >/dev/null 2>&1 || break; sleep 0.3; done
+sed -i 's/^    sudo: false$/    sudo: false\n    mode: process\n    run_user: postgres/' /etc/sashiki-pg/config.yaml
+grep -q "mode: process" /etc/sashiki-pg/config.yaml || fail "config に mode: process を入れられなかった"
+/usr/local/bin/sashikid-pg --config /etc/sashiki-pg/config.yaml > /var/log/sashiki-pg/sashikid-process.log 2>&1 &
+SASHIKID_PID=$!
+for _ in $(seq 1 30); do curl -sf http://127.0.0.1:8090/v1/healthz > /dev/null 2>&1 && break; sleep 0.5; done
+curl -sf http://127.0.0.1:8090/v1/healthz > /dev/null || fail "process モードで sashikid が起動しない"
+
+time sashiki-pg create pg-proc \
+  || { echo "--- postgres server log ---"; tail -30 /var/log/sashiki/postgres-pg-proc.log 2>/dev/null; \
+       ls -ld /var/log/sashiki /tpgpool/branches/pg-proc/data 2>/dev/null; \
+       fail "process モードで create できない"; }
+PPORT=$(sashiki-pg show pg-proc --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["port"])')
+[ "$(q $PPORT 'SELECT COUNT(*) FROM items')" = "3" ] || fail "process モードのブランチに接続できない"
+# systemd ユニットを使っていないこと(= 本当に直起動している)
+systemctl is-active --quiet postgres-sashiki@pg-proc && fail "process モードなのに systemd ユニットが動いている"
+echo "  systemd ユニット非使用で起動・接続 OK"
+sashiki-pg reset pg-proc > /dev/null || fail "process モードで reset できない"
+[ "$(q $PPORT 'SELECT COUNT(*) FROM items')" = "3" ] || fail "process モードの reset 後に接続できない"
+sashiki-pg delete pg-proc > /dev/null || fail "process モードで delete できない"
+echo "  create / reset / delete OK"
+
 log "cleanup"
 kill $SASHIKID_PID 2>/dev/null || true
 zpool destroy $POOL

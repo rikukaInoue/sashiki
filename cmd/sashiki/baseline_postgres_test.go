@@ -88,19 +88,20 @@ func TestPgBinPrefersBinDir(t *testing.T) {
 	}
 }
 
-// apfs / reflink は postgres の process モード(#227)が無いと動かないので、
-// 黙って壊れるのではなく理由の分かるエラーで止めること。
-func TestPostgresImportRejectsLocalBackends(t *testing.T) {
+// apfs / reflink は #227 でローカル CoW 経路に振り分けるようになった。
+// storage.local.root 未設定なら、その旨が分かるエラーで止まること
+// (zfs 経路へ落ちて "dataset が見つかりません" になると原因が分からない)。
+func TestPostgresImportUsesLocalPathForCoWBackends(t *testing.T) {
 	for _, backend := range []string{"apfs", "reflink"} {
 		cfg := config.Config{}
 		cfg.Engine.Type = "postgres"
 		cfg.Storage.Backend = backend
 		err := runPostgresBaselineImport(cfg, baselineImportOpts{})
 		if err == nil {
-			t.Fatalf("backend %s は未対応エラーになるべき", backend)
+			t.Fatalf("backend %s: root 未設定なのでエラーになるべき", backend)
 		}
-		if !contains(err.Error(), "#227") {
-			t.Errorf("backend %s: エラーに追跡先(#227)を含めるべき: %v", backend, err)
+		if !contains(err.Error(), "storage.local.root") {
+			t.Errorf("backend %s: ローカル経路のエラーになるべき: %v", backend, err)
 		}
 	}
 }

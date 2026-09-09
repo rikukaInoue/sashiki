@@ -167,6 +167,33 @@ process モードは `sashikid` を動かしているユーザーで `mysqld` �
   `run_user`(既定 `mysql`)へ降格して `--user=<run_user>` を渡す。この場合は
   **datadir の所有権を `run_user` に合わせておく**(でないと mysqld が書けない)。
 
+### PostgreSQL を VM レスで使う(#227)
+
+MySQL と同じく、Postgres も **systemd 無し(process モード)** + ローカル CoW
+(APFS `clonefile` / XFS reflink)で動く。
+
+```yaml
+storage:
+  backend: apfs
+  local:
+    root: ~/Library/Application Support/sashiki-pg
+engine:
+  type: postgres
+  postgres:
+    mode: process                     # pg_ctl で直接起動(systemd 不要)
+    bin_dir: /opt/homebrew/opt/postgresql@16/bin
+    app_user: dev
+    app_pass: dev
+```
+
+baseline は `sashiki baseline import --from dump.sql --db app --config <root>/config.yaml`
+で作れる(プレーン SQL / `pg_dump` のカスタム形式・ディレクトリ形式に対応)。
+接続は `listen.proxy` を設定すれば `psql -U 'dev@pr-1'` の固定エンドポイント経由、
+未設定ならブランチごとの直ポート(`sashiki show <name>`)。
+
+> `sashiki init --platform darwin` はまだ MySQL 専用なので、macOS では上記の
+> config を手で用意する([#238](https://github.com/rikukaInoue/sashiki/issues/238) で対応予定)。
+
 ### 接続ユーザー(#131)
 
 - クライアントは **`<user>@<branch>`** の形で `:3306` プロキシに接続し、パスワードは

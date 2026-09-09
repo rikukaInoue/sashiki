@@ -8,6 +8,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,6 +19,7 @@ import (
 	"syscall"
 
 	"github.com/rikukaInoue/sashiki/internal/config"
+	"github.com/rikukaInoue/sashiki/internal/localstore"
 )
 
 // baseline 構築用に一時起動するクラスタの設定。TCP を開かず(listen_addresses=”)
@@ -31,9 +33,9 @@ const (
 )
 
 func runPostgresBaselineImport(cfg config.Config, opts baselineImportOpts) error {
+	// apfs / reflink はローカル CoW backend(zfs コマンドを使わない、#227)。
 	if cfg.Storage.Backend == "apfs" || cfg.Storage.Backend == "reflink" {
-		return fmt.Errorf("postgres + %s はまだ未対応です(postgres の process モードが必要 / #227)。"+
-			"いまは ebs-zfs / fsx-zfs で使ってください", cfg.Storage.Backend)
+		return runLocalPostgresBaselineImport(cfg, opts)
 	}
 
 	base := cfg.Storage.Zfs.BaseDataset
@@ -264,5 +266,183 @@ func runAsUserWithEnv(uid, gid uint32, env []string, name string, args ...string
 	if err != nil {
 		return fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(string(out)))
 	}
+	return nil
+}
+
+// runLocalPostgresBaselineImport は apfs / reflink(ローカル CoW backend)向けの
+// postgres baseline import(#227)。zfs を使わず、storage.local.root 配下に
+// クラスタを作って localstore の SnapshotBase で baseline を取得する。
+// macOS ネイティブでは非 root(ログインユーザー)で動くので降格しない。
+func runLocalPostgresBaselineImport(cfg config.Config, opts baselineImportOpts) error {
+	root := cfg.Storage.Local.Root
+	if root == "" {
+		return fmt.Errorf("storage.local.root が未設定です(apfs/reflink には必須)")
+	}
+	baselineTag := cfg.Storage.Local.BaselineSnapshot
+	if baselineTag == "" {
+		baselineTag = "baseline"
+	}
+	dataDir := filepath.Join(root, "base", "data")
+	snapPath := filepath.Join(root, "base", "snap", baselineTag)
+
+	if _, err := os.Stat(snapPath); err == nil {
+		return fmt.Errorf("baseline %s は既に存在します。取得し直しは baseline refresh で対応", snapPath)
+	}
+	if entries, err := os.ReadDir(dataDir); err == nil && len(entries) > 0 {
+		return fmt.Errorf("%s が空ではありません。初期化済みの base に import はできません", dataDir)
+	}
+
+	// root(コンテナ)なら run_user へ降格する。非 root(macOS ネイティブの
+	// ログインユーザー)ではそのまま自分で起動する — postgres ユーザーが
+	// 居ない/setuid できないため(mysql 側 #138 と同じ理由)。
+	asRoot := os.Geteuid() == 0
+	var uid, gid uint32
+	if asRoot {
+		runUser := cfg.EngineRunUser()
+		if runUser == "" {
+			runUser = "postgres"
+		}
+		var err error
+		if uid, gid, err = lookupOSUser(runUser); err != nil {
+			return err
+		}
+	}
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return err
+	}
+	if asRoot {
+		if err := chownR(filepath.Join(root, "base"), uid, gid); err != nil {
+			return err
+		}
+	}
+	if err := os.Chmod(dataDir, 0o700); err != nil {
+		return err
+	}
+
+	binDir := cfg.Engine.Postgres.BinDir
+	initdb := pgBin(binDir, "initdb")
+	pgCtl := pgBin(binDir, "pg_ctl")
+	psql := pgBin(binDir, "psql")
+	pgRestore := pgBin(binDir, "pg_restore")
+
+	// 非 root では降格しない実行関数に差し替える。
+	run := func(name string, args ...string) error {
+		if asRoot {
+			return runAsUser(uid, gid, name, args...)
+		}
+		out, err := exec.Command(name, args...).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+	runEnv := func(name string, args ...string) error {
+		if asRoot {
+			return runAsUserWithEnv(uid, gid, pgEnv(), name, args...)
+		}
+		cmd := exec.Command(name, args...)
+		cmd.Env = append(os.Environ(), pgEnv()...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+
+	fmt.Println("→ initdb")
+	initArgs := []string{"-D", dataDir, "--auth-host=scram-sha-256", "--auth-local=trust"}
+	initArgs = append(initArgs, cfg.Engine.Postgres.InitdbArgs...)
+	if err := run(initdb, initArgs...); err != nil {
+		return fmt.Errorf("initdb: %w", err)
+	}
+
+	fmt.Println("→ postgres 起動")
+	startOpts := fmt.Sprintf("-p %s -c listen_addresses='' -c unix_socket_directories=%s",
+		pgBaselinePort, pgBaselineSocket)
+	// -l を渡さないとデーモンが親のパイプを握って CombinedOutput がブロックする。
+	startArgs := []string{"start", "-D", dataDir, "-o", startOpts, "-l", pgBaselineLog, "-w"}
+	if asRoot {
+		if err := runAsUserNoPipe(uid, gid, pgCtl, startArgs...); err != nil {
+			return fmt.Errorf("pg_ctl start: %w (詳細は %s)", err, pgBaselineLog)
+		}
+	} else {
+		cmd := exec.Command(pgCtl, startArgs...)
+		cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("pg_ctl start: %w (詳細は %s)", err, pgBaselineLog)
+		}
+	}
+	stopped := false
+	defer func() {
+		if !stopped {
+			_ = run(pgCtl, "stop", "-D", dataDir, "-m", "immediate", "-w")
+		}
+	}()
+
+	db := opts.db
+	if db == "" {
+		db = "postgres"
+	}
+	if opts.db != "" {
+		fmt.Printf("→ データベース %s 作成\n", opts.db)
+		if err := runEnv(psql, "-w", "-v", "ON_ERROR_STOP=1", "-d", "postgres",
+			"-c", "CREATE DATABASE "+quoteIdent(opts.db)); err != nil {
+			return fmt.Errorf("create database %s: %w", opts.db, err)
+		}
+	}
+	if opts.from != "" {
+		fi, err := os.Stat(opts.from)
+		if err != nil {
+			return err
+		}
+		switch {
+		case fi.IsDir():
+			fmt.Printf("→ ダンプ投入 (%s, ディレクトリ形式, %d 並列)\n", opts.from, max(opts.threads, 1))
+			err = runEnv(pgRestore, "-w", "-d", db, "--no-owner",
+				"-j", strconv.Itoa(max(opts.threads, 1)), opts.from)
+		case isPgCustomDump(opts.from):
+			fmt.Printf("→ ダンプ投入 (%s, カスタム形式)\n", opts.from)
+			err = runEnv(pgRestore, "-w", "-d", db, "--no-owner", opts.from)
+		default:
+			fmt.Printf("→ ダンプ投入 (%s, プレーン SQL)\n", opts.from)
+			err = runEnv(psql, "-w", "-v", "ON_ERROR_STOP=1", "-d", db, "-f", opts.from)
+		}
+		if err != nil {
+			return err
+		}
+	}
+
+	appUser, appPass := cfg.AppUser(), cfg.AppPass()
+	fmt.Printf("→ 接続ロール %s 作成\n", appUser)
+	roleSQL := fmt.Sprintf("CREATE ROLE %s LOGIN SUPERUSER PASSWORD %s",
+		quoteIdent(appUser), quoteLiteral(appPass))
+	if err := runEnv(psql, "-w", "-v", "ON_ERROR_STOP=1", "-d", "postgres", "-c", roleSQL); err != nil {
+		return fmt.Errorf("create role %s: %w", appUser, err)
+	}
+	if opts.db != "" {
+		if err := runEnv(psql, "-w", "-v", "ON_ERROR_STOP=1", "-d", "postgres", "-c",
+			fmt.Sprintf("ALTER DATABASE %s OWNER TO %s", quoteIdent(opts.db), quoteIdent(appUser))); err != nil {
+			return fmt.Errorf("alter database owner: %w", err)
+		}
+	}
+
+	// snapshot は必ず正常終了状態でのみ取得する。
+	fmt.Println("→ 正常終了")
+	if err := run(pgCtl, "stop", "-D", dataDir, "-m", "fast", "-w"); err != nil {
+		return fmt.Errorf("pg_ctl stop: %w", err)
+	}
+	stopped = true
+
+	fmt.Printf("→ snapshot %s 取得\n", snapPath)
+	st, err := localstore.New(cfg.Storage.Backend, root, baselineTag)
+	if err != nil {
+		return err
+	}
+	snap, err := st.SnapshotBase(context.Background(), baselineTag)
+	if err != nil {
+		return fmt.Errorf("snapshot: %w", err)
+	}
+	registerImportedBaseline(cfg.StateDB, string(snap), baselineTag)
+	fmt.Println("baseline import 完了。sashiki create <name> でブランチを作れます")
 	return nil
 }
