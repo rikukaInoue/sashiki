@@ -41,6 +41,14 @@ type Server struct {
 	// ファイルだけを読む。投入時の sql_mode / strict を実行時と揃えられる
 	// (未指定なら従来どおり既定の my.cnf を読む、#127)。
 	ExtraCnf string
+
+	// 以下は postgres エンジンでのみ使う(#226)。MySQL 経路では無視される。
+	// PgBinDir は initdb / psql / pg_ctl のあるディレクトリ。
+	PgBinDir string
+	// PgPort は一時クラスタのポート。TCP は開かないので socket 名にだけ使う。
+	PgPort int
+	// PgDB は SQL を流す既定のデータベース(source_db 相当)。
+	PgDB string
 }
 
 // mysqld は使う mysqld バイナリを返す(既定 /usr/sbin/mysqld)。
@@ -88,11 +96,14 @@ type Ops struct {
 	Shutdown func(ctx context.Context, s Server) error
 	// WaitGone は pid ファイルの消滅を待つ(= mysqld の停止確認)。
 	WaitGone func(ctx context.Context, s Server, timeout time.Duration) error
+	// Dialect は適用記録の SQL 方言(未設定なら MySQL 方言)。
+	Dialect Dialect
 }
 
-// RealOps は実コマンドを実行する Ops。
+// RealOps は実コマンドを実行する Ops(MySQL)。
 func RealOps() Ops {
 	return Ops{
+		Dialect: MySQLDialect(),
 		Initialize: func(ctx context.Context, s Server) error {
 			args := append(s.defaultsArgs(), "--initialize-insecure",
 				"--datadir="+s.DataDir, "--log-error="+s.LogError)
@@ -179,6 +190,17 @@ func runAs(ctx context.Context, s Server, name string, args ...string) error {
 	return nil
 }
 
+// LookupOSUser は任意の OS ユーザーの uid/gid を返す(root からの降格用)。
+func LookupOSUser(name string) (uint32, uint32, error) {
+	u, err := user.Lookup(name)
+	if err != nil {
+		return 0, 0, fmt.Errorf("%s ユーザーが見つかりません: %w", name, err)
+	}
+	uid, _ := strconv.Atoi(u.Uid)
+	gid, _ := strconv.Atoi(u.Gid)
+	return uint32(uid), uint32(gid), nil
+}
+
 // LookupMysqlUser は mysql ユーザーの uid/gid を返す(root からの降格用)。
 func LookupMysqlUser() (uint32, uint32, error) {
 	u, err := user.Lookup("mysql")
@@ -219,8 +241,14 @@ func ApplyDir(ctx context.Context, s Server, ops Ops, dir, db string) ([]string,
 		}
 	}
 
+	// 方言未設定(手組み Ops / 既存テスト)は従来どおり MySQL 方言とみなす。
+	dia := ops.Dialect
+	if dia.zero() {
+		dia = MySQLDialect()
+	}
+
 	if err := ops.Start(ctx, s); err != nil {
-		return nil, fmt.Errorf("mysqld start: %w", err)
+		return nil, fmt.Errorf("start: %w", err)
 	}
 	shutdown := func() error {
 		if err := ops.Shutdown(ctx, s); err != nil {
@@ -236,18 +264,16 @@ func ApplyDir(ctx context.Context, s Server, ops Ops, dir, db string) ([]string,
 	if err := ops.WaitReady(ctx, s, 60*time.Second); err != nil {
 		return fail(err)
 	}
-	if _, err := ops.Query(ctx, s, "CREATE DATABASE IF NOT EXISTS `"+metaDB+"`"); err != nil {
+	if _, err := ops.Query(ctx, s, dia.CreateMeta); err != nil {
 		return fail(err)
 	}
-	if _, err := ops.Query(ctx, s,
-		"CREATE TABLE IF NOT EXISTS `"+metaDB+"`._migrations (name VARCHAR(255) PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"); err != nil {
+	if _, err := ops.Query(ctx, s, dia.CreateMigrations); err != nil {
 		return fail(err)
 	}
 	var applied []string
 	for _, f := range files {
 		name := filepath.Base(f)
-		got, err := ops.Query(ctx, s,
-			fmt.Sprintf("SELECT COUNT(*) FROM `%s`._migrations WHERE name = '%s'", metaDB, name))
+		got, err := ops.Query(ctx, s, dia.CountMigration(name))
 		if err != nil {
 			return fail(err)
 		}
@@ -257,8 +283,7 @@ func ApplyDir(ctx context.Context, s Server, ops Ops, dir, db string) ([]string,
 		if err := ops.ApplyFile(ctx, s, db, f); err != nil {
 			return fail(fmt.Errorf("apply %s: %w", name, err))
 		}
-		if _, err := ops.Query(ctx, s,
-			fmt.Sprintf("INSERT INTO `%s`._migrations (name) VALUES ('%s')", metaDB, name)); err != nil {
+		if _, err := ops.Query(ctx, s, dia.InsertMigration(name)); err != nil {
 			return fail(err)
 		}
 		applied = append(applied, name)

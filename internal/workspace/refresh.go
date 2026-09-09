@@ -448,9 +448,6 @@ func (m *Manager) runSourceLoader(ctx context.Context, rc RefreshConfig) error {
 	if rc.RunSource != nil { // テスト注入
 		return rc.RunSource(ctx)
 	}
-	if m.cfg.EngineType != "mysql" {
-		return fmt.Errorf("組み込みローダーは mysql エンジンのみ対応です(engine=%s)", m.cfg.EngineType)
-	}
 	bp, ok := m.st.(basePathProvider)
 	if !ok {
 		return fmt.Errorf("このバックエンドは base の実パスを解決できないため source_dir を使えません(refresh.sh を使ってください)")
@@ -467,12 +464,26 @@ func (m *Manager) runSourceLoader(ctx context.Context, rc RefreshConfig) error {
 		MysqldBin: m.cfg.MysqldBin,
 		ExtraCnf:  m.cfg.MysqlExtraCnf,
 	}
+	// エンジンごとに実行系(と適用記録の SQL 方言)を差し替える(#226)。
+	ops := baseline.RealOps()
+	runUser := "mysql"
+	if m.cfg.EngineType == "postgres" {
+		ops = baseline.PostgresOps()
+		srv.Socket = "/tmp" // postgres では socket ディレクトリ
+		srv.LogError = ""   // 既定(os.TempDir())に任せる
+		srv.PgBinDir = m.cfg.PgBinDir
+		srv.PgDB = rc.SourceDB
+		runUser = m.cfg.PgRunUser
+		if runUser == "" {
+			runUser = "postgres"
+		}
+	}
 	if os.Geteuid() == 0 {
-		if uid, gid, err := baseline.LookupMysqlUser(); err == nil {
+		if uid, gid, err := baseline.LookupOSUser(runUser); err == nil {
 			srv.UID, srv.GID = uid, gid
 		}
 	}
-	applied, err := baseline.ApplyDir(ctx, srv, baseline.RealOps(), rc.SourceDir, rc.SourceDB)
+	applied, err := baseline.ApplyDir(ctx, srv, ops, rc.SourceDir, rc.SourceDB)
 	if err != nil {
 		return err
 	}
