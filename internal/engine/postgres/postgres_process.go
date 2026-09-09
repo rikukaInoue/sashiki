@@ -54,10 +54,44 @@ func (e *Engine) startOptions(ins engine.Instance) string {
 		// クローン先で古い socket ファイルが残る。
 		"-c unix_socket_directories=" + os.TempDir(),
 	}
-	if e.cfg.SharedBuffers != "" {
-		opts = append(opts, "-c shared_buffers="+e.cfg.SharedBuffers)
+	if b := pgSize(e.cfg.SharedBuffers); b != "" {
+		opts = append(opts, "-c shared_buffers="+b)
 	}
 	return strings.Join(opts, " ")
+}
+
+// pgSize は sashiki の設定で使うサイズ表記(mysql 由来の "128M" / "1G")を
+// PostgreSQL が受け付ける形("128MB" / "1GB")へ正規化する。postgres は "M" を
+// 受け付けず `invalid value for parameter "shared_buffers"` で起動に失敗する。
+// 単位が無い数値は postgres だと 8kB ブロック単位に解釈されて桁が変わるため、
+// 明示的にバイトとして扱う。
+func pgSize(s string) string {
+	t := strings.TrimSpace(s)
+	if t == "" {
+		return ""
+	}
+	i := len(t)
+	for i > 0 && (t[i-1] < '0' || t[i-1] > '9') {
+		i--
+	}
+	num, unit := t[:i], strings.ToLower(strings.TrimSpace(t[i:]))
+	if num == "" {
+		return t // 数値が取れない形は触らず postgres に判断させる
+	}
+	switch unit {
+	case "", "b":
+		return num + "B"
+	case "k", "kb":
+		return num + "kB"
+	case "m", "mb":
+		return num + "MB"
+	case "g", "gb":
+		return num + "GB"
+	case "t", "tb":
+		return num + "TB"
+	default:
+		return t
+	}
 }
 
 // startProcess は pg_ctl start でブランチの postgres を起動する。
