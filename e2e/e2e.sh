@@ -512,6 +512,38 @@ for _ in $(seq 1 30); do [ ! -f /tmp/sashiki-aa.pid ] && break; sleep 1; done
 [ ! -f /tmp/sashiki-aa.pid ] || fail "apparmor: temp mysqld did not exit"
 rm -f "/$POOL/base/data/sashiki-aa-allowed.txt"
 
+log "baseline export / import-stream の往復 (#243)"
+# zfs send で書き出し、いったん base を捨ててから recv で戻す。
+# ブランチが残っていると clone があって base を置き換えられないので、
+# 「先に消せ」と言われることも確認する。
+sashiki baseline export --to /var/tmp/baseline.zfs || fail "baseline export に失敗"
+[ -s /var/tmp/baseline.zfs ] || fail "export したストリームが空"
+echo "  export したストリーム: $(du -h /var/tmp/baseline.zfs | cut -f1)"
+
+# ブランチが居るうちは import-stream を拒否すること(安全側)。
+# この節は e2e 末尾にあり既存ブランチが片付いているので、判定用に 1 本作る。
+sashiki create pr-guard > /dev/null || fail "拒否テスト用のブランチを作れない"
+if sashiki baseline import-stream --from /var/tmp/baseline.zfs --force > /tmp/is.log 2>&1; then
+  cat /tmp/is.log; fail "ブランチが残っている間は import-stream を拒否すべき"
+fi
+grep -q "ブランチが" /tmp/is.log || { cat /tmp/is.log; fail "拒否理由がブランチ残存であるべき"; }
+echo "  ブランチ残存時は拒否される"
+
+# ブランチを片付けてから受け入れる
+for b in $(sashiki list --json | python3 -c 'import json,sys;d=json.load(sys.stdin);print(" ".join(x["name"] for x in d.get("branches") or []))'); do
+  sashiki delete "$b" > /dev/null
+done
+sashiki baseline import-stream --from /var/tmp/baseline.zfs --force \
+  || fail "baseline import-stream に失敗"
+# 受け取った baseline から作れて、中身も戻っていること
+sashiki create pr-recv > /dev/null || fail "import-stream 後に create できない"
+RP=$(sashiki show pr-recv --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["port"])')
+[ "$(mysql -udev -pdev -h127.0.0.1 -P$RP -N -B -e 'SELECT COUNT(*) FROM app.items' 2>/dev/null)" -ge 1 ] \
+  || fail "import-stream したデータが読めない"
+echo "  recv したベースラインからブランチを作れる"
+sashiki delete pr-recv > /dev/null
+rm -f /var/tmp/baseline.zfs
+
 # --- 6. 後片付け ---
 log "cleanup"
 kill $SASHIKID_PID 2>/dev/null || true
