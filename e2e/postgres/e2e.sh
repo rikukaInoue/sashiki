@@ -177,6 +177,47 @@ log "delete"
 time sashiki-pg delete pg-1
 grep -q pg- <<<"$(zfs list -r $POOL/branches)" && fail "dataset should be destroyed"
 
+log "組み込み refresh ローダー: source_dir/*.sql を baseline に適用 (#226)"
+# refresh.sh を書かずに SQL を置くだけで baseline を更新できること。
+# 適用記録は sashiki_meta スキーマ(postgres は DB を跨げないため)。
+mkdir -p /etc/sashiki-pg/baseline-src
+cat > /etc/sashiki-pg/baseline-src/001_add_color.sql <<'SQL'
+ALTER TABLE items ADD COLUMN color TEXT;
+UPDATE items SET color = 'red';
+SQL
+python3 - <<'PY'
+import re, pathlib
+p = pathlib.Path("/etc/sashiki-pg/config.yaml")
+s = p.read_text()
+s += """
+baseline:
+  source_dir: /etc/sashiki-pg/baseline-src
+  source_db: app
+"""
+p.write_text(s)
+PY
+# sashikid に config を読み直させる
+kill $SASHIKID_PID 2>/dev/null || true
+for _ in $(seq 1 20); do curl -sf http://127.0.0.1:8090/v1/healthz >/dev/null 2>&1 || break; sleep 0.3; done
+/usr/local/bin/sashikid-pg --config /etc/sashiki-pg/config.yaml > /var/log/sashiki-pg/sashikid-refresh.log 2>&1 &
+SASHIKID_PID=$!
+for _ in $(seq 1 30); do curl -sf http://127.0.0.1:8090/v1/healthz > /dev/null 2>&1 && break; sleep 0.5; done
+curl -sf http://127.0.0.1:8090/v1/healthz > /dev/null || fail "refresh 用 sashikid が起動しない"
+
+timeout 180 sashiki-pg baseline refresh \
+  || { tail -30 /var/log/sashiki-pg/sashikid-refresh.log; fail "baseline refresh が失敗した"; }
+echo "  refresh 完了"
+# 新しい baseline から作ったブランチに列が入っていること
+sashiki-pg create pg-ref > /dev/null || fail "refresh 後の create に失敗"
+RPORT=$(sashiki-pg show pg-ref --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["port"])')
+[ "$(q $RPORT "SELECT color FROM items LIMIT 1")" = "red" ] \
+  || fail "refresh で追加した列が新ブランチに反映されていない"
+echo "  新ブランチに追加列が反映されている"
+# 冪等: もう一度 refresh しても二重適用にならない
+timeout 180 sashiki-pg baseline refresh > /dev/null || fail "2 回目の refresh が失敗した"
+echo "  2 回目の refresh も成功(適用記録で冪等)"
+sashiki-pg delete pg-ref > /dev/null
+
 log "process モード: systemd 無しで起動する (#227)"
 # 起動方式は storage backend と直交するので、ここでは zfs のまま mode だけ
 # 差し替えて pg_ctl 直起動を検証する(macOS/コンテナで使う経路の本質は同じ)。

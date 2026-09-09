@@ -65,6 +65,8 @@ type Config struct {
 	// MysqldBin / MysqlExtraCnf は baseline refresh の一時 mysqld に使う(#127)。
 	// 空なら /usr/sbin/mysqld / 既定 my.cnf。
 	MysqldBin     string
+	PgBinDir      string
+	PgRunUser     string
 	MysqlExtraCnf string
 	StateDir      string // hook 用の作業ディレクトリの親(/var/lib/sashiki/branches)
 
