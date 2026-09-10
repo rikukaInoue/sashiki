@@ -149,6 +149,19 @@ grep -qi "database system was not properly shut down" <<<"$pg_journal" \
 grep -qi "database system is ready to accept connections" <<<"$pg_journal" \
   || fail "journal に postgres のログが見つからない(crash recovery チェックが機能していない)"
 
+log "データブラウザ API (#228)"
+# schema / query が postgres でも動くこと(pgx 経由)。
+schema=$(curl -sf http://127.0.0.1:8090/v1/branches/pg-1/schema) \
+  || fail "schema API に失敗"
+grep -q '"items"' <<<"$schema" || fail "schema に items テーブルが出るはず (got: $schema)"
+grep -q '"databases"' <<<"$schema" || fail "schema の形式が想定と違う"
+echo "  schema API が items を返す"
+qres=$(curl -sf -X POST -H 'Content-Type: application/json' \
+  -d '{"sql":"SELECT name FROM items ORDER BY id LIMIT 1"}' \
+  http://127.0.0.1:8090/v1/branches/pg-1/query) || fail "query API に失敗"
+grep -q "alpha" <<<"$qres" || fail "query API が結果を返さない (got: $qres)"
+echo "  query API が結果を返す"
+
 log "pgproxy: 固定エンドポイント経由 + lazy create (#222)"
 # 未作成の pg-2 へ dev@pg-2 で接続すると、認証(SCRAM-SHA-256)が通ってから
 # lazy create されてそのブランチに繋がる。psql は既定で SSL を試すので、

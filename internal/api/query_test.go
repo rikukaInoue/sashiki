@@ -206,11 +206,59 @@ func TestQueryRejectsDNSRebindingHost(t *testing.T) {
 	}
 }
 
+// postgres は #228 で対応済み。未知の engine だけ 501 を返すこと。
 func TestQueryUnsupportedEngine(t *testing.T) {
-	s := newQueryTestServer(t, "postgres", nil) // openDB は本物の branchDB のまま
+	s := newQueryTestServer(t, "sqlite", nil) // openDB は本物の branchDB のまま
 	w := postQuery(s, `{"sql":"SELECT 1"}`, "application/json", "", "localhost:8080")
 	if w.Code != 501 {
-		t.Errorf("postgres engine should be 501, got %d body=%s", w.Code, w.Body.String())
+		t.Errorf("unknown engine should be 501, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// postgres は 501 にならないこと(未対応扱いに戻っていないかの回帰検出)。
+// ブランチが無いので 404 になるが、501 でなければ「対応している」と言える。
+func TestQueryPostgresIsSupported(t *testing.T) {
+	s := newQueryTestServer(t, "postgres", nil)
+	w := postQuery(s, `{"sql":"SELECT 1"}`, "application/json", "", "localhost:8080")
+	if w.Code == 501 {
+		t.Errorf("postgres should be supported now (#228), got 501 body=%s", w.Body.String())
+	}
+}
+
+// engine ごとにスキーマ問い合わせが切り替わること。返す列の並びは共通で、
+// postgres 側は MySQL 固有の column_type / column_key / table_rows を使わない。
+func TestSchemaQueryPerEngine(t *testing.T) {
+	pg := &Server{engine: "postgres"}
+	my := &Server{engine: "mysql"}
+	if pg.schemaQuery() == my.schemaQuery() {
+		t.Fatal("engine ごとに別のクエリを使うべき")
+	}
+	q := pg.schemaQuery()
+	// MySQL 固有の information_schema 列を参照していないこと
+	// (出力の別名としての column_key は残してよい。列の並びを揃えるため)。
+	for _, bad := range []string{"c.column_type", "c.column_key", "t.table_rows"} {
+		if strings.Contains(q, bad) {
+			t.Errorf("postgres のクエリが MySQL 固有の %s を参照している", bad)
+		}
+	}
+	for _, want := range []string{"data_type", "reltuples", "PRIMARY KEY"} {
+		if !strings.Contains(q, want) {
+			t.Errorf("postgres のクエリに %s が無い", want)
+		}
+	}
+}
+
+func TestPgDSNEscapesCredentials(t *testing.T) {
+	dsn := pgDSN("dev@x", "p@ss:w/rd", 5433, "app")
+	if !strings.HasPrefix(dsn, "postgres://") {
+		t.Fatalf("dsn = %q", dsn)
+	}
+	// 記号がそのまま出て URL を壊していないこと
+	if strings.Contains(dsn, "p@ss:w/rd") {
+		t.Errorf("パスワードがエスケープされていない: %q", dsn)
+	}
+	if !strings.Contains(dsn, "/app") || !strings.Contains(dsn, "sslmode=disable") {
+		t.Errorf("dsn = %q", dsn)
 	}
 }
 
