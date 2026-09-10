@@ -34,11 +34,13 @@ const (
 	maxCellBytes = 64 << 10 // 1 セルの上限。LONGBLOB 等で応答が肥大するのを防ぐ
 )
 
-// ErrUnsupportedEngine はデータブラウザ未対応エンジン(mysql 以外)への要求。
-var ErrUnsupportedEngine = errors.New("data browser supports the mysql engine only")
+// ErrUnsupportedEngine はデータブラウザ未対応エンジンへの要求。
+var ErrUnsupportedEngine = errors.New("data browser supports the mysql and postgres engines only")
 
 func (s *Server) branchDB(ctx context.Context, name string) (*sql.DB, error) {
-	if s.engine != "" && s.engine != "mysql" {
+	switch s.engine {
+	case "", "mysql", "postgres":
+	default:
 		return nil, ErrUnsupportedEngine
 	}
 	info, err := s.mgr.Get(ctx, name)
@@ -47,6 +49,14 @@ func (s *Server) branchDB(ctx context.Context, name string) (*sql.DB, error) {
 	}
 	if info.State != state.StateRunning {
 		return nil, fmt.Errorf("branch %s is %s (not running)", name, info.State)
+	}
+	if s.engine == "postgres" {
+		// PostgreSQL の接続は 1 DB に束縛されるので、見せる DB を選んでから繋ぐ(#228)。
+		dbname, err := pgBrowseDatabase(ctx, s.user, s.pass, info.Port)
+		if err != nil {
+			return nil, err
+		}
+		return pgOpen(s.user, s.pass, info.Port, dbname)
 	}
 	// 資格情報に記号が入っても壊れないよう FormatDSN で組む
 	mcfg := mysql.NewConfig()
@@ -136,14 +146,7 @@ func (s *Server) handleSchema(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), queryTimeout)
 	defer cancel()
 
-	rows, err := db.QueryContext(ctx, `
-		SELECT c.table_schema, c.table_name, COALESCE(t.table_rows, 0),
-		       c.column_name, c.column_type, c.is_nullable, c.column_key
-		FROM information_schema.columns c
-		JOIN information_schema.tables t
-		  ON t.table_schema = c.table_schema AND t.table_name = c.table_name
-		WHERE c.table_schema NOT IN ('mysql','sys','information_schema','performance_schema')
-		ORDER BY c.table_schema, c.table_name, c.ordinal_position`)
+	rows, err := db.QueryContext(ctx, s.schemaQuery())
 	if err != nil {
 		s.writeError(w, err)
 		return
@@ -263,4 +266,23 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"columns": cols, "rows": out, "truncated": truncated,
 	})
+}
+
+// mysqlSchemaQuery は MySQL 用のスキーマ問い合わせ。
+const mysqlSchemaQuery = `
+	SELECT c.table_schema, c.table_name, COALESCE(t.table_rows, 0),
+	       c.column_name, c.column_type, c.is_nullable, c.column_key
+	FROM information_schema.columns c
+	JOIN information_schema.tables t
+	  ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+	WHERE c.table_schema NOT IN ('mysql','sys','information_schema','performance_schema')
+	ORDER BY c.table_schema, c.table_name, c.ordinal_position`
+
+// schemaQuery は engine に応じたスキーマ問い合わせを返す(#228)。
+// 返す列は engine を問わず同じ(schema, table, 概算行数, column, type, nullable, key)。
+func (s *Server) schemaQuery() string {
+	if s.engine == "postgres" {
+		return pgSchemaQuery
+	}
+	return mysqlSchemaQuery
 }
