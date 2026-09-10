@@ -5,9 +5,22 @@ branding:
   color: green
 
 inputs:
+  transport:
+    description: "接続方式 (api | ssm)。ssm は SSM Run Command でインスタンス上の CLI を叩く(VPC 内 API に runner が届かない構成向け)"
+    required: false
+    default: "api"
+  instance_id:
+    description: "transport=ssm のときの対象 EC2 instance id"
+    required: false
+    default: ""
+  action:
+    description: "操作を明示する (create | delete | reset)。省略時は PR イベントから決める(ラベル駆動で reset したい場合などに使う)"
+    required: false
+    default: ""
   api_url:
-    description: "sashikid の API URL (例: http://sashiki.internal:8080)"
-    required: true
+    description: "sashikid の API URL (例: http://sashiki.internal:8080)。transport=api のとき必須"
+    required: false
+    default: ""
   token:
     description: "sashiki API トークン"
     required: false
@@ -54,6 +67,9 @@ runs:
     - id: branch
       shell: bash
       env:
+        SASHIKI_TRANSPORT: ${{ inputs.transport }}
+        SASHIKI_INSTANCE_ID: ${{ inputs.instance_id }}
+        SASHIKI_ACTION: ${{ inputs.action }}
         SASHIKI_API_URL: ${{ inputs.api_url }}
         SASHIKI_API_TOKEN: ${{ inputs.token }}
         SASHIKI_BRANCH: ${{ inputs.branch != '' && inputs.branch || format('pr-{0}', github.event.pull_request.number) }}

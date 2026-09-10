@@ -276,6 +276,23 @@ grep -q '"type":"github_pr"' <<<"$(sashiki show pr-77 --json)" || fail "action: 
 : > /tmp/sashiki-action-out
 SASHIKI_EVENT=synchronize SASHIKI_OUTPUT=/tmp/sashiki-action-out bash "$AE" || fail "action: synchronize should succeed on existing branch"
 grep -q "created=false" /tmp/sashiki-action-out || fail "action: created=false expected for existing"
+# action: reset を明示指定(ラベル駆動想定、#244)。イベントではなく action が優先される。
+mysql -udev -pdev -h127.0.0.1 -P"$(sashiki show pr-77 --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["port"])')" \
+  -e "DELETE FROM app.items" 2>/dev/null || fail "action: reset 検証の準備(削除)に失敗"
+: > /tmp/sashiki-action-out
+SASHIKI_ACTION=reset SASHIKI_OUTPUT=/tmp/sashiki-action-out bash "$AE" || fail "action: reset should succeed"
+grep -q "^host=" /tmp/sashiki-action-out || fail "action: reset should emit connection info"
+rp=$(sashiki show pr-77 --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["port"])')
+[ "$(mysql -udev -pdev -h127.0.0.1 -P"$rp" -N -B -e 'SELECT COUNT(*) FROM app.items' 2>/dev/null)" -ge 1 ] \
+  || fail "action: reset should restore rows"
+echo "  action=reset でブランチが作成時点に戻った"
+# action 明示は on_close=keep より優先される(delete を明示したら消す)
+SASHIKI_ACTION=delete SASHIKI_ON_CLOSE=keep bash "$AE" || fail "action: explicit delete should succeed"
+sashiki show pr-77 > /dev/null 2>&1 && fail "action: explicit delete should remove the branch"
+echo "  action=delete は on_close=keep より優先される"
+# 消したので以降の keep/closed 検証のために作り直す
+SASHIKI_EVENT=opened bash "$AE" > /dev/null || fail "action: recreate for the remaining checks"
+
 # on_close=keep は削除しない (#46)
 SASHIKI_EVENT=closed SASHIKI_ON_CLOSE=keep bash "$AE" || fail "action: on_close=keep should succeed"
 sashiki show pr-77 --json > /dev/null || fail "action: on_close=keep should not delete the branch"
