@@ -6,11 +6,12 @@
 // リソースを確保させない)。バックエンドへは sashiki が保持する credential で
 // 接続し直す。
 //
-// 既知の制限(v1):
-//   - CancelRequest(psql の Ctrl-C)は中継しない。BackendKeyData を素通しして
-//     いるため、どのバックエンドへ転送すべきか proxy 側に記録が無い。
-//   - クライアント認証は SCRAM-SHA-256 のみ(PostgreSQL 10 以降のクライアントは
-//     すべて対応)。
+// CancelRequest(psql の Ctrl-C)にも対応する(#234)。接続確立時に backend が
+// 送る BackendKeyData を覗いて (pid, secret) → backend の対応を覚えておき、
+// あとから別接続で来る CancelRequest をその backend へ転送する。
+//
+// 既知の制限: クライアント認証は SCRAM-SHA-256 のみ(PostgreSQL 10 以降の
+// クライアントはすべて対応)。
 package pgproxy
 
 import (
@@ -58,7 +59,15 @@ type Server struct {
 
 	mu    sync.Mutex
 	conns map[string]int
+
+	// cancelMu / cancels は CancelRequest の転送先(#234)。BackendKeyData で
+	// クライアントへ渡した (pid, secret) をキーに、その接続の backend を覚える。
+	cancelMu sync.Mutex
+	cancels  map[cancelKey]string
 }
+
+// cancelKey は BackendKeyData の (pid, secret)。
+type cancelKey struct{ pid, secret int32 }
 
 // New は Server を作る。
 func New(cfg Config, router Router) (*Server, error) {
@@ -75,7 +84,7 @@ func New(cfg Config, router Router) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{cfg: cfg, router: router, nameRe: re, conns: map[string]int{}}, nil
+	return &Server{cfg: cfg, router: router, nameRe: re, conns: map[string]int{}, cancels: map[cancelKey]string{}}, nil
 }
 
 // Listen は接続を受け付ける。ctx キャンセルで停止。
@@ -150,9 +159,7 @@ func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
 
 	switch su.code {
 	case codeCancelRequest:
-		// v1 では中継しない。クライアントは応答を期待しないので黙って閉じる。
-		log.Printf("pgproxy: CancelRequest は未対応のため無視します")
-		return nil
+		return s.relayCancel(su)
 	case protocolV3:
 	default:
 		return fmt.Errorf("unsupported startup code %d", su.code)
@@ -196,8 +203,17 @@ func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
 	}
 
 	// クライアントへ認証完了を返す。以降 ParameterStatus / BackendKeyData /
-	// ReadyForQuery はバックエンドのものがそのまま素通しで届く。
+	// ReadyForQuery はバックエンドのものを中継する。BackendKeyData だけは
+	// CancelRequest の転送先を覚えるために覗く(#234)。
 	if err := writeMessage(client, msgAuthentication, buildAuthOK()); err != nil {
+		return err
+	}
+	backendAddr := fmt.Sprintf("%s:%d", s.cfg.BackendHost, port)
+	release, err := s.forwardStartup(client, backend, backendAddr)
+	if release != nil {
+		defer release()
+	}
+	if err != nil {
 		return err
 	}
 
@@ -329,4 +345,75 @@ func enableKeepAlive(c net.Conn) {
 		_ = t.SetKeepAlive(true)
 		_ = t.SetKeepAlivePeriod(30 * time.Second)
 	}
+}
+
+// forwardStartup は認証後の起動シーケンス(ParameterStatus / BackendKeyData /
+// ReadyForQuery)をクライアントへ中継する。BackendKeyData を見つけたら
+// CancelRequest の転送先として登録し、後片付け用の関数を返す(#234)。
+//
+// ここを 1 メッセージずつ読むのは K を覗くためだけで、ReadyForQuery を中継
+// したら以降は素通し(io.Copy)に切り替える。readMessage はバッファを持たず
+// 必要なぶんだけ読むので、切り替えでバイトを取りこぼさない。
+func (s *Server) forwardStartup(client, backend net.Conn, backendAddr string) (func(), error) {
+	var release func()
+	for {
+		m, err := readMessage(backend)
+		if err != nil {
+			return release, fmt.Errorf("backend startup: %w", err)
+		}
+		if m.typ == msgBackendKeyData {
+			if pid, secret, ok := parseBackendKeyData(m.body); ok {
+				s.registerCancel(pid, secret, backendAddr)
+				release = func() { s.unregisterCancel(pid, secret) }
+			}
+		}
+		if err := writeMessage(client, m.typ, m.body); err != nil {
+			return release, err
+		}
+		// ReadyForQuery まで来たら起動完了。ErrorResponse なら backend が
+		// 起動シーケンスで失敗しているので、そこで中継をやめる。
+		if m.typ == msgReadyForQuery || m.typ == msgErrorResponse {
+			return release, nil
+		}
+	}
+}
+
+func (s *Server) registerCancel(pid, secret int32, addr string) {
+	s.cancelMu.Lock()
+	defer s.cancelMu.Unlock()
+	s.cancels[cancelKey{pid, secret}] = addr
+}
+
+func (s *Server) unregisterCancel(pid, secret int32) {
+	s.cancelMu.Lock()
+	defer s.cancelMu.Unlock()
+	delete(s.cancels, cancelKey{pid, secret})
+}
+
+func (s *Server) lookupCancel(pid, secret int32) (string, bool) {
+	s.cancelMu.Lock()
+	defer s.cancelMu.Unlock()
+	addr, ok := s.cancels[cancelKey{pid, secret}]
+	return addr, ok
+}
+
+// relayCancel は CancelRequest を対象の backend へ転送する(#234)。
+// PostgreSQL のキャンセルは別接続で送られ、サーバは応答せず接続を閉じる。
+// 対象が見つからない場合(既に切断済みなど)は黙って閉じる —— クライアントは
+// どのみち応答を待たないし、他人の接続を止めないためにも推測はしない。
+func (s *Server) relayCancel(su startup) error {
+	addr, ok := s.lookupCancel(su.cancelPID, su.cancelSecret)
+	if !ok {
+		log.Printf("pgproxy: CancelRequest の転送先が見つかりません(接続が既に閉じている可能性)")
+		return nil
+	}
+	backend, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	if err != nil {
+		return fmt.Errorf("cancel: backend %s: %w", addr, err)
+	}
+	defer func() { _ = backend.Close() }()
+	if _, err := backend.Write(buildCancelRequest(su.cancelPID, su.cancelSecret)); err != nil {
+		return fmt.Errorf("cancel: send: %w", err)
+	}
+	return nil
 }

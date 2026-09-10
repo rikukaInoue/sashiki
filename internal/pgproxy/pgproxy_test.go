@@ -423,3 +423,124 @@ func TestProxyUnknownBranch(t *testing.T) {
 		t.Fatalf("expected unknown branch error, got %v", err)
 	}
 }
+
+// --- CancelRequest 中継 (#234) ---
+
+// fakeBackendWithKey は認証後に BackendKeyData を送る backend。
+// キャンセル用に届いた CancelRequest を cancels に流す。
+func fakeBackendWithKey(t *testing.T, pid, secret int32) (port int, cancels chan [2]int32) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	cancels = make(chan [2]int32, 4)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = conn.Close() }()
+				su, err := readStartup(conn)
+				if err != nil {
+					return
+				}
+				if su.code == codeCancelRequest {
+					cancels <- [2]int32{su.cancelPID, su.cancelSecret}
+					return // サーバは応答せず閉じる
+				}
+				_ = writeMessage(conn, msgAuthentication, buildAuthOK())
+				key := make([]byte, 8)
+				binary.BigEndian.PutUint32(key[0:4], uint32(pid))
+				binary.BigEndian.PutUint32(key[4:8], uint32(secret))
+				_ = writeMessage(conn, msgBackendKeyData, key)
+				_ = writeMessage(conn, msgReadyForQuery, []byte{'I'})
+				_, _ = io.Copy(conn, conn)
+			}()
+		}
+	}()
+	_, p, _ := net.SplitHostPort(ln.Addr().String())
+	_, _ = fmt.Sscanf(p, "%d", &port)
+	return port, cancels
+}
+
+// BackendKeyData がクライアントへそのまま届き、その値で送った CancelRequest が
+// 同じ backend へ転送されること。
+func TestProxyRelaysCancelRequest(t *testing.T) {
+	const pid, secret = int32(4242), int32(998877)
+	port, cancels := fakeBackendWithKey(t, pid, secret)
+	r := &fakeRouter{port: port}
+	addr := startProxy(t, Config{AppUser: "dev", AppPassword: "pw"}, r)
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	if err := scramClientHandshake(t, conn, "dev@pr-1", "pw"); err != nil {
+		t.Fatalf("handshake: %v", err)
+	}
+
+	// 起動シーケンスが中継され、BackendKeyData の値がそのまま来ること
+	var gotPID, gotSecret int32
+	for {
+		m, err := readMessage(conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.typ == msgBackendKeyData {
+			gotPID, gotSecret, _ = parseBackendKeyData(m.body)
+		}
+		if m.typ == msgReadyForQuery {
+			break
+		}
+	}
+	if gotPID != pid || gotSecret != secret {
+		t.Fatalf("BackendKeyData = (%d,%d), want (%d,%d)", gotPID, gotSecret, pid, secret)
+	}
+
+	// 別接続でキャンセルを送る(psql の Ctrl-C 相当)
+	c2, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c2.Close() }()
+	if _, err := c2.Write(buildCancelRequest(gotPID, gotSecret)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-cancels:
+		if got[0] != pid || got[1] != secret {
+			t.Errorf("転送された CancelRequest = %v, want (%d,%d)", got, pid, secret)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("CancelRequest が backend へ転送されなかった")
+	}
+}
+
+// 未知の (pid, secret) は転送先が無いので黙って閉じる(他人の接続を止めない)。
+func TestProxyIgnoresUnknownCancel(t *testing.T) {
+	r := &fakeRouter{port: 1}
+	addr := startProxy(t, Config{AppUser: "dev", AppPassword: "pw"}, r)
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := conn.Write(buildCancelRequest(1, 2)); err != nil {
+		t.Fatal(err)
+	}
+	// proxy 側は接続を閉じる。読み出しは EOF になるはず(パニックしないこと)。
+	buf := make([]byte, 1)
+	if _, err := conn.Read(buf); err == nil {
+		t.Error("未知のキャンセルは応答せず閉じるべき")
+	}
+	if len(r.routed) != 0 {
+		t.Error("キャンセルで branch を触ってはいけない")
+	}
+}

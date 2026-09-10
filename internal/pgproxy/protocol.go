@@ -28,6 +28,7 @@ const (
 	msgAuthentication = 'R'
 	msgErrorResponse  = 'E'
 	msgReadyForQuery  = 'Z'
+	msgBackendKeyData = 'K'
 )
 
 // メッセージ型(クライアント→サーバ)。PasswordMessage / SASLInitialResponse /
@@ -48,6 +49,10 @@ const (
 type startup struct {
 	code   int32             // protocolV3 / codeSSLRequest / codeCancelRequest ...
 	params map[string]string // protocolV3 のときのみ
+	// CancelRequest のときの対象(BackendKeyData でクライアントへ渡した値が
+	// そのまま返ってくる)。
+	cancelPID    int32
+	cancelSecret int32
 }
 
 // readStartup は StartupMessage(型バイト無し)を読む。
@@ -66,6 +71,10 @@ func readStartup(c net.Conn) (startup, error) {
 		return startup{}, fmt.Errorf("read startup body: %w", err)
 	}
 	s := startup{code: int32(binary.BigEndian.Uint32(body[:4]))}
+	if s.code == codeCancelRequest && len(body) >= 12 {
+		s.cancelPID = int32(binary.BigEndian.Uint32(body[4:8]))
+		s.cancelSecret = int32(binary.BigEndian.Uint32(body[8:12]))
+	}
 	if s.code != protocolV3 {
 		return s, nil // SSLRequest / CancelRequest 等はパラメータを持たない
 	}
@@ -201,4 +210,23 @@ func errorText(body []byte) string {
 		rest = r
 	}
 	return "unknown error"
+}
+
+// buildCancelRequest は CancelRequest(型バイト無し、16 byte 固定)を組む。
+// バックエンドへそのまま転送するために使う。
+func buildCancelRequest(pid, secret int32) []byte {
+	b := make([]byte, 16)
+	binary.BigEndian.PutUint32(b[0:4], 16)
+	binary.BigEndian.PutUint32(b[4:8], uint32(codeCancelRequest))
+	binary.BigEndian.PutUint32(b[8:12], uint32(pid))
+	binary.BigEndian.PutUint32(b[12:16], uint32(secret))
+	return b
+}
+
+// parseBackendKeyData は 'K' メッセージから pid / secret を取り出す。
+func parseBackendKeyData(body []byte) (pid, secret int32, ok bool) {
+	if len(body) < 8 {
+		return 0, 0, false
+	}
+	return int32(binary.BigEndian.Uint32(body[0:4])), int32(binary.BigEndian.Uint32(body[4:8])), true
 }
