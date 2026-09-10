@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -56,25 +57,20 @@ func pgBrowseDatabase(ctx context.Context, user, pass string, port int) (string,
 	}
 	defer func() { _ = admin.Close() }()
 
-	rows, err := admin.QueryContext(ctx, `
+	// 最初の 1 件だけ見れば良いので LIMIT 1 + QueryRow を使う。
+	var name string
+	err = admin.QueryRowContext(ctx, `
 		SELECT datname FROM pg_database
 		WHERE datistemplate = false AND datallowconn = true AND datname <> 'postgres'
-		ORDER BY datname`)
-	if err != nil {
+		ORDER BY datname
+		LIMIT 1`).Scan(&name)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "postgres", nil // アプリ DB が無ければ既定 DB を見せる
+	case err != nil:
 		return "", fmt.Errorf("list databases: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return "", err
-		}
-		return name, nil // 最初のアプリ DB
-	}
-	if err := rows.Err(); err != nil {
-		return "", err
-	}
-	return "postgres", nil
+	return name, nil
 }
 
 // pgSchemaQuery は MySQL 版と同じ列(schema, table, 概算行数, column, type,
