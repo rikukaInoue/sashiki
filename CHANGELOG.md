@@ -7,6 +7,23 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 > [Conventional Commits](https://www.conventionalcommits.org/) から自動生成する(手動編集不要)。
 > リリース手順は [docs/RELEASING.md](docs/RELEASING.md) を参照。v0.5.0 までは手書き。
 
+## [0.8.0](https://github.com/rikukaInoue/sashiki/compare/v0.7.0...v0.8.0) (2026-09-11)
+
+
+### Features
+
+* **action:** add transport: ssm and an explicit action input ([#244](https://github.com/rikukaInoue/sashiki/issues/244)) ([#250](https://github.com/rikukaInoue/sashiki/issues/250)) ([f03a484](https://github.com/rikukaInoue/sashiki/commit/f03a484c3cf8e430893c0ce658bd419dfabc2c90))
+* **api:** PostgreSQL support for the data browser ([#228](https://github.com/rikukaInoue/sashiki/issues/228)) ([#252](https://github.com/rikukaInoue/sashiki/issues/252)) ([ba0de0a](https://github.com/rikukaInoue/sashiki/commit/ba0de0a6dc4601e5a194b75afeb9777c0d326974))
+* **baseline:** built-in refresh loader for Postgres ([#226](https://github.com/rikukaInoue/sashiki/issues/226)) ([#241](https://github.com/rikukaInoue/sashiki/issues/241)) ([21f0440](https://github.com/rikukaInoue/sashiki/commit/21f044088c3f18f61049ab2264d4f71a87e61c00))
+* **baseline:** stream export/import via zfs send-recv, and S3/stdin dumps ([#243](https://github.com/rikukaInoue/sashiki/issues/243), [#242](https://github.com/rikukaInoue/sashiki/issues/242)) ([#249](https://github.com/rikukaInoue/sashiki/issues/249)) ([0ef573f](https://github.com/rikukaInoue/sashiki/commit/0ef573f3d4c4e6ad8071119541b93288372e7ad5))
+* **init:** sashiki init --platform darwin --engine postgres ([#238](https://github.com/rikukaInoue/sashiki/issues/238)) ([#253](https://github.com/rikukaInoue/sashiki/issues/253)) ([36ff11c](https://github.com/rikukaInoue/sashiki/commit/36ff11c8c9c752ba85e54bb2598f7d8262ad0a73))
+* **pgproxy:** relay CancelRequest to the right backend ([#234](https://github.com/rikukaInoue/sashiki/issues/234)) ([#251](https://github.com/rikukaInoue/sashiki/issues/251)) ([c164c2c](https://github.com/rikukaInoue/sashiki/commit/c164c2c1bf533faaaaa433029fb6f5d6bd97f1b1))
+
+
+### Bug Fixes
+
+* **init:** reuse an existing zpool on instance replacement; add mysqld TimeoutStopSec ([#248](https://github.com/rikukaInoue/sashiki/issues/248)) ([8badeb3](https://github.com/rikukaInoue/sashiki/commit/8badeb36a6e8ce7a30f5ed7dd38f50d29cb0315e)), closes [#245](https://github.com/rikukaInoue/sashiki/issues/245) [#246](https://github.com/rikukaInoue/sashiki/issues/246)
+
 ## [0.7.0](https://github.com/rikukaInoue/sashiki/compare/v0.6.0...v0.7.0) (2026-09-09)
 
 
