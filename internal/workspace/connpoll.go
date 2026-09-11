@@ -11,8 +11,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/rikukaInoue/sashiki/internal/engine"
-	"github.com/rikukaInoue/sashiki/internal/state"
+	"github.com/rikukadev/sashiki/internal/engine"
+	"github.com/rikukadev/sashiki/internal/state"
 )
 
 // connPollTimeout は 1 branch あたりの接続数取得のタイムアウト。

@@ -5,9 +5,9 @@ package main
 import (
 	"fmt"
 
-	"github.com/rikukaInoue/sashiki/internal/storage"
-	storagereflink "github.com/rikukaInoue/sashiki/internal/storage/reflink"
-	"github.com/rikukaInoue/sashiki/internal/workspace"
+	"github.com/rikukadev/sashiki/internal/storage"
+	storagereflink "github.com/rikukadev/sashiki/internal/storage/reflink"
+	"github.com/rikukadev/sashiki/internal/workspace"
 )
 
 // localBackend は Linux ではローカル CoW backend として reflink(cp --reflink)を返す。

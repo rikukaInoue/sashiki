@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/rikukaInoue/sashiki/internal/workspace"
+	"github.com/rikukadev/sashiki/internal/workspace"
 )
 
 // MetricsHandler は GET /metrics を返すハンドラ。

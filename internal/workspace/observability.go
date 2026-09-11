@@ -3,7 +3,7 @@
 // 既存の構成を保つ。
 package workspace
 
-import "github.com/rikukaInoue/sashiki/internal/state"
+import "github.com/rikukadev/sashiki/internal/state"
 
 // OperationStats は operations の type×state 集計を返す。
 func (m *Manager) OperationStats() ([]state.OperationStat, error) {

@@ -36,7 +36,7 @@ baseline サイズに合わせて調整)。
 
 ```bash
 # sashiki 導入
-curl -fsSL https://raw.githubusercontent.com/rikukaInoue/sashiki/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/rikukadev/sashiki/main/install.sh | sudo bash
 
 # ループバックファイルの zpool で初期化(物理ディスク不要)
 truncate -s 40G /var/tmp/sashiki.img

@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rikukaInoue/sashiki/internal/engine"
-	"github.com/rikukaInoue/sashiki/internal/hooks"
-	"github.com/rikukaInoue/sashiki/internal/state"
-	"github.com/rikukaInoue/sashiki/internal/storage"
+	"github.com/rikukadev/sashiki/internal/engine"
+	"github.com/rikukadev/sashiki/internal/hooks"
+	"github.com/rikukadev/sashiki/internal/state"
+	"github.com/rikukadev/sashiki/internal/storage"
 )
 
 // --- mocks ---

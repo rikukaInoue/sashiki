@@ -18,8 +18,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/rikukaInoue/sashiki/internal/config"
-	"github.com/rikukaInoue/sashiki/internal/localstore"
+	"github.com/rikukadev/sashiki/internal/config"
+	"github.com/rikukadev/sashiki/internal/localstore"
 )
 
 // baseline 構築用に一時起動するクラスタの設定。TCP を開かず(listen_addresses=”)

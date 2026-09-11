@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rikukaInoue/sashiki/internal/state"
-	"github.com/rikukaInoue/sashiki/internal/workspace"
+	"github.com/rikukadev/sashiki/internal/state"
+	"github.com/rikukadev/sashiki/internal/workspace"
 )
 
 // --- database/sql/driver のフェイク(外部依存なしで *sql.Rows を作る) ---

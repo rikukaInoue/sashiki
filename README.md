@@ -1,6 +1,6 @@
 # sashiki
 
-![release](https://img.shields.io/github/v/release/rikukaInoue/sashiki?sort=semver) ![status](https://img.shields.io/badge/status-public%20preview-orange) ![license](https://img.shields.io/badge/license-Apache--2.0-blue)
+![release](https://img.shields.io/github/v/release/rikukadev/sashiki?sort=semver) ![status](https://img.shields.io/badge/status-public%20preview-orange) ![license](https://img.shields.io/badge/license-Apache--2.0-blue)
 
 > **成熟度**: public preview。MySQL + GitHub PR プレビューの経路は実機で検証済み。
 > API / config は**まだ固定していない**(マイナー版で破壊的変更があり得る)。本番 DB には使わない。
@@ -68,7 +68,7 @@ profile は用途ごとの寿命(idle 停止 / 自動削除)を表す。`create 
 
 ```bash
 # 最新 release を取得して導入(Linux=deb / macOS=tar.gz を自動判別)
-curl -fsSL https://raw.githubusercontent.com/rikukaInoue/sashiki/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/rikukadev/sashiki/main/install.sh | sudo bash
 ```
 
 ### 2. 初期化
@@ -119,7 +119,7 @@ brew install mysql         # 版は問わない(8.0 / 8.4 / 最新のいずれ�
                            # 実機検証: 8.0 / 8.4 / 26.7(native 廃止世代)。
                            # MySQL 5.7 は best-effort(EOL・未検証。native を選ぶ)。
                            # MariaDB は native を選ぶが他挙動が未検証のため非対応。
-curl -fsSL https://raw.githubusercontent.com/rikukaInoue/sashiki/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/rikukadev/sashiki/main/install.sh | bash
 sashiki init --platform darwin --yes   # mysqld 検出・base 初期化・baseline・config・launchd 常駐
 sashiki create pr-1
 mysql -udev@pr-1 -pdev -h 127.0.0.1 -P3306
@@ -137,7 +137,7 @@ Mac でも Linux でもコンテナだけで完結する。ストレージは **
 mysqld は **process モード**(systemd 不要)。ZFS カーネル拡張も要らない。
 
 ```bash
-git clone https://github.com/rikukaInoue/sashiki && cd sashiki
+git clone https://github.com/rikukadev/sashiki && cd sashiki
 ./deploy/orbstack/build.sh                                    # sashiki/sashikid を linux にクロスビルド
 docker compose -f deploy/orbstack/compose.yaml up --build -d  # 起動(baseline も自動構築)
 mysql -udev@pr-1 -pdev -h 127.0.0.1 -P 13306                  # 未知ブランチは proxy で lazy create
@@ -204,7 +204,7 @@ sashiki delete demo
 ### B. GitHub Action(PR プレビュー)
 
 ```yaml
-- uses: rikukaInoue/sashiki/action@main
+- uses: rikukadev/sashiki/action@main
   with:
     api_url: ${{ vars.SASHIKI_API_URL }}
     token:   ${{ secrets.SASHIKI_API_TOKEN }}
@@ -219,7 +219,7 @@ PR open/reopen で create、close で delete。接続情報を出力するので
 
 ```hcl
 module "db" {
-  source = "github.com/rikukaInoue/sashiki//deploy/terraform?ref=v0.8.0" # x-release-please-version
+  source = "github.com/rikukadev/sashiki//deploy/terraform?ref=v0.8.0" # x-release-please-version
 
   name           = "myapp-preview"
   vpc_id         = var.vpc_id
@@ -318,7 +318,7 @@ sashiki は「汎用エンジン + MySQL/PR の完成した adapter」。コア�
 | FSx-ZFS / multi-host / Spot | 🔶 実装済み・**本番運用実績なし**。必要になったら(§FAQ) |
 | API / config の安定性 | ⚠️ 未固定。v0.x の間はマイナー版で破壊的変更があり得る |
 
-> **プロキシとドライバ**: `:3306` プロキシ(方式A)はクライアントの capability に追従するので、**DEPRECATE_EOF を要求しないドライバ(PHP mysqlnd / Node / PyMySQL 等)でも正しく動く**(v0.4.1 で修正、[#125](https://github.com/rikukaInoue/sashiki/issues/125))。認証は**クライアント側・backend 側とも `caching_sha2_password` に対応**しており、`mysql_native_password` を廃止した版でも「8.0 を入れ直す」必要はない([#197](https://github.com/rikukaInoue/sashiki/issues/197) / [#209](https://github.com/rikukaInoue/sashiki/issues/209))。app_user のプラグインは**backend の版を見て自動で選ぶ**(5.7 は native、8.0 以降は caching_sha2、MariaDB は native。[#211](https://github.com/rikukaInoue/sashiki/issues/211) / [#219](https://github.com/rikukaInoue/sashiki/issues/219))。
+> **プロキシとドライバ**: `:3306` プロキシ(方式A)はクライアントの capability に追従するので、**DEPRECATE_EOF を要求しないドライバ(PHP mysqlnd / Node / PyMySQL 等)でも正しく動く**(v0.4.1 で修正、[#125](https://github.com/rikukadev/sashiki/issues/125))。認証は**クライアント側・backend 側とも `caching_sha2_password` に対応**しており、`mysql_native_password` を廃止した版でも「8.0 を入れ直す」必要はない([#197](https://github.com/rikukadev/sashiki/issues/197) / [#209](https://github.com/rikukadev/sashiki/issues/209))。app_user のプラグインは**backend の版を見て自動で選ぶ**(5.7 は native、8.0 以降は caching_sha2、MariaDB は native。[#211](https://github.com/rikukadev/sashiki/issues/211) / [#219](https://github.com/rikukadev/sashiki/issues/219))。
 > 実機検証: **MySQL 8.0 / 8.4 / 26.7**(native 廃止世代)で create / reset / proxy 経由の lazy create まで通過。クライアントは go-sql-driver / Node mysql2 / PyMySQL / mysql CLI で確認済み。
 
 ## 向かない用途
@@ -346,7 +346,7 @@ A. profile は「無接続が続いたら止める/消す」寿命ポリシー(p
 
 **Q. PostgreSQL は?**
 
-A. engine として対応。**proxy(固定エンドポイント)と lazy create も MySQL と同様に動く**(SCRAM-SHA-256 で認証終端)。idle 管理は engine ポーリングで両対応。baseline import / `init` の自動構築はまだ MySQL のみで、Postgres の baseline は手動で用意する([#230](https://github.com/rikukaInoue/sashiki/issues/230) で対応中)。
+A. engine として対応。**proxy(固定エンドポイント)と lazy create も MySQL と同様に動く**(SCRAM-SHA-256 で認証終端)。idle 管理は engine ポーリングで両対応。baseline import / `init` の自動構築はまだ MySQL のみで、Postgres の baseline は手動で用意する([#230](https://github.com/rikukadev/sashiki/issues/230) で対応中)。
 
 **Q. FSx バックエンドはいつ使う?**
 

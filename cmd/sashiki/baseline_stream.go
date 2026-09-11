@@ -14,7 +14,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/rikukaInoue/sashiki/internal/config"
+	"github.com/rikukadev/sashiki/internal/config"
 )
 
 type baselineStreamOpts struct {

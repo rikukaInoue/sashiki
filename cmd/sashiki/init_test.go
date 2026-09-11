@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rikukaInoue/sashiki/internal/config"
+	"github.com/rikukadev/sashiki/internal/config"
 )
 
 // renderConfig の出力が config.Load でそのまま読める YAML であること。

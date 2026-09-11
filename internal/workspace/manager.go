@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rikukaInoue/sashiki/internal/engine"
-	"github.com/rikukaInoue/sashiki/internal/hooks"
-	"github.com/rikukaInoue/sashiki/internal/state"
-	"github.com/rikukaInoue/sashiki/internal/storage"
+	"github.com/rikukadev/sashiki/internal/engine"
+	"github.com/rikukadev/sashiki/internal/hooks"
+	"github.com/rikukadev/sashiki/internal/state"
+	"github.com/rikukadev/sashiki/internal/storage"
 )
 
 // ReservedPrefix で始まる名前は sashiki 内部予約(validate 用の一時 branch 等)。

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rikukaInoue/sashiki/internal/engine"
+	"github.com/rikukadev/sashiki/internal/engine"
 )
 
 // TestProcessRealMysqld は実 mysqld で process モードのライフサイクルを検証する。

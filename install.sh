@@ -2,12 +2,12 @@
 # sashiki インストーラ。
 #   Linux : 最新 release の deb を取得して dpkg -i する。
 #   macOS : 最新 release の darwin tar.gz を /usr/local/bin へ展開する(#118)。
-#     curl -fsSL https://raw.githubusercontent.com/rikukaInoue/sashiki/main/install.sh | sudo bash
+#     curl -fsSL https://raw.githubusercontent.com/rikukadev/sashiki/main/install.sh | sudo bash
 # private リポジトリの間は GITHUB_TOKEN(repo 読み取り)が必要:
 #     curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" .../install.sh | sudo -E bash
 set -euo pipefail
 
-REPO=rikukaInoue/sashiki
+REPO=rikukadev/sashiki
 OS=$(uname -s)
 
 auth=()

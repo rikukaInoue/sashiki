@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rikukaInoue/sashiki/internal/engine"
+	"github.com/rikukadev/sashiki/internal/engine"
 )
 
 // mockRun は実行されたコマンドを記録し、固定の応答を返す。

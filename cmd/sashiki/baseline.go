@@ -23,9 +23,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/rikukaInoue/sashiki/internal/config"
-	"github.com/rikukaInoue/sashiki/internal/localstore"
-	"github.com/rikukaInoue/sashiki/internal/state"
+	"github.com/rikukadev/sashiki/internal/config"
+	"github.com/rikukadev/sashiki/internal/localstore"
+	"github.com/rikukadev/sashiki/internal/state"
 )
 
 func cmdBaseline(args []string) int {
