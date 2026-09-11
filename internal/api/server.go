@@ -704,6 +704,10 @@ type branchJSON struct {
 	Source         json.RawMessage   `json:"source,omitempty"`
 	ExpiresAt      *string           `json:"expires_at,omitempty"`
 	Stale          bool              `json:"stale,omitempty"` // origin < current baseline(#130)
+	// Engine は接続方法を決めるのに要る(mysql か postgres か)。CLI はこれを見て
+	// 表示する接続コマンドを選ぶ(#238 の実機検証で postgres でも mysql と案内
+	// していたのが分かったため)。
+	Engine string `json:"engine,omitempty"`
 }
 
 func (s *Server) toJSON(i workspace.Info) branchJSON {
@@ -714,6 +718,7 @@ func (s *Server) toJSON(i workspace.Info) branchJSON {
 		Port:           i.Port,
 		Host:           s.domain,
 		User:           s.user + "@" + i.Name,
+		Engine:         s.engine,
 		OriginSnapshot: i.OriginSnapshot,
 		CreatedAt:      i.CreatedAt.UTC().Format(time.RFC3339),
 		UsedBytes:      i.UsedBytes,

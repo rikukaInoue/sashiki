@@ -312,7 +312,7 @@ sashiki は「汎用エンジン + MySQL/PR の完成した adapter」。コア�
 | MySQL + GitHub PR プレビュー | ✅ 実機検証済み(create / reset / recreate / delete / lazy create / proxy / baseline 更新 / スキーマ比較) |
 | macOS ネイティブ(APFS + process) | ✅ 実機検証済み(VM 無し。MySQL 8.0 / 8.4 で実機確認、9.x も同プロトコル)。`sashiki init --platform darwin` |
 | コンテナ(XFS reflink, VM 無し) | ✅ 実機検証済み(sashikid フルコンテナ化。create / reset / delete / lazy create。Docker 互換ランタイム全般。[deploy/orbstack/](deploy/orbstack/)) |
-| PostgreSQL | 🔶 engine 対応 + **proxy / lazy create 対応**(:5432 固定エンドポイント、SCRAM-SHA-256 認証終端)。baseline import / init は未対応で手動構築が必要([#230](https://github.com/rikukaInoue/sashiki/issues/230)) |
+| PostgreSQL | ✅ MySQL と同等(proxy / lazy create / baseline import / init / refresh / データブラウザ)。Linux(ZFS)と **macOS ネイティブ(APFS, VM 無し)** の両方で実機検証済み |
 | EBS-ZFS バックエンド | ✅ default(Linux)。単一ホスト |
 | FSx-ZFS / multi-host / Spot | 🔶 実装済み・**本番運用実績なし**。必要になったら(§FAQ) |
 | API / config の安定性 | ⚠️ 未固定。v0.x の間はマイナー版で破壊的変更があり得る |

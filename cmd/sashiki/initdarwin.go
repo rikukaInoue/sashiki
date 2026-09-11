@@ -25,6 +25,15 @@ var configDarwinTmpl string
 var plistTmpl string
 
 func cmdInitDarwin(opts initOpts) int {
+	// engine で経路を分ける(#238)。postgres は initdb / pg_ctl を使う。
+	switch opts.engine {
+	case "postgres":
+		return cmdInitDarwinPostgres(opts)
+	case "", "mysql":
+	default:
+		fmt.Fprintf(os.Stderr, "sashiki init: --engine %q は未対応です (mysql | postgres)\n", opts.engine)
+		return exitError
+	}
 	mysqldBin, err := resolveMysqld()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sashiki init:", err)
