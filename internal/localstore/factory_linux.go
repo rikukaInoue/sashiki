@@ -7,8 +7,8 @@ package localstore
 import (
 	"fmt"
 
-	"github.com/rikukaInoue/sashiki/internal/storage"
-	storagereflink "github.com/rikukaInoue/sashiki/internal/storage/reflink"
+	"github.com/rikukadev/sashiki/internal/storage"
+	storagereflink "github.com/rikukadev/sashiki/internal/storage/reflink"
 )
 
 // New は Linux ではローカル CoW backend として reflink(cp --reflink)を返す。

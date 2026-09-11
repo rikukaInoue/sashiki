@@ -18,7 +18,7 @@ private + 無料プランではブランチ保護ルールセットが使えな�
 `OWNER/REPO` を置き換えて管理者権限のトークンで実行する。
 
 ```bash
-gh api -X POST repos/rikukaInoue/sashiki/rulesets \
+gh api -X POST repos/rikukadev/sashiki/rulesets \
   -f name='main-protection' \
   -f target='branch' \
   -f enforcement='active' \

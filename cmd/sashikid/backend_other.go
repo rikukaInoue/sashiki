@@ -5,8 +5,8 @@ package main
 import (
 	"fmt"
 
-	"github.com/rikukaInoue/sashiki/internal/storage"
-	"github.com/rikukaInoue/sashiki/internal/workspace"
+	"github.com/rikukadev/sashiki/internal/storage"
+	"github.com/rikukadev/sashiki/internal/workspace"
 )
 
 // localBackend はローカル CoW backend(apfs / reflink)が macOS / Linux 専用の

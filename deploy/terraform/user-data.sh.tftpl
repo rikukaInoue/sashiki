@@ -34,10 +34,10 @@ set -x
 #     (latest API 経由のパース失敗を避ける、#166)。github_token は private 時のみ ---
 %{ if github_token != "" ~}
 curl -fsSL -H "Authorization: Bearer ${github_token}" \
-  "https://raw.githubusercontent.com/rikukaInoue/sashiki/${sashiki_ref}/install.sh" \
+  "https://raw.githubusercontent.com/rikukadev/sashiki/${sashiki_ref}/install.sh" \
   | SASHIKI_RELEASE="${sashiki_ref}" GITHUB_TOKEN="${github_token}" bash
 %{ else ~}
-curl -fsSL "https://raw.githubusercontent.com/rikukaInoue/sashiki/${sashiki_ref}/install.sh" \
+curl -fsSL "https://raw.githubusercontent.com/rikukadev/sashiki/${sashiki_ref}/install.sh" \
   | SASHIKI_RELEASE="${sashiki_ref}" bash
 %{ endif ~}
 

@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/rikukaInoue/sashiki/internal/storage"
+	"github.com/rikukadev/sashiki/internal/storage"
 )
 
 // fakeRunner は zfs コマンドを実行せず、引数を記録して canned な出力を返す。

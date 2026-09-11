@@ -13,8 +13,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/rikukaInoue/sashiki/internal/state"
-	"github.com/rikukaInoue/sashiki/internal/storage"
+	"github.com/rikukadev/sashiki/internal/state"
+	"github.com/rikukadev/sashiki/internal/storage"
 )
 
 // PromoteBranch は既存ブランチの現在の datadir を新しい baseline に昇格する(#129)。

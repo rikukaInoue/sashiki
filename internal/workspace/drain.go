@@ -6,7 +6,7 @@ package workspace
 import (
 	"context"
 
-	"github.com/rikukaInoue/sashiki/internal/state"
+	"github.com/rikukadev/sashiki/internal/state"
 )
 
 // DrainResult は drain の結果。

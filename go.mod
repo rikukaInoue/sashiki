@@ -1,4 +1,4 @@
-module github.com/rikukaInoue/sashiki
+module github.com/rikukadev/sashiki
 
 go 1.26.6
 

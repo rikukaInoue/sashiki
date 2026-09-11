@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rikukaInoue/sashiki/internal/engine"
+	"github.com/rikukadev/sashiki/internal/engine"
 )
 
 func TestNewDefaultsMode(t *testing.T) {

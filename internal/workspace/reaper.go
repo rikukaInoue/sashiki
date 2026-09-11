@@ -9,7 +9,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/rikukaInoue/sashiki/internal/state"
+	"github.com/rikukadev/sashiki/internal/state"
 )
 
 // RunReaper は interval ごとに Reap を回す。ctx キャンセルで止まる。

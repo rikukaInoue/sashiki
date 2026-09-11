@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rikukaInoue/sashiki/internal/storage"
+	"github.com/rikukadev/sashiki/internal/storage"
 )
 
 func writeRefreshScript(t *testing.T, body string) string {

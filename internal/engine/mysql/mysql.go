@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rikukaInoue/sashiki/internal/engine"
+	"github.com/rikukadev/sashiki/internal/engine"
 )
 
 // Config は mysql エンジンの設定。
