@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rikukaInoue/sashiki/internal/storage"
+	"github.com/rikukadev/sashiki/internal/storage"
 )
 
 // Capacity は memory / storage / ports の空き状況(GET /capacity)。

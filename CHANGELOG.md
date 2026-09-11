@@ -7,55 +7,55 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 > [Conventional Commits](https://www.conventionalcommits.org/) から自動生成する(手動編集不要)。
 > リリース手順は [docs/RELEASING.md](docs/RELEASING.md) を参照。v0.5.0 までは手書き。
 
-## [0.8.0](https://github.com/rikukaInoue/sashiki/compare/v0.7.0...v0.8.0) (2026-09-11)
+## [0.8.0](https://github.com/rikukadev/sashiki/compare/v0.7.0...v0.8.0) (2026-09-11)
 
 
 ### Features
 
-* **action:** add transport: ssm and an explicit action input ([#244](https://github.com/rikukaInoue/sashiki/issues/244)) ([#250](https://github.com/rikukaInoue/sashiki/issues/250)) ([f03a484](https://github.com/rikukaInoue/sashiki/commit/f03a484c3cf8e430893c0ce658bd419dfabc2c90))
-* **api:** PostgreSQL support for the data browser ([#228](https://github.com/rikukaInoue/sashiki/issues/228)) ([#252](https://github.com/rikukaInoue/sashiki/issues/252)) ([ba0de0a](https://github.com/rikukaInoue/sashiki/commit/ba0de0a6dc4601e5a194b75afeb9777c0d326974))
-* **baseline:** built-in refresh loader for Postgres ([#226](https://github.com/rikukaInoue/sashiki/issues/226)) ([#241](https://github.com/rikukaInoue/sashiki/issues/241)) ([21f0440](https://github.com/rikukaInoue/sashiki/commit/21f044088c3f18f61049ab2264d4f71a87e61c00))
-* **baseline:** stream export/import via zfs send-recv, and S3/stdin dumps ([#243](https://github.com/rikukaInoue/sashiki/issues/243), [#242](https://github.com/rikukaInoue/sashiki/issues/242)) ([#249](https://github.com/rikukaInoue/sashiki/issues/249)) ([0ef573f](https://github.com/rikukaInoue/sashiki/commit/0ef573f3d4c4e6ad8071119541b93288372e7ad5))
-* **init:** sashiki init --platform darwin --engine postgres ([#238](https://github.com/rikukaInoue/sashiki/issues/238)) ([#253](https://github.com/rikukaInoue/sashiki/issues/253)) ([36ff11c](https://github.com/rikukaInoue/sashiki/commit/36ff11c8c9c752ba85e54bb2598f7d8262ad0a73))
-* **pgproxy:** relay CancelRequest to the right backend ([#234](https://github.com/rikukaInoue/sashiki/issues/234)) ([#251](https://github.com/rikukaInoue/sashiki/issues/251)) ([c164c2c](https://github.com/rikukaInoue/sashiki/commit/c164c2c1bf533faaaaa433029fb6f5d6bd97f1b1))
+* **action:** add transport: ssm and an explicit action input ([#244](https://github.com/rikukadev/sashiki/issues/244)) ([#250](https://github.com/rikukadev/sashiki/issues/250)) ([f03a484](https://github.com/rikukadev/sashiki/commit/f03a484c3cf8e430893c0ce658bd419dfabc2c90))
+* **api:** PostgreSQL support for the data browser ([#228](https://github.com/rikukadev/sashiki/issues/228)) ([#252](https://github.com/rikukadev/sashiki/issues/252)) ([ba0de0a](https://github.com/rikukadev/sashiki/commit/ba0de0a6dc4601e5a194b75afeb9777c0d326974))
+* **baseline:** built-in refresh loader for Postgres ([#226](https://github.com/rikukadev/sashiki/issues/226)) ([#241](https://github.com/rikukadev/sashiki/issues/241)) ([21f0440](https://github.com/rikukadev/sashiki/commit/21f044088c3f18f61049ab2264d4f71a87e61c00))
+* **baseline:** stream export/import via zfs send-recv, and S3/stdin dumps ([#243](https://github.com/rikukadev/sashiki/issues/243), [#242](https://github.com/rikukadev/sashiki/issues/242)) ([#249](https://github.com/rikukadev/sashiki/issues/249)) ([0ef573f](https://github.com/rikukadev/sashiki/commit/0ef573f3d4c4e6ad8071119541b93288372e7ad5))
+* **init:** sashiki init --platform darwin --engine postgres ([#238](https://github.com/rikukadev/sashiki/issues/238)) ([#253](https://github.com/rikukadev/sashiki/issues/253)) ([36ff11c](https://github.com/rikukadev/sashiki/commit/36ff11c8c9c752ba85e54bb2598f7d8262ad0a73))
+* **pgproxy:** relay CancelRequest to the right backend ([#234](https://github.com/rikukadev/sashiki/issues/234)) ([#251](https://github.com/rikukadev/sashiki/issues/251)) ([c164c2c](https://github.com/rikukadev/sashiki/commit/c164c2c1bf533faaaaa433029fb6f5d6bd97f1b1))
 
 
 ### Bug Fixes
 
-* **init:** reuse an existing zpool on instance replacement; add mysqld TimeoutStopSec ([#248](https://github.com/rikukaInoue/sashiki/issues/248)) ([8badeb3](https://github.com/rikukaInoue/sashiki/commit/8badeb36a6e8ce7a30f5ed7dd38f50d29cb0315e)), closes [#245](https://github.com/rikukaInoue/sashiki/issues/245) [#246](https://github.com/rikukaInoue/sashiki/issues/246)
+* **init:** reuse an existing zpool on instance replacement; add mysqld TimeoutStopSec ([#248](https://github.com/rikukadev/sashiki/issues/248)) ([8badeb3](https://github.com/rikukadev/sashiki/commit/8badeb36a6e8ce7a30f5ed7dd38f50d29cb0315e)), closes [#245](https://github.com/rikukadev/sashiki/issues/245) [#246](https://github.com/rikukadev/sashiki/issues/246)
 
-## [0.7.0](https://github.com/rikukaInoue/sashiki/compare/v0.6.0...v0.7.0) (2026-09-09)
+## [0.7.0](https://github.com/rikukadev/sashiki/compare/v0.6.0...v0.7.0) (2026-09-09)
 
 
 ### Features
 
-* **engine/postgres:** process mode and CoW-backend baseline import ([#227](https://github.com/rikukaInoue/sashiki/issues/227)) ([#239](https://github.com/rikukaInoue/sashiki/issues/239)) ([012fb04](https://github.com/rikukaInoue/sashiki/commit/012fb04c1b2d467b0c8e278f6a2b8b09dc73c1a4))
+* **engine/postgres:** process mode and CoW-backend baseline import ([#227](https://github.com/rikukadev/sashiki/issues/227)) ([#239](https://github.com/rikukadev/sashiki/issues/239)) ([012fb04](https://github.com/rikukadev/sashiki/commit/012fb04c1b2d467b0c8e278f6a2b8b09dc73c1a4))
 
-## [0.6.0](https://github.com/rikukaInoue/sashiki/compare/v0.5.2...v0.6.0) (2026-09-08)
+## [0.6.0](https://github.com/rikukadev/sashiki/compare/v0.5.2...v0.6.0) (2026-09-08)
 
 
 ### Features
 
-* **baseline:** Postgres baseline import via initdb/psql/pg_restore ([#223](https://github.com/rikukaInoue/sashiki/issues/223)) ([#236](https://github.com/rikukaInoue/sashiki/issues/236)) ([67298ac](https://github.com/rikukaInoue/sashiki/commit/67298ac1b1155f890527f5646583388aea7f5403))
-* **config:** expand PostgresEngine and make engine settings accessor-based ([#225](https://github.com/rikukaInoue/sashiki/issues/225)) ([#232](https://github.com/rikukaInoue/sashiki/issues/232)) ([863c6cd](https://github.com/rikukaInoue/sashiki/commit/863c6cdb262e8f7a05b140b8463e3e58bb6c2518))
-* **init:** sashiki init --engine postgres ([#224](https://github.com/rikukaInoue/sashiki/issues/224)) ([#237](https://github.com/rikukaInoue/sashiki/issues/237)) ([4b345d4](https://github.com/rikukaInoue/sashiki/commit/4b345d4425dda4f585f490dd7d6be6896f9b74d8))
-* **pgproxy:** Postgres wire proxy with SCRAM auth termination and lazy create ([#222](https://github.com/rikukaInoue/sashiki/issues/222)) ([#235](https://github.com/rikukaInoue/sashiki/issues/235)) ([a0829cc](https://github.com/rikukaInoue/sashiki/commit/a0829ccac86f0cd9e801bf78b0611931894644e4))
+* **baseline:** Postgres baseline import via initdb/psql/pg_restore ([#223](https://github.com/rikukadev/sashiki/issues/223)) ([#236](https://github.com/rikukadev/sashiki/issues/236)) ([67298ac](https://github.com/rikukadev/sashiki/commit/67298ac1b1155f890527f5646583388aea7f5403))
+* **config:** expand PostgresEngine and make engine settings accessor-based ([#225](https://github.com/rikukadev/sashiki/issues/225)) ([#232](https://github.com/rikukadev/sashiki/issues/232)) ([863c6cd](https://github.com/rikukadev/sashiki/commit/863c6cdb262e8f7a05b140b8463e3e58bb6c2518))
+* **init:** sashiki init --engine postgres ([#224](https://github.com/rikukadev/sashiki/issues/224)) ([#237](https://github.com/rikukadev/sashiki/issues/237)) ([4b345d4](https://github.com/rikukadev/sashiki/commit/4b345d4425dda4f585f490dd7d6be6896f9b74d8))
+* **pgproxy:** Postgres wire proxy with SCRAM auth termination and lazy create ([#222](https://github.com/rikukadev/sashiki/issues/222)) ([#235](https://github.com/rikukadev/sashiki/issues/235)) ([a0829cc](https://github.com/rikukadev/sashiki/commit/a0829ccac86f0cd9e801bf78b0611931894644e4))
 
-## [0.5.2](https://github.com/rikukaInoue/sashiki/compare/v0.5.1...v0.5.2) (2026-09-08)
-
-
-### Bug Fixes
-
-* **engine:** don't pick caching_sha2 for MariaDB backends ([#219](https://github.com/rikukaInoue/sashiki/issues/219)) ([ece7b38](https://github.com/rikukaInoue/sashiki/commit/ece7b38a55588f6fc93b5db6032890805c2a0bb4))
-
-## [0.5.1](https://github.com/rikukaInoue/sashiki/compare/v0.5.0...v0.5.1) (2026-09-08)
+## [0.5.2](https://github.com/rikukadev/sashiki/compare/v0.5.1...v0.5.2) (2026-09-08)
 
 
 ### Bug Fixes
 
-* **engine/proxy:** support MySQL 8.4/9.x via caching_sha2 for proxy-&gt;backend auth ([#197](https://github.com/rikukaInoue/sashiki/issues/197) follow-up) ([#209](https://github.com/rikukaInoue/sashiki/issues/209)) ([c94de34](https://github.com/rikukaInoue/sashiki/commit/c94de3498dbbf726e0010a7e22b0e9fa9548fa58))
-* **engine:** pick app_user auth plugin by backend version (MySQL 5.7..9.x) ([#211](https://github.com/rikukaInoue/sashiki/issues/211)) ([23bb406](https://github.com/rikukaInoue/sashiki/commit/23bb4069c9222636dd8ba1904b7ed38918597341))
-* **security:** bump Go toolchain to 1.26.6 to clear stdlib TLS/x509 advisories ([#212](https://github.com/rikukaInoue/sashiki/issues/212)) ([02550ad](https://github.com/rikukaInoue/sashiki/commit/02550adcdba23ad0d1bbc59f1044c92e9972f8c2))
+* **engine:** don't pick caching_sha2 for MariaDB backends ([#219](https://github.com/rikukadev/sashiki/issues/219)) ([ece7b38](https://github.com/rikukadev/sashiki/commit/ece7b38a55588f6fc93b5db6032890805c2a0bb4))
+
+## [0.5.1](https://github.com/rikukadev/sashiki/compare/v0.5.0...v0.5.1) (2026-09-08)
+
+
+### Bug Fixes
+
+* **engine/proxy:** support MySQL 8.4/9.x via caching_sha2 for proxy-&gt;backend auth ([#197](https://github.com/rikukadev/sashiki/issues/197) follow-up) ([#209](https://github.com/rikukadev/sashiki/issues/209)) ([c94de34](https://github.com/rikukadev/sashiki/commit/c94de3498dbbf726e0010a7e22b0e9fa9548fa58))
+* **engine:** pick app_user auth plugin by backend version (MySQL 5.7..9.x) ([#211](https://github.com/rikukadev/sashiki/issues/211)) ([23bb406](https://github.com/rikukadev/sashiki/commit/23bb4069c9222636dd8ba1904b7ed38918597341))
+* **security:** bump Go toolchain to 1.26.6 to clear stdlib TLS/x509 advisories ([#212](https://github.com/rikukadev/sashiki/issues/212)) ([02550ad](https://github.com/rikukadev/sashiki/commit/02550adcdba23ad0d1bbc59f1044c92e9972f8c2))
 
 ## v0.5.0 — (2026-09-08)
 
@@ -79,7 +79,7 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 
 ## v0.4.2 — (2026-09-07)
 
-> v0.3.0〜v0.4.1 の詳細な差分は各 [GitHub Release](https://github.com/rikukaInoue/sashiki/releases)(自動生成ノート)を参照。ここでは主な追加・修正をまとめる。
+> v0.3.0〜v0.4.1 の詳細な差分は各 [GitHub Release](https://github.com/rikukadev/sashiki/releases)(自動生成ノート)を参照。ここでは主な追加・修正をまとめる。
 
 ### Added
 - **`baseline promote <branch>`**: 検証済みブランチの現在の datadir をそのまま次の current baseline に昇格する(git の branch→main 相当)。snapshot 不変条件のため対象ブランチを graceful stop してから snapshot し、昇格後に再起動する。既存の他ブランチの origin は変えない。

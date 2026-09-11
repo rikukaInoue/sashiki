@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/rikukaInoue/sashiki/internal/hooks"
-	"github.com/rikukaInoue/sashiki/internal/state"
-	"github.com/rikukaInoue/sashiki/internal/storage"
+	"github.com/rikukadev/sashiki/internal/hooks"
+	"github.com/rikukadev/sashiki/internal/state"
+	"github.com/rikukadev/sashiki/internal/storage"
 )
 
 // エラーコード(仕様 11-1)。

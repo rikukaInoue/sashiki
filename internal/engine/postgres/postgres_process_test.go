@@ -3,7 +3,7 @@ package postgres
 import (
 	"testing"
 
-	"github.com/rikukaInoue/sashiki/internal/engine"
+	"github.com/rikukadev/sashiki/internal/engine"
 )
 
 // mysql 由来の "128M" 表記をそのまま渡すと postgres は

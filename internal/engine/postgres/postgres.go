@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rikukaInoue/sashiki/internal/engine"
+	"github.com/rikukadev/sashiki/internal/engine"
 )
 
 // Config は postgres エンジンの設定。

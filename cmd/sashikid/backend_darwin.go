@@ -5,9 +5,9 @@ package main
 import (
 	"fmt"
 
-	"github.com/rikukaInoue/sashiki/internal/storage"
-	storageapfs "github.com/rikukaInoue/sashiki/internal/storage/apfs"
-	"github.com/rikukaInoue/sashiki/internal/workspace"
+	"github.com/rikukadev/sashiki/internal/storage"
+	storageapfs "github.com/rikukadev/sashiki/internal/storage/apfs"
+	"github.com/rikukadev/sashiki/internal/workspace"
 )
 
 // localBackend は macOS ではローカル CoW backend として apfs(clonefile)を返す。

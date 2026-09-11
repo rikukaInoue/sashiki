@@ -20,10 +20,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/rikukaInoue/sashiki/internal/baseline"
-	"github.com/rikukaInoue/sashiki/internal/hooks"
-	"github.com/rikukaInoue/sashiki/internal/state"
-	"github.com/rikukaInoue/sashiki/internal/storage"
+	"github.com/rikukadev/sashiki/internal/baseline"
+	"github.com/rikukadev/sashiki/internal/hooks"
+	"github.com/rikukadev/sashiki/internal/state"
+	"github.com/rikukadev/sashiki/internal/storage"
 )
 
 // ErrRefreshRunning は refresh の多重実行。

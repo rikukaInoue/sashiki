@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rikukaInoue/sashiki/internal/storage"
+	"github.com/rikukadev/sashiki/internal/storage"
 )
 
 // Backend は storage.Storage の reflink 実装(`cp --reflink=always`)。

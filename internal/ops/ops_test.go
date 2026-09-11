@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rikukaInoue/sashiki/internal/state"
+	"github.com/rikukadev/sashiki/internal/state"
 )
 
 func newStore(t *testing.T) *state.DB {

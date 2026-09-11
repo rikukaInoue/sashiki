@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/rikukaInoue/sashiki/internal/storage"
+	"github.com/rikukadev/sashiki/internal/storage"
 )
 
 var (

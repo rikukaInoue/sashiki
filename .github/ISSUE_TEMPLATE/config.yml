@@ -1,5 +1,5 @@
 blank_issues_enabled: true
 contact_links:
   - name: セキュリティ脆弱性の報告 / Security
-    url: https://github.com/rikukaInoue/sashiki/security/advisories/new
+    url: https://github.com/rikukadev/sashiki/security/advisories/new
     about: 脆弱性は公開 Issue ではなく Security Advisory から報告してください(SECURITY.md 参照)。

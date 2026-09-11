@@ -5,8 +5,8 @@ package localstore
 import (
 	"fmt"
 
-	"github.com/rikukaInoue/sashiki/internal/storage"
-	storageapfs "github.com/rikukaInoue/sashiki/internal/storage/apfs"
+	"github.com/rikukadev/sashiki/internal/storage"
+	storageapfs "github.com/rikukadev/sashiki/internal/storage/apfs"
 )
 
 // New は macOS ではローカル CoW backend として apfs(clonefile)を返す。

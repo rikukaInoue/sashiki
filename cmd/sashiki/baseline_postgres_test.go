@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/rikukaInoue/sashiki/internal/config"
+	"github.com/rikukadev/sashiki/internal/config"
 )
 
 func TestQuoteIdent(t *testing.T) {

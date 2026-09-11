@@ -11,8 +11,8 @@ import (
 	"os"
 	"text/tabwriter"
 
-	"github.com/rikukaInoue/sashiki/internal/config"
-	"github.com/rikukaInoue/sashiki/internal/state"
+	"github.com/rikukadev/sashiki/internal/config"
+	"github.com/rikukadev/sashiki/internal/state"
 )
 
 func cmdToken(args []string) int {

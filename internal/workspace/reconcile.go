@@ -9,8 +9,8 @@ import (
 	"log"
 	"strings"
 
-	"github.com/rikukaInoue/sashiki/internal/state"
-	"github.com/rikukaInoue/sashiki/internal/storage"
+	"github.com/rikukadev/sashiki/internal/state"
+	"github.com/rikukadev/sashiki/internal/storage"
 )
 
 // ReconcileReport は突合結果。

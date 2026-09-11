@@ -17,10 +17,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rikukaInoue/sashiki/internal/hooks"
-	"github.com/rikukaInoue/sashiki/internal/ops"
-	"github.com/rikukaInoue/sashiki/internal/state"
-	"github.com/rikukaInoue/sashiki/internal/workspace"
+	"github.com/rikukadev/sashiki/internal/hooks"
+	"github.com/rikukadev/sashiki/internal/ops"
+	"github.com/rikukadev/sashiki/internal/state"
+	"github.com/rikukadev/sashiki/internal/workspace"
 )
 
 // TokenChecker は Bearer トークンの検証(state.db の tokens テーブル)。

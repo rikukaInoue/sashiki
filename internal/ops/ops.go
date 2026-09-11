@@ -12,7 +12,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/rikukaInoue/sashiki/internal/state"
+	"github.com/rikukadev/sashiki/internal/state"
 )
 
 // Store は operation の永続化(state.DB が実装)。

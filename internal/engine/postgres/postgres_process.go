@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/rikukaInoue/sashiki/internal/engine"
+	"github.com/rikukadev/sashiki/internal/engine"
 )
 
 // process モード(#227): systemd を使わずに postgres を直接起動する。
