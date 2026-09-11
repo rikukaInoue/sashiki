@@ -7,6 +7,18 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 > [Conventional Commits](https://www.conventionalcommits.org/) から自動生成する(手動編集不要)。
 > リリース手順は [docs/RELEASING.md](docs/RELEASING.md) を参照。v0.5.0 までは手書き。
 
+## [0.9.0](https://github.com/rikukadev/sashiki/compare/v0.8.0...v0.9.0) (2026-09-11)
+
+
+### Documentation
+
+* correct the proxy auth note and record MySQL 26.7 verification ([#254](https://github.com/rikukadev/sashiki/issues/254)) ([4107ce3](https://github.com/rikukadev/sashiki/commit/4107ce34e88373561a3d646690209ec1647aaaa3))
+
+
+### Chores
+
+* release 0.9.0 for the module path change ([#258](https://github.com/rikukadev/sashiki/issues/258)) ([c652a78](https://github.com/rikukadev/sashiki/commit/c652a78754d7ad4d89cf146bc9a407582de74022))
+
 ## [0.8.0](https://github.com/rikukadev/sashiki/compare/v0.7.0...v0.8.0) (2026-09-11)
 
 
