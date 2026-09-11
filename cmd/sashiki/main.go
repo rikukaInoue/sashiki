@@ -205,6 +205,7 @@ type branchView struct {
 	ExpiresAt    *string  `json:"expires_at"`
 	UsedBytes    int64    `json:"used_bytes"`
 	LogicalBytes int64    `json:"logical_bytes"`
+	Engine       string   `json:"engine"`
 	Error        string   `json:"error"`
 	FailedOp     string   `json:"failed_operation"`
 	ErrorCode    string   `json:"error_code"`
@@ -297,7 +298,7 @@ func printCreatedBranch(data []byte, jsonOut bool) int {
 	}
 	var b branchView
 	_ = json.Unmarshal(data, &b)
-	fmt.Printf("branch '%s' ready: mysql -u%s -h %s -P%d\n", b.Name, b.User, b.Host, b.Port)
+	fmt.Printf("branch '%s' ready: %s\n", b.Name, connectHint(b))
 	return exitOK
 }
 
@@ -557,4 +558,13 @@ func humanBytes(n int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f%c", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
+// connectHint は engine に応じた接続コマンド例を返す(#238)。
+// postgres に mysql のコマンドを案内していると、そのまま貼って失敗する。
+func connectHint(b branchView) string {
+	if b.Engine == "postgres" {
+		return fmt.Sprintf("psql -h %s -p %d -U '%s' -d <db>", b.Host, b.Port, b.User)
+	}
+	return fmt.Sprintf("mysql -u%s -h %s -P%d", b.User, b.Host, b.Port)
 }

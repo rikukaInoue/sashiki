@@ -124,3 +124,74 @@ func TestZpoolStepMentionsImportForBothEngines(t *testing.T) {
 		}
 	}
 }
+
+// Homebrew の postgresql formula は版ごとに分かれるので、数値順で最新を選ぶこと
+// (辞書順だと "postgresql@9" が "postgresql@17" より後に来てしまう)。
+func TestBrewPostgresFormulaeOrder(t *testing.T) {
+	// brew が無い環境では既定リストが返る。新しい版が先頭に来ていること。
+	got := brewPostgresFormulae()
+	if len(got) == 0 {
+		t.Fatal("候補が空")
+	}
+	first := got[0]
+	for _, f := range got[1:] {
+		if f == "postgresql" {
+			continue // 版なしは最後
+		}
+		a := strings.TrimPrefix(first, "postgresql@")
+		b := strings.TrimPrefix(f, "postgresql@")
+		if pgVersionLess(a, b) {
+			t.Errorf("新しい版が先に来るべき: %v", got)
+			break
+		}
+	}
+}
+
+// postgres 用の darwin config が妥当で、process モード + apfs + proxy になっていること。
+func TestDarwinPostgresConfigTemplate(t *testing.T) {
+	out, err := renderTmpl(configDarwinPostgresTmpl, map[string]string{
+		"Root": "/tmp/r", "PgBinDir": "/opt/homebrew/opt/postgresql@17/bin",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("生成 config が YAML として不正: %v", err)
+	}
+	eng, _ := doc["engine"].(map[string]any)
+	if eng["type"] != "postgres" {
+		t.Errorf("engine.type = %v", eng["type"])
+	}
+	pg, _ := eng["postgres"].(map[string]any)
+	if pg["mode"] != "process" {
+		t.Errorf("macOS は systemd が無いので process モードであるべき: %v", pg["mode"])
+	}
+	if pg["bin_dir"] != "/opt/homebrew/opt/postgresql@17/bin" {
+		t.Errorf("bin_dir = %v", pg["bin_dir"])
+	}
+	st, _ := doc["storage"].(map[string]any)
+	if st["backend"] != "apfs" {
+		t.Errorf("storage.backend = %v, want apfs", st["backend"])
+	}
+	lis, _ := doc["listen"].(map[string]any)
+	if p, _ := lis["proxy"].(string); !strings.HasSuffix(p, ":5432") {
+		t.Errorf("listen.proxy = %q", p)
+	}
+}
+
+// engine に応じて接続コマンド例を変えること(postgres に mysql を案内しない)。
+func TestConnectHintPerEngine(t *testing.T) {
+	pg := connectHint(branchView{Name: "pr-1", User: "dev@pr-1", Host: "h", Port: 5433, Engine: "postgres"})
+	if !strings.HasPrefix(pg, "psql ") {
+		t.Errorf("postgres = %q, want psql ...", pg)
+	}
+	my := connectHint(branchView{Name: "pr-1", User: "dev@pr-1", Host: "h", Port: 3401, Engine: "mysql"})
+	if !strings.HasPrefix(my, "mysql ") {
+		t.Errorf("mysql = %q, want mysql ...", my)
+	}
+	// engine 未設定(旧サーバー)は従来どおり mysql
+	if !strings.HasPrefix(connectHint(branchView{Host: "h"}), "mysql ") {
+		t.Error("engine 未設定は mysql にフォールバックすべき")
+	}
+}

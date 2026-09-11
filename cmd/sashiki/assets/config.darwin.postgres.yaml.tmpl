@@ -1,0 +1,45 @@
+# sashiki(macOS ネイティブ, VM レス / PostgreSQL)。
+# sashiki init --platform darwin --engine postgres が生成。
+# storage=apfs(clonefile), engine=process(postgres 直起動 / systemd 不要)。
+listen:
+  api: "127.0.0.1:8080"     # Web UI もここ (GET /)
+  proxy: "127.0.0.1:5432"   # dev@<branch> でルーティング(#222)
+  metrics: "127.0.0.1:9100"
+
+state_db: {{.Root}}/state.db
+run_dir: {{.Root}}/run
+log_dir: {{.Root}}/log
+domain: sashiki.local
+
+storage:
+  backend: apfs
+  local:
+    root: {{.Root}}          # APFS 上。clonefile で CoW ブランチを生やす
+
+engine:
+  type: postgres
+  postgres:
+    mode: process            # systemd を使わず pg_ctl で直接起動
+    bin_dir: {{.PgBinDir}}
+    sudo: false              # ログインユーザーで postgres を起動(sudo 不要)
+    port_range: [5433, 5632]
+    app_user: dev
+    app_pass: dev
+    listen_addresses: 127.0.0.1
+    shared_buffers: 128M
+    # initdb_args: []        # baseline import 時の initdb 追加引数(locale 等)
+
+branches:
+  name_pattern: "^[a-z0-9-]{1,32}$"
+  max_branches: 20
+  lazy_create: true
+  lazy_create_max_wait: 20s
+  idle_stop_after: 30m
+  delete_after_idle: 168h
+  default_profile: preview
+  profiles:
+    preview: { idle_stop_after: 30m, delete_after_idle: 168h }
+    ci:      { idle_stop_after: 5m,  delete_after_idle: 1h }
+
+hooks:
+  dir: {{.Root}}/hooks

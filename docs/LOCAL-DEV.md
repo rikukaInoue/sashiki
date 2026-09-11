@@ -191,8 +191,20 @@ baseline は `sashiki baseline import --from dump.sql --db app --config <root>/c
 接続は `listen.proxy` を設定すれば `psql -U 'dev@pr-1'` の固定エンドポイント経由、
 未設定ならブランチごとの直ポート(`sashiki show <name>`)。
 
-> `sashiki init --platform darwin` はまだ MySQL 専用なので、macOS では上記の
-> config を手で用意する([#238](https://github.com/rikukaInoue/sashiki/issues/238) で対応予定)。
+一括セットアップは **`sashiki init --platform darwin --engine postgres`**(#238)。
+Homebrew の postgresql を検出(版は数値順で最新)→ `initdb` → 接続ロール `dev` と
+`app` データベース作成 → 正常終了 → clonefile で baseline 取得 → config 生成 →
+launchd 常駐(ラベル `dev.sashiki.sashikid-pg` なので MySQL 版と共存できる)。
+
+```bash
+brew install postgresql@17
+sashiki init --platform darwin --engine postgres --yes
+export SASHIKI_API_URL=http://127.0.0.1:8080
+PGPASSWORD=dev psql -h 127.0.0.1 -p 5432 -U 'dev@pr-1' -d app   # 未作成でも接続時に生える
+```
+
+> 実機(Apple Silicon / PostgreSQL 17 / APFS)で init → create → 直ポート接続 →
+> proxy 経由の lazy create まで検証済み。
 
 ### 接続ユーザー(#131)
 
