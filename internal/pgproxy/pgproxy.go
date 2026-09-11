@@ -202,6 +202,13 @@ func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
 		return fatal(client, "08006", "backend authentication failed")
 	}
 
+	// 接続が成立したことをここで記録する。クライアントへ何か返す**前**に呼ぶのが
+	// 肝で、後ろに置くと「クライアントは繋がったのに last_conn_at がまだ更新されて
+	// いない」瞬間ができる(idle リーパーから見ると使用中のブランチが未使用に
+	// 見えうる)。バックエンド認証まで通っている = 接続は確立しているので、
+	// この位置が実態に合う。
+	s.router.TouchConn(branch)
+
 	// クライアントへ認証完了を返す。以降 ParameterStatus / BackendKeyData /
 	// ReadyForQuery はバックエンドのものを中継する。BackendKeyData だけは
 	// CancelRequest の転送先を覚えるために覗く(#234)。
@@ -217,7 +224,6 @@ func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
 		return err
 	}
 
-	s.router.TouchConn(branch)
 	enableKeepAlive(backend)
 	_ = client.SetDeadline(time.Time{})
 	pipe(client, backend)
