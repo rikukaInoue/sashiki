@@ -113,13 +113,14 @@ mysql -udev@pr-1 -pdev -h 127.0.0.1 -P3306   # :3306 固定エンドポイント
 ストレージは **APFS `clonefile`**、mysqld は **systemd を使わず直接 spawn**(process モード)。
 
 ```bash
-brew install mysql@8.0     # MySQL 8.0〜8.4 / 9.x を推奨(実機検証は 8.0 / 8.4)。app_user は
-                           # backend の版で 8.0+=caching_sha2 / 5.7=native を選ぶ(8.4 は native
-                           # 既定 OFF、9.x は native 廃止)。proxy→backend もそれに追従。
-                           # MySQL 5.7 は best-effort(EOL・未検証。動くはず)。
-                           # MariaDB は caching_sha2 非対応で native を選ぶが、他挙動が未検証のため非対応。
+brew install mysql         # 版は問わない(8.0 / 8.4 / 最新のいずれでも可)。app_user の
+                           # プラグインは backend の版を見て自動で選ぶので、native を
+                           # 廃止した版でも 8.0 を入れ直す必要はない。
+                           # 実機検証: 8.0 / 8.4 / 26.7(native 廃止世代)。
+                           # MySQL 5.7 は best-effort(EOL・未検証。native を選ぶ)。
+                           # MariaDB は native を選ぶが他挙動が未検証のため非対応。
 curl -fsSL https://raw.githubusercontent.com/rikukaInoue/sashiki/main/install.sh | bash
-sashiki init --platform darwin --yes   # mysql@8.0 検出・base 初期化・baseline・config・launchd 常駐
+sashiki init --platform darwin --yes   # mysqld 検出・base 初期化・baseline・config・launchd 常駐
 sashiki create pr-1
 mysql -udev@pr-1 -pdev -h 127.0.0.1 -P3306
 ```
@@ -310,14 +311,15 @@ sashiki は「汎用エンジン + MySQL/PR の完成した adapter」。コア�
 | | 状態 |
 |---|---|
 | MySQL + GitHub PR プレビュー | ✅ 実機検証済み(create / reset / recreate / delete / lazy create / proxy / baseline 更新 / スキーマ比較) |
-| macOS ネイティブ(APFS + process) | ✅ 実機検証済み(VM 無し。MySQL 8.0 / 8.4 で実機確認、9.x も同プロトコル)。`sashiki init --platform darwin` |
+| macOS ネイティブ(APFS + process) | ✅ 実機検証済み(VM 無し。MySQL 8.0 / 8.4 / 26.7 で実機確認)。`sashiki init --platform darwin`(`--engine postgres` も可) |
 | コンテナ(XFS reflink, VM 無し) | ✅ 実機検証済み(sashikid フルコンテナ化。create / reset / delete / lazy create。Docker 互換ランタイム全般。[deploy/orbstack/](deploy/orbstack/)) |
 | PostgreSQL | ✅ MySQL と同等(proxy / lazy create / baseline import / init / refresh / データブラウザ)。Linux(ZFS)と **macOS ネイティブ(APFS, VM 無し)** の両方で実機検証済み |
 | EBS-ZFS バックエンド | ✅ default(Linux)。単一ホスト |
 | FSx-ZFS / multi-host / Spot | 🔶 実装済み・**本番運用実績なし**。必要になったら(§FAQ) |
 | API / config の安定性 | ⚠️ 未固定。v0.x の間はマイナー版で破壊的変更があり得る |
 
-> **プロキシとドライバ**: `:3306` プロキシ(方式A)はクライアントの capability に追従するので、**DEPRECATE_EOF を要求しないドライバ(PHP mysqlnd / Node / PyMySQL 等)でも正しく動く**(v0.4.1 で修正、[#125](https://github.com/rikukaInoue/sashiki/issues/125))。また **`caching_sha2_password` を advertise する**ので、MySQL 8.0 既定認証や 9.x のクライアントもそのまま繋がる(v0.5.0、[#197](https://github.com/rikukaInoue/sashiki/issues/197)。backend の dev ユーザーは引き続き native)。go-sql-driver / PyMySQL / mysql CLI(8.0)で実機検証済み。
+> **プロキシとドライバ**: `:3306` プロキシ(方式A)はクライアントの capability に追従するので、**DEPRECATE_EOF を要求しないドライバ(PHP mysqlnd / Node / PyMySQL 等)でも正しく動く**(v0.4.1 で修正、[#125](https://github.com/rikukaInoue/sashiki/issues/125))。認証は**クライアント側・backend 側とも `caching_sha2_password` に対応**しており、`mysql_native_password` を廃止した版でも「8.0 を入れ直す」必要はない([#197](https://github.com/rikukaInoue/sashiki/issues/197) / [#209](https://github.com/rikukaInoue/sashiki/issues/209))。app_user のプラグインは**backend の版を見て自動で選ぶ**(5.7 は native、8.0 以降は caching_sha2、MariaDB は native。[#211](https://github.com/rikukaInoue/sashiki/issues/211) / [#219](https://github.com/rikukaInoue/sashiki/issues/219))。
+> 実機検証: **MySQL 8.0 / 8.4 / 26.7**(native 廃止世代)で create / reset / proxy 経由の lazy create まで通過。クライアントは go-sql-driver / Node mysql2 / PyMySQL / mysql CLI で確認済み。
 
 ## 向かない用途
 

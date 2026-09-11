@@ -230,7 +230,11 @@ func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
 		return authErr(client, seq+1, 2003, "HY000", "backend auth failed")
 	}
 
-	// 6. クライアントへ認証完了を返す。caching_sha2 は AuthMoreData(0x01 0x03 =
+	// 6. 接続成立を記録する。クライアントへ OK を返す**前**に呼ぶ(pgproxy と同じ理由)。
+	//    後ろに置くと「クライアントは繋がったのに last_conn_at が未更新」の瞬間ができる。
+	s.router.TouchConn(branch)
+
+	// 7. クライアントへ認証完了を返す。caching_sha2 は AuthMoreData(0x01 0x03 =
 	//    fast_auth_success)を先に送ってから OK(#197)。native は OK のみ。
 	if sha2 {
 		if err := writePacket(client, packet{seq: seq + 1, body: []byte{0x01, 0x03}}); err != nil {
@@ -246,7 +250,6 @@ func (s *Server) authTerminate(ctx context.Context, client net.Conn) error {
 	}
 
 	// 認証完了 → 素通し(接続終了までブロック)
-	s.router.TouchConn(branch)
 	enableKeepAlive(backend)
 	_ = client.SetDeadline(time.Time{})
 	pipe(client, backend)
