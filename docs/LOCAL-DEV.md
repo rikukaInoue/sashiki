@@ -137,7 +137,7 @@ Homebrew mysql の検出 → `<root>/base/data` を mysqld で初期化しデー
 常駐登録、まで自動。以降 `sashiki create` が clonefile で一瞬・省容量にブランチを生やす。
 
 ```bash
-brew install mysql@8.0
+brew install mysql                            # 版は問わない(8.0 / 8.4 / 最新。実機検証は 8.0 / 8.4 / 26.7)
 sashiki init --platform darwin --yes         # ~/Library/Application Support/sashiki に構築
 sashiki create pr-1                           # clonefile で秒未満
 mysql -udev@pr-1 -pdev -h 127.0.0.1 -P 3306   # proxy 経由。未知ブランチは lazy create
