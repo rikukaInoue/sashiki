@@ -76,7 +76,9 @@ func newTestServer(t *testing.T, token string) *httptest.Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(New(mgr, "sashiki.internal", "mysql", "dev", "dev", token, nil))
+	s := New(mgr, "sashiki.internal", "mysql", "dev", "dev", token, nil)
+	s.SetProxyListen("0.0.0.0:3306") // 実運用と同じく proxy 有効(#260)
+	srv := httptest.NewServer(s)
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -485,6 +487,71 @@ func TestWriteErrorClassification(t *testing.T) {
 		s.writeError(w, c.err)
 		if w.Code != c.code || !strings.Contains(w.Body.String(), c.id) {
 			t.Errorf("err=%v → status=%d body=%s (want %d %s)", c.err, w.Code, w.Body.String(), c.code, c.id)
+		}
+	}
+}
+
+// 接続情報(host/port/user)は「そのまま繋がる 3 つ組」でなければならない。
+// proxy 有効時に port だけブランチ内部のものを返していて、どう解釈しても
+// 接続できない値になっていた(#260)。
+func TestConnectionInfoTargetsProxy(t *testing.T) {
+	db, _ := state.Open(filepath.Join(t.TempDir(), "s.db"))
+	defer func() { _ = db.Close() }()
+	fs := fakeStorage{}
+	mgr, _ := workspace.New(workspace.Config{NamePattern: `^.+$`, PortLow: 3401, PortHigh: 3410, EngineType: "mysql", StateDir: t.TempDir()}, fs, fs, fakeEngine{}, nil, db)
+	info, err := mgr.Create(context.Background(), "pr-1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("proxy 有効なら固定エンドポイント宛", func(t *testing.T) {
+		s := New(mgr, "sashiki.internal", "mysql", "dev", "dev", "", nil)
+		s.SetProxyListen("0.0.0.0:3306")
+		b := s.toJSON(info)
+		if b.Port != 3306 {
+			t.Errorf("port=%d, proxy のポート(3306)を返すべき", b.Port)
+		}
+		if b.User != "dev@pr-1" {
+			t.Errorf("user=%q, proxy は user でルーティングする", b.User)
+		}
+		if b.EnginePort != info.Port {
+			t.Errorf("engine_port=%d, ブランチ自身の listener(%d)を返すべき", b.EnginePort, info.Port)
+		}
+	})
+
+	// proxy を使わない構成では user@branch でルーティングする相手がいない。
+	// 内部ポートへ直結し、user は素の dev(直結先の mysqld に dev@pr-1 は無い)。
+	t.Run("proxy 無効ならブランチ直結", func(t *testing.T) {
+		s := New(mgr, "sashiki.internal", "mysql", "dev", "dev", "", nil)
+		b := s.toJSON(info)
+		if b.Port != info.Port {
+			t.Errorf("port=%d, ブランチの内部ポート(%d)を返すべき", b.Port, info.Port)
+		}
+		if b.User != "dev" {
+			t.Errorf("user=%q, 直結では @branch を付けてはいけない", b.User)
+		}
+	})
+}
+
+// listen.proxy の表記から接続用ポートを取れること。解釈できない値で
+// 落ちるのではなく 0(proxy 無効)に倒すのは、API が止まるより
+// 「直結の接続情報が返る」方が復旧しやすいため。
+func TestProxyPortParsing(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want int
+	}{
+		{"0.0.0.0:3306", 3306},
+		{"127.0.0.1:13306", 13306},
+		{":5432", 5432},
+		{"", 0},
+		{"3306", 0},          // ホストが無い
+		{"0.0.0.0:mysql", 0}, // サービス名は解決しない
+	} {
+		s := New(nil, "d", "mysql", "dev", "dev", "", nil)
+		s.SetProxyListen(tc.in)
+		if s.proxyPort != tc.want {
+			t.Errorf("SetProxyListen(%q) -> proxyPort=%d, want %d", tc.in, s.proxyPort, tc.want)
 		}
 	}
 }

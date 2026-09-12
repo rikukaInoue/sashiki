@@ -194,9 +194,13 @@ func statusToExit(code int) int {
 }
 
 type branchView struct {
-	Name         string   `json:"name"`
-	State        string   `json:"state"`
+	Name  string `json:"name"`
+	State string `json:"state"`
+	// Port / Host / User は接続にそのまま使える 3 つ組(#260)。proxy が有効なら
+	// proxy 宛、無効ならブランチ直結。EnginePort はブランチ自身の listener で、
+	// 接続用ではなく調査用。
 	Port         int      `json:"port"`
+	EnginePort   int      `json:"engine_port"`
 	Host         string   `json:"host"`
 	User         string   `json:"user"`
 	Profile      string   `json:"profile"`
@@ -504,6 +508,10 @@ func cmdShow(args []string) int {
 	_ = json.Unmarshal(data, &b)
 	fmt.Printf("name:    %s\nstate:   %s\nport:    %d\nuser:    %s\nprivate: %s (CoW差分)\nlogical: %s\n",
 		b.Name, b.State, b.Port, b.User, humanBytes(b.UsedBytes), humanBytes(b.LogicalBytes))
+	// proxy 経由のときは内部ポートも出す。ログや ss の出力と突き合わせるのに要る。
+	if b.EnginePort != 0 && b.EnginePort != b.Port {
+		fmt.Printf("engine:  :%d (ブランチ自身の listener。接続には使わない)\n", b.EnginePort)
+	}
 	if b.Stale {
 		fmt.Println("stale:   true (origin が current baseline より古い。reset は作成時点に戻る/最新化は recreate)")
 	}
@@ -535,7 +543,9 @@ func cmdConnect(args []string) int {
 		fmt.Fprintln(os.Stderr, "sashiki: mysql client not found in PATH")
 		return exitError
 	}
-	argv := []string{"mysql", "-udev", "-pdev", "-h127.0.0.1", "-P" + strconv.Itoa(b.Port)}
+	// user は必ず API が返した値を使う。proxy 経由では dev@<branch> でないと
+	// ルーティングできず、直結では dev でないと認証が通らない(#260)。
+	argv := []string{"mysql", "-u" + b.User, "-pdev", "-h127.0.0.1", "-P" + strconv.Itoa(b.Port)}
 	// CLI はそのまま mysql に化ける。
 	if err := syscall.Exec(mysqlPath, argv, os.Environ()); err != nil {
 		fmt.Fprintln(os.Stderr, "sashiki: exec mysql:", err)
