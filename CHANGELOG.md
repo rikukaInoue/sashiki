@@ -7,6 +7,13 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 > [Conventional Commits](https://www.conventionalcommits.org/) から自動生成する(手動編集不要)。
 > リリース手順は [docs/RELEASING.md](docs/RELEASING.md) を参照。v0.5.0 までは手書き。
 
+## [0.9.1](https://github.com/rikukadev/sashiki/compare/v0.9.0...v0.9.1) (2026-09-12)
+
+
+### Bug Fixes
+
+* **api:** 接続情報の port を proxy のものに揃える ([#261](https://github.com/rikukadev/sashiki/issues/261)) ([8a7e6b0](https://github.com/rikukadev/sashiki/commit/8a7e6b0aa9aec856ce7b5f747ce5e1eac8556119))
+
 ## [0.9.0](https://github.com/rikukadev/sashiki/compare/v0.8.0...v0.9.0) (2026-09-11)
 
 
