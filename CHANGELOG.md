@@ -7,6 +7,13 @@ v0.x の間は API / config が安定しておらず、マイナー版で破壊�
 > [Conventional Commits](https://www.conventionalcommits.org/) から自動生成する(手動編集不要)。
 > リリース手順は [docs/RELEASING.md](docs/RELEASING.md) を参照。v0.5.0 までは手書き。
 
+## [0.9.2](https://github.com/rikukadev/sashiki/compare/v0.9.1...v0.9.2) (2026-09-12)
+
+
+### Bug Fixes
+
+* **action:** transport=ssm で複数行スクリプトが尻切れで届くのを直す ([#263](https://github.com/rikukadev/sashiki/issues/263)) ([15ebcb3](https://github.com/rikukadev/sashiki/commit/15ebcb3601d80c03ce59b550ff98c6e986e839ec))
+
 ## [0.9.1](https://github.com/rikukadev/sashiki/compare/v0.9.0...v0.9.1) (2026-09-12)
 
 
