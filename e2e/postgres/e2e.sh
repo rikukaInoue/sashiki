@@ -132,7 +132,9 @@ q() { PGPASSWORD=dev psql -h 127.0.0.1 -p "$1" -U dev -d app -t -A -c "$2" 2>/de
 
 log "create pg-1"
 time sashiki-pg create pg-1
-PORT=$(sashiki-pg show pg-1 --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["port"])')
+# q() は proxy を通さずブランチへ直結するので engine_port を使う
+# (port は proxy 宛 + user は dev@<branch>、#260)。
+PORT=$(sashiki-pg show pg-1 --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["engine_port"])')
 [ "$(q $PORT 'SELECT COUNT(*) FROM items')" = "3" ] || fail "pg-1 should have 3 items"
 
 log "破壊 → reset"
@@ -233,7 +235,7 @@ curl -s http://127.0.0.1:8090/v1/baseline | grep -q "baseline-" \
 echo "  refresh 完了・current 切り替え済み"
 # 新しい baseline から作ったブランチに列が入っていること
 sashiki-pg create pg-ref > /dev/null || fail "refresh 後の create に失敗"
-RPORT=$(sashiki-pg show pg-ref --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["port"])')
+RPORT=$(sashiki-pg show pg-ref --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["engine_port"])')
 [ "$(q $RPORT "SELECT color FROM items LIMIT 1")" = "red" ] \
   || fail "refresh で追加した列が新ブランチに反映されていない"
 echo "  新ブランチに追加列が反映されている"
@@ -264,7 +266,7 @@ time sashiki-pg create pg-proc \
   || { echo "--- postgres server log ---"; tail -30 /var/log/sashiki/postgres-pg-proc.log 2>/dev/null; \
        ls -ld /var/log/sashiki /tpgpool/branches/pg-proc/data 2>/dev/null; \
        fail "process モードで create できない"; }
-PPORT=$(sashiki-pg show pg-proc --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["port"])')
+PPORT=$(sashiki-pg show pg-proc --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["engine_port"])')
 [ "$(q $PPORT 'SELECT COUNT(*) FROM items')" = "3" ] || fail "process モードのブランチに接続できない"
 # systemd ユニットを使っていないこと(= 本当に直起動している)
 systemctl is-active --quiet postgres-sashiki@pg-proc && fail "process モードなのに systemd ユニットが動いている"

@@ -139,6 +139,18 @@ log "list"
 sashiki list
 
 log "proxy: dev@<branch> ルーティング"
+# API が返す host/port/user は「そのまま繋がる 3 つ組」であること(#260)。
+# 過去に port だけブランチ内部のものを返していて、どう解釈しても接続できない
+# 値になっていた。ここは値を解釈せずそのまま psql/mysql に渡して確かめる。
+conn=$(sashiki show pr-1 --json | python3 -c 'import json,sys;b=json.load(sys.stdin);print(b["port"],b["user"],b["engine_port"])')
+read -r cport cuser ceport <<<"$conn"
+[ "$cport" = "3306" ] || fail "conn: port=$cport, proxy のポートを返すべき (#260)"
+[ "$ceport" != "3306" ] || fail "conn: engine_port はブランチ自身の listener であるべき"
+val=$(mysql -u"$cuser" -pdev -h127.0.0.1 -P"$cport" -N -e "SELECT COUNT(*) FROM app.items" 2>/dev/null) \
+  || fail "conn: API が返した接続情報で繋がらない (port=$cport user=$cuser)"
+[ "$val" = "3" ] || fail "conn: query result = $val, want 3"
+echo "  API の接続情報をそのまま使って接続できた (port=$cport user=$cuser engine_port=$ceport)"
+
 # 固定ポート 3306 経由で pr-1 に接続できること
 val=$(mysql -udev@pr-1 -pdev -h127.0.0.1 -P3306 -N -e "SELECT COUNT(*) FROM app.items" 2>/dev/null) \
   || fail "proxy: connect via dev@pr-1 should work"
@@ -277,12 +289,13 @@ grep -q '"type":"github_pr"' <<<"$(sashiki show pr-77 --json)" || fail "action: 
 SASHIKI_EVENT=synchronize SASHIKI_OUTPUT=/tmp/sashiki-action-out bash "$AE" || fail "action: synchronize should succeed on existing branch"
 grep -q "created=false" /tmp/sashiki-action-out || fail "action: created=false expected for existing"
 # action: reset を明示指定(ラベル駆動想定、#244)。イベントではなく action が優先される。
-mysql -udev -pdev -h127.0.0.1 -P"$(sashiki show pr-77 --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["port"])')" \
+# ここは proxy を通さずブランチへ直結するので engine_port を使う(port は proxy 宛、#260)。
+mysql -udev -pdev -h127.0.0.1 -P"$(sashiki show pr-77 --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["engine_port"])')" \
   -e "DELETE FROM app.items" 2>/dev/null || fail "action: reset 検証の準備(削除)に失敗"
 : > /tmp/sashiki-action-out
 SASHIKI_ACTION=reset SASHIKI_OUTPUT=/tmp/sashiki-action-out bash "$AE" || fail "action: reset should succeed"
 grep -q "^host=" /tmp/sashiki-action-out || fail "action: reset should emit connection info"
-rp=$(sashiki show pr-77 --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["port"])')
+rp=$(sashiki show pr-77 --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["engine_port"])')
 [ "$(mysql -udev -pdev -h127.0.0.1 -P"$rp" -N -B -e 'SELECT COUNT(*) FROM app.items' 2>/dev/null)" -ge 1 ] \
   || fail "action: reset should restore rows"
 echo "  action=reset でブランチが作成時点に戻った"
@@ -460,7 +473,7 @@ grep -q pr-idle <<<"$(sashiki list)" && fail "reaper: pr-idle should be TTL-dele
 # proxy の activeConns には出ないため、これは connpoll でしか検出できない。
 log "reaper: 直接接続は idle stop を防ぐ (#41)"
 sashiki create pr-hold > /dev/null
-holdport=$(sashiki show pr-hold --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["port"])')
+holdport=$(sashiki show pr-hold --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["engine_port"])')
 # proxy を通さず branch 実ポートへ直接、長い接続を張る(SLEEP は余裕をもって 30s)
 mysql -udev -pdev -h127.0.0.1 -P"$holdport" -e "SELECT SLEEP(30)" >/dev/null 2>&1 &
 holdpid=$!
@@ -554,7 +567,7 @@ sashiki baseline import-stream --from /var/tmp/baseline.zfs --force \
   || fail "baseline import-stream に失敗"
 # 受け取った baseline から作れて、中身も戻っていること
 sashiki create pr-recv > /dev/null || fail "import-stream 後に create できない"
-RP=$(sashiki show pr-recv --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["port"])')
+RP=$(sashiki show pr-recv --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["engine_port"])')
 [ "$(mysql -udev -pdev -h127.0.0.1 -P$RP -N -B -e 'SELECT COUNT(*) FROM app.items' 2>/dev/null)" -ge 1 ] \
   || fail "import-stream したデータが読めない"
 echo "  recv したベースラインからブランチを作れる"
