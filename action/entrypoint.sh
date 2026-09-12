@@ -75,12 +75,21 @@ poll_op() {
 # API を叩く代わりに、SSM Run Command でインスタンス上の sashiki CLI を実行する
 # (CLI は loopback の API を叩くのでトークン不要)。
 ssm_run() {
-  local script=$1 cid status out
+  local script=$1 cid status out params
+  # --parameters は **shorthand を使わない**。shorthand("commands=[...]")は
+  # 改行を含む値を途中で切ってしまい、複数行のスクリプトが尻切れで届く
+  # (delete の "if ... then ... fi" が `Syntax error: end of file unexpected` で
+  # 落ちていた)。file:// で JSON をそのまま渡せば中身を問わず通る。
+  params=$(mktemp "${TMPDIR:-/tmp}/sashiki-ssm-params.XXXXXX")
+  SASHIKI_SSM_SCRIPT="$script" SASHIKI_SSM_PARAMS="$params" python3 -c 'import json, os
+with open(os.environ["SASHIKI_SSM_PARAMS"], "w") as f:
+    json.dump({"commands": [os.environ["SASHIKI_SSM_SCRIPT"]]}, f)'
   cid=$(aws ssm send-command \
     --instance-ids "$SASHIKI_INSTANCE_ID" \
     --document-name AWS-RunShellScript \
-    --parameters "commands=[$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$script")]" \
+    --parameters "file://$params" \
     --query Command.CommandId --output text)
+  rm -f "$params"
   # 完了まで待つ。wait は失敗時に非 0 を返すが、理由は invocation 側にあるので
   # ここでは握って下で StandardErrorContent を出す。
   aws ssm wait command-executed --command-id "$cid" --instance-id "$SASHIKI_INSTANCE_ID" 2>/dev/null || true

@@ -38,6 +38,14 @@ jobs:
       - run: go install golang.org/x/vuln/cmd/govulncheck@latest
       - run: govulncheck ./...
 
+  # GitHub Action(transport=ssm)の送信経路。偽の aws で完結するので速い。
+  # 実 SSM を叩かずに「送ったスクリプトがそのまま届くか」だけを見る。
+  action-ssm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: ./e2e/action-ssm.sh
+
   # 実 ZFS + mysqld での E2E。GitHub の ubuntu ランナーは sudo と
   # ZFS カーネルモジュールが使えるため、loopback zpool で完結する。
   e2e:
