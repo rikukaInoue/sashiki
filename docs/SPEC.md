@@ -514,6 +514,22 @@ hook 側がやること: Git clone、PR checkout、依存インストール、mi
 
 `POST /branches` は既存なら 409。`?exist_ok=true` で 200 + 既存を返す。
 
+### 接続情報(`host` / `port` / `user`)
+
+branch の応答が返す `host` / `port` / `user` は、**そのまま繋がる 3 つ組**であることを保証する。
+利用者(GitHub Action / IaC / アプリの env)はこれを解釈せずそのまま渡せる。
+
+|`listen.proxy`|`host`|`port`|`user`|
+|---|---|---|---|
+|設定あり(既定 `:3306`)|`domain`|**proxy のポート**|`<app_user>@<branch>`|
+|空(proxy 無効)|`domain`|ブランチの内部ポート|`<app_user>`|
+
+proxy はユーザー名でルーティングするため、`user` と `port` は必ず同じ側を指していなければ
+ならない。片方だけ proxy 形式にすると、**どう解釈しても接続できない値**になる(#260)。
+
+`engine_port` はブランチ自身の listener を常に返す。**接続用ではなく**、ログや `ss` の出力と
+突き合わせる調査用。
+
 エラー形式と `code`: `invalid_name`, `branch_exists`, `branch_not_found`, `baseline_not_found`, `limit_reached`(memory / storage / max_running / max_branches を `detail` で区別), `hook_failed`, `storage_error`, `engine_error`, `operation_in_progress`, `precondition_failed`, `unauthorized`
 
 -----

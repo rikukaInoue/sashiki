@@ -40,6 +40,9 @@ type Server struct {
 	openDB func(ctx context.Context, name string) (*sql.DB, error) // テストで差し替え可
 	ops    *ops.Runner                                             // nil 可(operation 記録なし)
 	mux    *http.ServeMux
+	// proxyPort は固定エンドポイント(listen.proxy)のポート。0 は proxy 無効。
+	// 接続情報(host/port/user)はこれを見て proxy 宛か直結かを切り替える(#260)。
+	proxyPort int
 	// trustLoopback が true(既定)なら loopback を無認証で通す。false なら
 	// loopback でも Bearer トークン必須(リバプロ公開時の素通し防止、#198)。
 	trustLoopback bool
@@ -47,6 +50,32 @@ type Server struct {
 
 // SetTrustLoopback は loopback 無認証の可否を設定する(sashikid 起動時)。
 func (s *Server) SetTrustLoopback(v bool) { s.trustLoopback = v }
+
+// SetProxyListen は固定エンドポイントの listen アドレス("0.0.0.0:3306" 等)を
+// 渡して、接続情報に載せるポートを決める(sashikid 起動時)。空文字なら proxy
+// 無効として扱い、接続情報はブランチへ直結する形になる。
+//
+// 解釈できない値でも起動は止めない。API が上がらないより「直結の接続情報が
+// 返る」方が気づいて直せる。
+func (s *Server) SetProxyListen(addr string) {
+	if addr == "" {
+		s.proxyPort = 0
+		return
+	}
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		log.Printf("api: listen.proxy %q を解釈できません。接続情報はブランチ直結として返します", addr)
+		s.proxyPort = 0
+		return
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil {
+		log.Printf("api: listen.proxy %q のポートが数値ではありません。接続情報はブランチ直結として返します", addr)
+		s.proxyPort = 0
+		return
+	}
+	s.proxyPort = n
+}
 
 // SetOps は operation Runner を配線する(sashikid 起動時)。
 func (s *Server) SetOps(r *ops.Runner) {
@@ -681,12 +710,17 @@ func toOpJSON(o state.Operation) opJSON {
 // --- serialization ---
 
 type branchJSON struct {
-	Name           string            `json:"name"`
-	State          string            `json:"state"`
-	EngineState    string            `json:"engine_state"`
-	Port           int               `json:"port"`
-	Host           string            `json:"host"`
-	User           string            `json:"user"`
+	Name        string `json:"name"`
+	State       string `json:"state"`
+	EngineState string `json:"engine_state"`
+	// Port / Host / User は **そのまま接続に使える** 3 つ組であること。
+	// proxy が有効なら proxy 宛(固定ポート + dev@<branch>)、無効ならブランチ直結
+	// (内部ポート + dev)になる。混ぜると「どう解釈しても繋がらない」値になる(#260)。
+	Port int    `json:"port"`
+	Host string `json:"host"`
+	User string `json:"user"`
+	// EnginePort はブランチ自身の listener。接続用ではなく doctor / デバッグ用。
+	EnginePort     int               `json:"engine_port,omitempty"`
 	OriginSnapshot string            `json:"origin_snapshot"`
 	CreatedAt      string            `json:"created_at"`
 	LastConnAt     *string           `json:"last_conn_at,omitempty"`
@@ -710,14 +744,32 @@ type branchJSON struct {
 	Engine string `json:"engine,omitempty"`
 }
 
+// connPort / connUser は「接続に使う値」を返す。proxy が有効なら固定エンドポイント
+// (:3306 等)と `dev@<branch>` でルーティングし、無効ならブランチの内部ポートへ
+// 直結して user は `dev` のまま(直結先の mysqld に dev@<branch> は存在しない)。
+func (s *Server) connPort(enginePort int) int {
+	if s.proxyPort != 0 {
+		return s.proxyPort
+	}
+	return enginePort
+}
+
+func (s *Server) connUser(branch string) string {
+	if s.proxyPort != 0 {
+		return s.user + "@" + branch
+	}
+	return s.user
+}
+
 func (s *Server) toJSON(i workspace.Info) branchJSON {
 	b := branchJSON{
 		Name:           i.Name,
 		State:          i.State,
 		EngineState:    i.EngineState,
-		Port:           i.Port,
+		Port:           s.connPort(i.Port),
 		Host:           s.domain,
-		User:           s.user + "@" + i.Name,
+		User:           s.connUser(i.Name),
+		EnginePort:     i.Port,
 		Engine:         s.engine,
 		OriginSnapshot: i.OriginSnapshot,
 		CreatedAt:      i.CreatedAt.UTC().Format(time.RFC3339),
